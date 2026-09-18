@@ -108,6 +108,16 @@ Boxes". This project is also a course: see §7.
   left shows its last state. *Known limit until F18:* a sync crash may lose
   edits since the last idle save.
 
+- **F8a. Reconcile simulator.** `make sim` runs a seeded in-process simulator
+  that drives the real `doc-model` and the real `peer-client` reconcile with
+  several simulated peers under random delay, drop and reorder, and asserts:
+  all peers converge, no op applied twice, last-writer-wins by `seq`, no cycle.
+  Same seed, same run. A failing seed prints a minimal op trace. Seeds are
+  committed; it runs in `make check`. Breaking a conflict rule makes a named
+  seed fail. *Limits:* no simulated Postgres, Redis or WebSocket, about 300
+  lines, dropped if it forces the room to be restructured. Durability, failover
+  and fencing (F18, F21, F22) are verified only against real processes and §4a.
+
 ### Epic 3 — AI agent peer
 - **F9. Run an instruction.** A user types an instruction (for example "add a
   payment card with a card-number input and a primary Pay button"); an AI peer
@@ -239,7 +249,8 @@ platform that runs our containers under injected faults and replays any failure.
 
 Per-user undo and "undo this AI run"; AI visual self-check via sandbox
 screenshots; a dedicated log store for the journal; real GitHub integration;
-cloud deployment with Kubernetes and SLOs/observability; multi-page documents.
+cloud deployment with Kubernetes and SLOs/observability; multi-page documents;
+a read-only journal replay scrubber colored by actor.
 The design leaves room for each; none may be started without a spec change.
 
 ## 7. The course (part of the product)
@@ -263,7 +274,7 @@ Run by one Playwright script plus shell steps, on a clean clone, with two sync n
 3. Owner and editor open the document in two browsers; each sees the other's
    cursor. Both build a small tree; both set the same prop at once; trees
    converge. The viewer sees it live; the viewer's attempted edit is rejected.
-   An invalid move is rejected with a reason. (F3–F7, F20, F24)
+   An invalid move is rejected with a reason. `make sim` passes. (F3–F7, F8a, F20, F24)
 4. The preview iframe shows the running page and follows edits. (F13, F15)
 5. Owner starts an AI run; nodes stream in on both canvases while the editor
    keeps editing; a second run is started and cancelled; a repeated start with
