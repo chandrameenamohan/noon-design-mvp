@@ -78,6 +78,78 @@ Boxes". This project is also a course: see §7.
     `NODE_ENV != production`; session tokens and `org_id` scoping are real from
     epic 1. Epic 8 replaces the header, nothing else.
 
+## 2a. Rules learned from the real dependencies (`learning-tests/`)
+
+Each rule comes from a script that ran against the real thing. Re-run the
+script when upgrading that dependency.
+
+**Node + TypeScript (no build step is sound).** Relative imports carry the
+literal `.ts` extension. Only erasable syntax (no `enum`, value `namespace`,
+parameter properties, decorators). Never run with `--preserve-symlinks`
+(workspace packages stop being type-stripped). Aliases via package.json
+`imports`, never tsconfig `paths`. Node cannot run `.tsx`: JSX stays in `web`
+and the sample app. Type errors do not stop execution, so `tsc` in the gate is
+the only guard. `node --test` needs a file or glob, not a directory.
+
+**Postgres (`pg`).** `seq` is `bigint` and arrives as a string: convert once at
+the `db` boundary. Tell a duplicate `seq` from a duplicate `op_id` by
+`err.constraint`, not only `23505`. A failed statement aborts its transaction;
+use `INSERT ... ON CONFLICT DO NOTHING RETURNING` for dedupe. The fenced append
+is one statement (`INSERT ... SELECT ... FOR UPDATE` on the lease row). Always
+release pool clients in `finally`.
+
+**WebSocket (`ws`).** A killed peer is noticed at once; a frozen or partitioned
+one only by a ping/pong heartbeat, so the room runs one. `send()` never throws:
+watch `bufferedAmount` and drop slow peers. Reject bad tokens in
+`handleUpgrade` with a real HTTP status. Close codes 4000-4999 carry our
+reasons. When enforcing `maxPayload` the server must handle `'error'` (or the
+process dies) and sees 1006 on its own side.
+
+**Redis + BullMQ.** Lease = `SET NX PX` plus a fencing token from `INCR` in the
+same Lua script; renew and release are compare-and-set in Lua. A holder with a
+blocked event loop cannot know it lost the lease, so the journal append checks
+the token (F22). BullMQ `add()` with an existing `jobId` returns a job object
+even when nothing was stored: trust the Postgres `jobs` row, not that return
+value. Workers need `maxRetriesPerRequest: null`. `FLUSHALL` loses all jobs, so
+queues are rebuilt from Postgres.
+
+**MinIO.** Image from `quay.io/minio/minio` (Docker Hub refuses pulls). Snapshot
+keys zero-pad `seq` so they sort numerically. No reverse listing: the latest
+snapshot `seq` is recorded in Postgres. `IfNoneMatch: '*'` guards against two
+writers of one key. Missing key is `err.name === 'NoSuchKey'`. Gzip by hand.
+
+**Agent SDK.** Isolation is `tools: []` + `mcpServers` + `allowedTools:
+['mcp__<server>__<tool>']` + `settingSources: []`. **A tool whose Zod schema
+the SDK cannot convert (`z.record(k, v)`) is dropped silently and the model
+then fabricates a successful call**: use `z.object({}).catchall(z.unknown())`,
+and at startup the worker asserts that every one of our tools appears in the
+init message's tool list, failing the run otherwise. Tool errors are
+`isError: true` results the model can react to. Cancel with `AbortController`
+(`interrupt()` only works with streaming input). The result message carries
+token usage and `total_cost_usd`. The CLI is bundled with the package.
+
+**Gitea.** `admin` is a reserved username. Registering a webhook fires a
+synthetic push (`before` all zeros): ignore it. Signature is
+`X-Gitea-Signature`, hex HMAC-SHA256 of the raw body. A failed delivery is NOT
+retried, so the git peer also reconciles by fetching the mirror when a document
+opens and on a timer; `X-Gitea-Delivery` dedupes. A second PR for the same
+branch returns 409: Ship finds the open PR by `head.ref` and pushes to its branch.
+
+**Sandbox (Vite in Docker).** Push the generated file with `docker exec ... cat >`
+(about 50 ms, hot update, state kept); no bind mount. The generated file exports
+ONLY components, or every edit becomes a full reload. `server.host: true`; one
+published port serves HTTP and HMR. Bake `node_modules` into the image (0.3 s
+start vs 12 s). Syntax errors show an overlay and recover without a restart.
+
+**Manifest + projection.** Extraction needs the type checker (aliases, `Omit`,
+intersections) plus an AST pass (defaults). Optional means
+`SymbolFlags.Optional`, not "type includes undefined". Keep only props declared
+in the design system's own files (one component otherwise yields 291 DOM
+props). Output is sorted, so regenerate + diff is the drift check. Each
+generated element carries `data-node-id`; comments lose their element under
+manual edits. Shape breakers detected individually: non-literal prop, spread,
+conditional, `.map()`, extra statement or hook, second export.
+
 ## 3. Features (numbered, with observable acceptance)
 
 ### Epic 1 — Monorepo, typed API, Postgres
@@ -118,6 +190,10 @@ Boxes". This project is also a course: see §7.
   lines, dropped if it forces the room to be restructured. Durability, failover
   and fencing (F18, F21, F22) are verified only against real processes and §4a.
 
+- **F14. Manifest drift guard.** Changing a component's props in the sample app
+  without regenerating the manifest makes `make check` fail and name the component.
+  *(Lives in epic 2: validation needs the manifest from the first op.)*
+
 ### Epic 3 — AI agent peer
 - **F9. Run an instruction.** A user types an instruction (for example "add a
   payment card with a card-number input and a primary Pay button"); an AI peer
@@ -135,8 +211,6 @@ Boxes". This project is also a course: see §7.
 ### Epic 4 — Code projection and sandbox
 - **F13. Deterministic codegen.** The same document always produces
   byte-identical TSX; the file type-checks against the sample app.
-- **F14. Manifest drift guard.** Changing a component's props in the sample app
-  without regenerating the manifest makes `make check` fail and name the component.
 - **F15. Live preview.** The canvas shows an iframe of the sample app running
   in a container for the document's working branch (created in the sandbox's
   own clone when the document is first opened; F17 later pushes this same branch). After an edit, the preview reflects
@@ -201,7 +275,7 @@ Boxes". This project is also a course: see §7.
 
 | Failure | Behavior |
 |---|---|
-| `api` dies | Requests retry; creating POSTs are idempotent |
+| `api` dies | Requests are safe to retry; job-creating POSTs are idempotent (F27) |
 | `sync` dies | Banner "reconnecting"; F18 guarantees; presence rebuilds |
 | Zombie `sync` | Its writes are rejected by fencing (F22); no user-visible effect |
 | `worker` dies | Jobs resume (F28); AI run may show `failed` with partial ops kept |

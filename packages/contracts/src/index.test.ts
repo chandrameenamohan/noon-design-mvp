@@ -1,12 +1,18 @@
 import { expect, test } from "vitest";
 import { HealthResponse } from "./index.ts";
 
+const valid = { status: "ok", service: "api" };
+
 test("accepts a valid health body", () => {
-  expect(HealthResponse.parse({ status: "ok", service: "api" })).toEqual({ status: "ok", service: "api" });
+  expect(HealthResponse.parse(valid)).toEqual(valid);
 });
 
-test("rejects a body the type system cannot see at runtime", () => {
-  const fromTheWire: unknown = { status: "down", service: "" };
-  const result = HealthResponse.safeParse(fromTheWire);
-  expect(result.success).toBe(false);
+// One invalid field per case: a test that breaks two rules at once keeps
+// passing when either rule is deleted.
+test.each([
+  ["status is not the literal ok", { ...valid, status: "down" }],
+  ["service is empty", { ...valid, service: "" }],
+  ["service is missing", { status: "ok" }],
+])("rejects when %s", (_name, fromTheWire: unknown) => {
+  expect(HealthResponse.safeParse(fromTheWire).success).toBe(false);
 });

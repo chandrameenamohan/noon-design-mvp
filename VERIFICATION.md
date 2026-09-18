@@ -19,6 +19,18 @@ Every e2e test imports `test` from `e2e/fixtures.ts`, which adds two checks afte
 the test body: the browser console had no errors or warnings, and axe found no
 accessibility violations. Key states also use `toHaveScreenshot`.
 
+## The gate was proven red, layer by layer (2026-09-19)
+
+One agent per layer made the smallest violation in a throwaway worktree.
+lint, typecheck, dup and e2e (console error, axe violation, screenshot diff,
+wrong heading) went red as they should. Two holes were found and closed:
+- **unit:** a "rejects" test broke two rules at once, so deleting one rule
+  stayed green. Tests now break one rule per case.
+- **deadcode:** knip ignores exports of a package's entry file. All packages
+  here are internal, so `includeEntryExports` is on and a dead export fails.
+Also learned: Playwright's `getByRole(..., { name })` matches substrings;
+use `exact: true`.
+
 ## Environment
 
 `./init.sh` installs dependencies, the Playwright browser and the hook, starts
