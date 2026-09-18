@@ -1,0 +1,8 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": { "entry": ["e2e/**/*.ts"] },
+    "apps/web": { "entry": ["index.html"] }
+  },
+  "ignoreDependencies": ["jscpd"]
+}

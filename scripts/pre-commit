@@ -1,0 +1,6 @@
+#!/bin/sh
+# The primary brake: no commit lands unless the whole gate is green.
+# Installed into .git/hooks by init.sh. Do not bypass with --no-verify.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+echo "pre-commit: running make check"
+make -s check || { echo "pre-commit: BLOCKED, make check is red"; exit 1; }

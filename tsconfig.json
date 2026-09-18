@@ -1,0 +1,22 @@
+{
+  // ponytail: one tsconfig for the whole repo. Upgrade path: project references
+  // per package once browser (DOM) types leaking into server code becomes a problem.
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["apps", "packages", "e2e", "*.ts"],
+  "exclude": ["**/node_modules", "**/dist"]
+}

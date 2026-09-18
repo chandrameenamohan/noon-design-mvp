@@ -1,0 +1,17 @@
+# ponytail: only the stores an epic already needs. Redis arrives with epic 3, MinIO with epic 6, Gitea with epic 5.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: noon
+      POSTGRES_PASSWORD: noon-dev-only
+      POSTGRES_DB: noon
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noon -d noon"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+volumes:
+  pgdata:
