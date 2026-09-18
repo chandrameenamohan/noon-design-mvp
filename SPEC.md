@@ -31,6 +31,8 @@ Boxes". This project is also a course: see §7.
 4. **Conflict rules.** Last writer wins per `(nodeId, key)` by `seq`. A remove
    beats any concurrent edit to the removed node or its descendants. `index`
    clamps to the valid range. Moves that would create a cycle are rejected.
+   An add or move whose target parent was concurrently removed is dropped the
+   same way: silently for the sender, never seen by other peers.
 5. **Idempotency by `opId`.** Resending an op never applies it twice; the room
    answers with the original `seq`.
 6. **Canvas model.** A document is one page: a tree of instances of the sample
@@ -46,7 +48,8 @@ Boxes". This project is also a course: see §7.
 9. **Stores, one job each.** Postgres: relational data, jobs, usage, audit, and
    the op journal (append-only table). MinIO: snapshots. Redis: queues, rate
    limits, leases. Losing Redis never loses document data. Journal append
-   happens before broadcast.
+   happens before broadcast. A room snapshots every N ops or T seconds
+   (tunable) and when its last peer leaves, so a never-idle session still snapshots.
 10. **Tenancy and attribution from day one.** Every table has `org_id`; `db`
     exposes only an org-scoped accessor; every op carries its actor. Document
     id is a UUID and is the room key.
@@ -125,7 +128,8 @@ Boxes". This project is also a course: see §7.
 - **F14. Manifest drift guard.** Changing a component's props in the sample app
   without regenerating the manifest makes `make check` fail and name the component.
 - **F15. Live preview.** The canvas shows an iframe of the sample app running
-  in a container for the document's branch. After an edit, the preview reflects
+  in a container for the document's working branch (created in the sandbox's
+  own clone when the document is first opened; F17 later pushes this same branch). After an edit, the preview reflects
   it within 3 s without a full reload. If the container dies, the iframe shows
   "rebuilding" and recovers without user action.
 
@@ -254,8 +258,8 @@ The design leaves room for each; none may be started without a spec change.
 Run by one Playwright script plus shell steps, on a clean clone, with two sync nodes:
 
 1. `./init.sh`; `make check` is green. (F1)
-2. Owner signs up, creates an org, workspace and document; invites an editor
-   and a viewer. (F2, F23, F24)
+2. Owner signs up, creates an org, workspace and document; invites a viewer,
+   and shares the document at `editor` with a user outside the workspace. (F2, F23, F24, F25)
 3. Owner and editor open the document in two browsers; each sees the other's
    cursor. Both build a small tree; both set the same prop at once; trees
    converge. The viewer sees it live; the viewer's attempted edit is rejected.
@@ -268,7 +272,9 @@ Run by one Playwright script plus shell steps, on a clean clone, with two sync n
 6. During an AI run, an engineer pushes an in-shape change: the canvas updates
    within 5 s. A shape-breaking push shows a conflict banner. (F16a, F16b, F29)
 7. `kill -9` the sync node owning the room mid-edit: clients reconnect to the
-   other node; no acknowledged op is lost or duplicated. `docker pause` a node
+   other node, which recovers the room from snapshot plus journal replay; no
+   acknowledged op is lost or duplicated. A scripted partition between a sync
+   node and Redis gives the same result. `docker pause` a node
    past its lease and resume it: its append is rejected; the journal has no gap
    or duplicate `seq`. (F18, F19, F21, F22)
 8. `kill -9` the worker mid-run: the job resumes and finishes without duplicate
@@ -276,7 +282,7 @@ Run by one Playwright script plus shell steps, on a clean clone, with two sync n
 9. Owner presses Ship twice: exactly one open PR in Gitea contains the
    generated file, and that file is byte-identical to a fresh codegen of the
    final document. (F13, F17)
-10. Owner revokes the editor's share: the editor's session closes. The audit
+10. Owner revokes the outside editor's share: that session closes. The audit
     view lists the sign-ins, role change, AI runs, rejected push, ship and
     revoke. (F25, F26)
 11. The manifest drift guard fails when a sample-app prop is changed without
