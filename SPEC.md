@@ -70,6 +70,10 @@ Boxes". This project is also a course: see §7.
     pushed to Gitea at bootstrap.
 15. **Git peer state.** Bare mirror in a volume, ephemeral worktree per job.
     The sandbox does its own clone.
+16. **Identity before epic 8.** Until F23 lands, the caller's user and org come
+    from a development-only header that `api` trusts only when
+    `NODE_ENV != production`; session tokens and `org_id` scoping are real from
+    epic 1. Epic 8 replaces the header, nothing else.
 
 ## 3. Features (numbered, with observable acceptance)
 
