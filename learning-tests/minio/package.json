@@ -1,0 +1,13 @@
+{
+  "name": "learning-test-minio",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Standalone learning test for @aws-sdk/client-s3 against MinIO (S3-compatible object store). Not part of the pnpm workspace.",
+  "scripts": {
+    "test": "node test.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.658.1"
+  }
+}

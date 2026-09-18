@@ -1,0 +1,8 @@
+{
+  "name": "lt-sandbox",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}

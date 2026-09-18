@@ -1,0 +1,16 @@
+{
+  "name": "learning-test-ws",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Standalone learning test for the ws package. Not part of the pnpm workspace.",
+  "scripts": {
+    "test": "node test.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13"
+  }
+}

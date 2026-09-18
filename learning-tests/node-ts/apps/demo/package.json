@@ -1,0 +1,12 @@
+{
+  "name": "@nt/demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#helper": "./src/helper.ts"
+  },
+  "dependencies": {
+    "@nt/lib": "workspace:*"
+  }
+}

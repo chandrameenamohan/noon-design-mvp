@@ -1,0 +1,15 @@
+{
+  "name": "learning-test-ts-manifest",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Standalone learning test for the TypeScript compiler API (typescript ~6.0): extracting a component manifest from a React design system's source, and parsing a fixed-shape generated TSX file back into a tree. Not part of the pnpm workspace.",
+  "scripts": {
+    "test": "node test.ts"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.0",
+    "@types/react": "^19.0.0",
+    "prettier": "^3.4.0"
+  }
+}

@@ -119,9 +119,10 @@ snapshot `seq` is recorded in Postgres. `IfNoneMatch: '*'` guards against two
 writers of one key. Missing key is `err.name === 'NoSuchKey'`. Gzip by hand.
 
 **Agent SDK.** Isolation is `tools: []` + `mcpServers` + `allowedTools:
-['mcp__<server>__<tool>']` + `settingSources: []`. **A tool whose Zod schema
-the SDK cannot convert (`z.record(k, v)`) is dropped silently and the model
-then fabricates a successful call**: use `z.object({}).catchall(z.unknown())`,
+['mcp__<server>__<tool>']` + `settingSources: []` (plus `CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1`, which still leaves 2 built-in skills). **One tool whose Zod schema
+the SDK cannot convert (`z.record(k, v)`) silently empties the WHOLE MCP
+server's tool list; the model then writes text that looks like a tool call
+(3 of 3 runs) and sometimes claims success, while no handler ever runs**: use `z.object({}).catchall(z.unknown())`,
 and at startup the worker asserts that every one of our tools appears in the
 init message's tool list, failing the run otherwise. Tool errors are
 `isError: true` results the model can react to. Cancel with `AbortController`
@@ -139,7 +140,10 @@ branch returns 409: Ship finds the open PR by `head.ref` and pushes to its branc
 (about 50 ms, hot update, state kept); no bind mount. The generated file exports
 ONLY components, or every edit becomes a full reload. `server.host: true`; one
 published port serves HTTP and HMR. Bake `node_modules` into the image (0.3 s
-start vs 12 s). Syntax errors show an overlay and recover without a restart.
+start vs 12 s). Syntax errors show an overlay and recover without a restart. After a container
+restart Vite's client reloads the page by itself (about 1.2 s, a full reload),
+but only if the new container answers on the SAME origin: a document's preview
+address must stay stable across restarts.
 
 **Manifest + projection.** Extraction needs the type checker (aliases, `Omit`,
 intersections) plus an AST pass (defaults). Optional means

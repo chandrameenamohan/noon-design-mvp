@@ -1,0 +1,14 @@
+{
+  "name": "learning-test-redis",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Standalone learning test for ioredis + bullmq against Redis 7. Not part of the pnpm workspace.",
+  "scripts": {
+    "test": "node test.ts"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.1",
+    "bullmq": "^5.34.0"
+  }
+}

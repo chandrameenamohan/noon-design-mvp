@@ -1,0 +1,7 @@
+# Runtime-install variant: node_modules installed at CONTAINER START time
+# (used only for the cold-start timing comparison, assumption 6).
+FROM node:24-slim
+WORKDIR /app
+COPY . .
+EXPOSE 5173
+CMD ["sh", "-c", "npm install && npm run dev"]

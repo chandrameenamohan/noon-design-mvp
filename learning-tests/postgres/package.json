@@ -1,0 +1,16 @@
+{
+  "name": "learning-test-postgres",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Standalone learning test for the pg package against PostgreSQL 17. Not part of the pnpm workspace.",
+  "scripts": {
+    "test": "node test.ts"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
+  }
+}

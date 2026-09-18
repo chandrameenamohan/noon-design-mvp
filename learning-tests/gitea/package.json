@@ -1,0 +1,10 @@
+{
+  "name": "learning-test-gitea",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Standalone learning test for self-hosted Gitea (git peer / ship-a-PR design) driven from Node.js 24 + the git CLI. Not part of the pnpm workspace.",
+  "scripts": {
+    "test": "node test.ts"
+  }
+}
