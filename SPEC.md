@@ -196,6 +196,26 @@ Boxes". This project is also a course: see §7.
 | Postgres or MinIO down | Rooms refuse new ops with a visible read-only status; nothing is silently dropped |
 | AI token missing or rate-limited | Run fails fast with a clear reason; canvas unaffected |
 
+## 4a. Final verification on Antithesis (end of W3)
+
+After all nine epics pass `make check` and the §8 scenario, the system is run
+once more on Antithesis (antithesis.com), a hosted deterministic-simulation
+platform that runs our containers under injected faults and replays any failure.
+- **A1. Packaged for Antithesis.** The Compose stack builds as container images
+  pushed to the Antithesis registry, with a test template (workload commands
+  that drive concurrent user, AI-stub and git edits) and JavaScript SDK
+  assertions for the invariants: peers converge, no acknowledged op lost, no op
+  applied twice, no `seq` gap or duplicate, no cycle, no cross-org read, no
+  duplicate job or PR.
+- **A2. Run and triage.** At least one full run completes; every reported
+  failure is reproduced, turned into a bead, fixed under the normal gate, and
+  covered by a regression test; a re-run shows those properties passing.
+- The AI agent is replaced by a scripted stub peer during these runs (no model
+  calls or subscription token leave the machine).
+- *Dependency:* access is by request to Antithesis (registry + credentials);
+  if access is not granted, A1's artifacts are still built and verified
+  locally, and A2 is reported as blocked, not skipped silently.
+
 ## 5. Non-goals
 
 - Freeform vector drawing, absolute positioning, a Figma clone.
