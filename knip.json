@@ -24,7 +24,8 @@
   "ignore": [
     "docs/**",
     "drills/**",
-    "learning-tests/**"
+    "learning-tests/**",
+    "seed/**"
   ],
   "includeEntryExports": true
 }
