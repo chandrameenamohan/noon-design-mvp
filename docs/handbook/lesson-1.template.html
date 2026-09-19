@@ -1,0 +1,113 @@
+<title>TypeScript Lesson One</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 1 · Epic 1</p>
+  <h1>A typed API over a tenant-safe database</h1>
+  <p class="lede">The win: open any file of epic 1 and know why it is shaped that way, including the twelve bugs the type system could not see.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what runs. Read a section, then open the named file and find the code in its real surroundings.</p>
+    <p class="mono">./init.sh &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# boots Postgres + the api, generates local secrets<br>make check &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the gate: lint, types, unit, integration, dead code, duplication, e2e<br>sh drills/lesson-1/check.sh &nbsp;# your drills: RED until you solve them</p>
+    <p>Try it: <span class="mono">curl -s -X POST localhost:3000/orgs -H 'x-dev-user: you@example.com' -H 'content-type: application/json' -d '{"name":"Mine"}'</span></p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-1/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-1/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> Give a workspace an optional <code>description</code> (at most 500 characters, no control characters, trimmed). You will touch the contract, a <em>new</em> migration, the db layer, and possibly the route. <span class="mono">make check</span> must stay green: the gate applies to you too.</p>
+      <p>Predict first: which of the four layers needs <em>no</em> change, and why? (Section 5 has the answer.)</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-1/d2-cursor/cursor.ts</span> is a simplified copy of the paging code with one bug. Its test walks five rows created in the same millisecond and expects each exactly once. Form a theory before you read section 4's case study again.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. Why does <code>createDb</code> return an object of closures instead of a class with a private field?</summary>
+        <p>TypeScript's <code>private</code> is erased at runtime, so it is a note to the compiler, not a wall. A closure variable is unreachable by anything: no reflection, no subclass, no <code>this</code> to lose when a method is passed as a callback. The tenancy rule is too important for a convention.</p></details>
+      <details class="recall"><summary>2. Why is a non-member answered with 404 rather than 403?</summary>
+        <p>403 confirms the org exists. "Not a member" and "no such org" are resolved by one query and return byte-identical responses, so the API never tells a caller anything about a tenant they do not belong to.</p></details>
+      <details class="recall"><summary>3. The session token names user, org and document. Why not the role too?</summary>
+        <p>A token is checked once, when the socket opens; the socket then lives for hours. A role baked into it would stay whatever it was at connect time, and epic 8 requires a role change to reach open sessions within ten seconds. The sync server must read the role itself and be pushed changes.</p></details>
+    </div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Trace <code>POST /orgs/:orgId/workspaces</code> through its five steps, and name the three layers that enforce tenancy. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Identity middleware (401) → org middleware: member? (404) → body parsed against the contract (400 naming the field) → <code>db.forOrg(orgId)</code>, the only door → Postgres constraints. Tenancy is enforced by the closure (no unscoped query can be written), a compile-time <code>@ts-expect-error</code> test (a new door fails the build), and the composite foreign key (the database refuses).</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. <code>export const Org = z.object({...})</code> and <code>export type Org = z.infer&lt;typeof Org&gt;</code> in one file. Why is that not a name clash?</p>
+      <button id="q1a" data-correct>Values and types live in separate namespaces</button><button id="q1b">The second declaration overrides the first</button>
+      <button id="q1c">Zod registers the name specially</button><button id="q1d">It is a clash; the linter is configured to allow it</button>
+      <p class="why" hidden><code>Org.parse(x)</code> uses the value; <code>const o: Org</code> uses the type. The compiler always knows which position it is in.</p></div>
+    <div class="quiz"><p class="q">2. The contract trims a name then requires length ≥ 1. The database only requires length ≥ 1. A client sends three spaces. What happened in the first version?</p>
+      <button id="q2a" data-correct>Stored, then every list for that org threw</button><button id="q2b">Rejected with a 400</button>
+      <button id="q2c">Stored as an empty string</button><button id="q2d">Rejected by the database</button>
+      <p class="why" hidden>Validation ran only on the read side. The row was storable but unreadable. Parse inputs with the same contract before writing.</p></div>
+    <div class="quiz"><p class="q">3. What does <code>// @ts-expect-error</code> above <code>void db.pool;</code> prove?</p>
+      <button id="q3a" data-correct>The build fails if <code>db.pool</code> ever type-checks</button><button id="q3b">The line is skipped by the compiler</button>
+      <button id="q3c">The pool throws at runtime if touched</button><button id="q3d">Nothing; it silences an error</button>
+      <p class="why" hidden>Unlike <code>@ts-ignore</code>, it is an assertion: no error on the next line is itself an error (TS2578). A compile-time test.</p></div>
+    <div class="quiz"><p class="q">4. Why does the paging cursor carry the timestamp as Postgres text instead of going through a JavaScript <code>Date</code>?</p>
+      <button id="q4a" data-correct>Date keeps milliseconds; timestamptz keeps microseconds</button><button id="q4b">Dates cannot be base64 encoded</button>
+      <button id="q4c">Time zones differ between Node and Postgres</button><button id="q4d">Text compares faster than timestamps</button>
+      <p class="why" hidden>Rows created in the same millisecond would be skipped or repeated. That is Drill 2.</p></div>
+    <div class="quiz"><p class="q">5. A handler writes <code>const { name } = await body(c, CreateOrgBody)</code>. Where does <code>name</code>'s type come from?</p>
+      <button id="q5a" data-correct>Inferred from the schema through the generic <code>S</code></button><button id="q5b">A cast inside <code>body()</code></button>
+      <button id="q5c">An annotation on the handler</button><button id="q5d">It is <code>any</code></button>
+      <p class="why" hidden><code>body&lt;S extends z.ZodType&gt;(c, schema: S): Promise&lt;z.infer&lt;S&gt;&gt;</code>: the return type is computed from the argument.</p></div>
+    <div class="quiz"><p class="q">6. Auth was first applied to <code>/orgs/*</code> only. What was wrong with that?</p>
+      <button id="q6a" data-correct>The next top-level route would be public by default</button><button id="q6b">Wildcards do not match nested paths</button>
+      <button id="q6c">It ran the identity check twice</button><button id="q6d">Nothing; it was only slower</button>
+      <p class="why" hidden>Security defaults must fail closed: everything needs a caller except an explicit allowlist.</p></div>
+    <div class="quiz"><p class="q">7. Tests passed <code>noIdentity</code> to <code>startServer</code> and saw 401. Why did that NOT prove production is safe?</p>
+      <button id="q7a" data-correct>It never exercised what <span class="mono">main.ts</span> really wires</button><button id="q7b">401 is the wrong status for production</button>
+      <button id="q7c">The test ran with <code>NODE_ENV=test</code></button><button id="q7d">It did prove it</button>
+      <p class="why" hidden>An injected dependency proves the dependency, not the wiring. The fix runs the real entry point in a child process with a clean environment.</p></div>
+    <div class="quiz"><p class="q">8. <code>verifySessionToken</code> returns <code>{ok:false, reason}</code> instead of throwing. Why?</p>
+      <button id="q8a" data-correct>A bad token is expected input, and the union forces callers to check</button><button id="q8b">Exceptions are slow in Node</button>
+      <button id="q8c">TypeScript has no checked exceptions, so throwing is banned</button><button id="q8d">So the error can be logged centrally</button>
+      <p class="why" hidden>TypeScript cannot say what a function throws. A discriminated union puts the failure in the type, where the compiler can see it.</p></div>
+  </section>
+
+  <footer>Next: Lesson 2, after epic 2. One room per document, ops in one order, optimistic edits that reconcile, and a simulator that fuzzes the lot.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>

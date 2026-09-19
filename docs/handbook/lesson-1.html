@@ -1,0 +1,471 @@
+<title>TypeScript Lesson One</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.prose { max-width: 36rem; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h2 code { font-size: 0.92em; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+pre.out { background: var(--surface); color: var(--slate); border-style: dashed; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 9rem; }
+.break { border: 1px solid var(--bad); background: var(--bad-wash); padding: 4px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.break .label { color: var(--bad); } .break pre { background: var(--surface); }
+.break p { font-size: 0.95rem; margin: 10px 0 0; }
+.recall { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; max-width: 36rem; }
+summary { cursor: pointer; font: 500 15px var(--sans); color: var(--accent); }
+.recall p { margin: 12px 0 0; font-size: 0.95rem; }
+#score { font: 500 13px var(--mono); color: var(--slate); min-height: 1.4em; margin: 0 0 4px; }
+.quiz { border-top: 1px solid var(--rule); padding: 22px 0 8px; display: grid; gap: 8px; max-width: 36rem; }
+.quiz .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.quiz button { text-align: left; padding: 11px 14px; font: 400 16px/1.35 var(--serif); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; cursor: pointer; }
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; color: var(--slate); }
+.quiz button.right { border-color: var(--good); color: var(--good); font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.quiz .why { font-size: 0.92rem; color: var(--slate); margin: 4px 0 0; }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media print {
+  body { font-size: 11.5pt; padding: 0; background: #fff; }
+  main { max-width: none; } p, ul, ol, .lede, .prose, .recall, .quiz, footer { max-width: none; }
+  /* Paper cannot scroll sideways: wrap long code lines instead of clipping them. */
+  .scroll { overflow: visible; } pre { white-space: pre-wrap; overflow-wrap: anywhere; width: auto; min-width: 0; font-size: 8.6pt; }
+  h2 { break-after: avoid; margin-top: 28pt; } .label { break-after: avoid; }
+  table, .break, .aside, .quiz, .note { break-inside: avoid; }
+  .toc a, a { color: inherit; text-decoration: none; } #score { display: none; }
+}
+@media (max-width: 480px) { body { font-size: 17.5px; padding-block: 36px 72px; } pre { font-size: 12.5px; } }
+</style>
+<style>
+/* Lesson 1 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 1 · Epic 1</p>
+  <h1>A typed API over a tenant-safe database</h1>
+  <p class="lede">The win: open any file of epic 1 and know why it is shaped that way, including the twelve bugs the type system could not see.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">96917f4</span>, so what you read is what runs. Read a section, then open the named file and find the code in its real surroundings.</p>
+    <p class="mono">./init.sh &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# boots Postgres + the api, generates local secrets<br>make check &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the gate: lint, types, unit, integration, dead code, duplication, e2e<br>sh drills/lesson-1/check.sh &nbsp;# your drills: RED until you solve them</p>
+    <p>Try it: <span class="mono">curl -s -X POST localhost:3000/orgs -H 'x-dev-user: you@example.com' -H 'content-type: application/json' -d '{"name":"Mine"}'</span></p>
+  </div>
+
+  <ol class="toc"><li><a href="#map">The map: one request, five files</a></li><li><a href="#contracts">1 · One schema, two jobs</a></li><li><a href="#closure">2 · Privacy without <code>private</code>: the closure</a></li><li><a href="#boundary">3 · Parse at the boundary, in both directions</a></li><li><a href="#sql">4 · Let the database do what it is good at</a></li><li><a href="#http">5 · The HTTP layer: a handler cannot forget to validate</a></li><li><a href="#auth">6 · Identity: a function type, and failing closed</a></li><li><a href="#token">7 · A session token, and a function that returns its failure</a></li><li><a href="#ops">8 · Configuration, startup and shutdown</a></li><li><a href="#role">9 · Least privilege in the database</a></li><li><a href="#limits">10 · What the type system could not see</a></li><li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  <section id="map"><h2>The map: one request, five files</h2><p>Epic 1 built the part of the system that is ordinary on purpose: a typed HTTP API over Postgres. Follow one request, <code>POST /orgs/:orgId/workspaces</code>, and you have met every file worth knowing.</p><div class="scroll"><table><tr><th>Step</th><th>Where</th><th>What happens</th></tr><tr><td>1</td><td><span class='mono'>apps/api/src/app.ts</span></td><td>identity middleware: who is calling? No caller, no entry (401)</td></tr><tr><td>2</td><td><span class='mono'>apps/api/src/app.ts</span></td><td>org middleware: is this caller a member of this org? If not, 404</td></tr><tr><td>3</td><td><span class='mono'>packages/contracts</span></td><td>the body is parsed against a Zod schema; a bad field is a 400 that names it</td></tr><tr><td>4</td><td><span class='mono'>packages/db</span></td><td><code>db.forOrg(orgId).createWorkspace()</code>: the only door to tenant data</td></tr><tr><td>5</td><td>Postgres</td><td>constraints and foreign keys have the last word</td></tr></table></div><p>Three packages, one direction of dependency: <span class='mono'>contracts</span> knows nothing; <span class='mono'>db</span> and <span class='mono'>session-token</span> import it; <span class='mono'>api</span> imports all three. Nothing imports <span class='mono'>api</span>.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java / Spring</th><th>Python / FastAPI</th></tr><tr><td><span class='mono'>packages/*</span> with <code>exports</code> in package.json</td><td>Maven modules</td><td>packages in a uv/poetry workspace</td></tr><tr><td>Hono app built by a function, <code>buildApp({ db, identify, sessions })</code></td><td>Spring context + <code>@RestController</code></td><td><code>FastAPI()</code> + <code>Depends</code></td></tr><tr><td>dependencies are function ARGUMENTS</td><td>dependency injection container</td><td><code>Depends(...)</code></td></tr></table></div><p class="note"><strong>The biggest style difference from Spring:</strong> there is no container, no annotations, no reflection. A dependency is a parameter. A test passes a different argument. That is the whole dependency-injection story in this codebase.</p></section><section id="contracts"><h2>1 · One schema, two jobs</h2><p>Lesson 0 ended on <em>types vanish at runtime</em>. This is the answer. A Zod schema is a runtime value that can check data; <code>z.infer</code> derives the static type from it. One definition, so the check and the type cannot drift apart.</p><p class="label">From <span class="mono">packages/contracts/src/index.ts</span></p><div class="scroll"><pre><code>export const Id = z.uuid();
+/**
+ * Trimmed, 1-200 characters, no control characters. Used on the way IN (before a write) and on the
+ * way out. Control characters are refused here because Postgres text cannot hold a NUL byte: without
+ * this, a body that satisfies the contract would still fail in the database as a 500.
+ */
+export const Name = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .regex(/^\P{Cc}*$/u, &quot;must not contain control characters&quot;);
+const Timestamp = z.iso.datetime();
+
+export const User = z.object({ id: Id, email: z.email().max(320), name: Name });
+export type User = z.infer&lt;typeof User&gt;;
+
+export const Org = z.object({ id: Id, name: Name, createdAt: Timestamp });
+export type Org = z.infer&lt;typeof Org&gt;;
+
+export const Workspace = z.object({ id: Id, orgId: Id, name: Name, createdAt: Timestamp });
+export type Workspace = z.infer&lt;typeof Workspace&gt;;</code></pre></div><p>Three TypeScript things are happening in that excerpt:</p><ul><li><strong>A value and a type share a name.</strong> <code>export const Org</code> and <code>export type Org</code> do not clash: TypeScript keeps values and types in two separate namespaces. <code>Org.parse(x)</code> uses the value; <code>const o: Org</code> uses the type. Java has no equivalent; it is the idiom for "schema + its type".</li><li><strong><code>typeof Org</code></strong> here is the <em>type-level</em> <code>typeof</code>: "the static type of this value". (The runtime <code>typeof</code> from Lesson 0 only knows eight JavaScript types. Same keyword, two languages.)</li><li><strong><code>z.strictObject</code></strong> (used for request bodies, below) rejects unknown keys, so a typo like <code>nmae</code> is an error, not silently ignored.</li></ul><p class="label">From <span class="mono">packages/contracts/src/index.ts</span></p><div class="scroll"><pre><code>// --- HTTP bodies -------------------------------------------------------------
+export const CreateOrgBody = z.strictObject({ name: Name });
+export const CreateWorkspaceBody = z.strictObject({ name: Name });
+export const CreateDocumentBody = z.strictObject({ title: Name });
+
+/** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
+export const ErrorBody = z.object({
+  error: z.enum([&quot;invalid_json&quot;, &quot;invalid_body&quot;, &quot;invalid_query&quot;, &quot;unsupported_media_type&quot;, &quot;payload_too_large&quot;, &quot;unauthenticated&quot;, &quot;not_found&quot;, &quot;not_ready&quot;, &quot;internal&quot;]),
+  issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
+});
+export type ErrorBody = z.infer&lt;typeof ErrorBody&gt;;</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java / Spring</th><th>Python / FastAPI</th></tr><tr><td>Zod schema + <code>z.infer</code></td><td>DTO class + Bean Validation annotations</td><td>pydantic <code>BaseModel</code></td></tr><tr><td>explicit <code>.parse()</code> at each boundary</td><td>framework binds and validates for you</td><td>framework binds and validates for you</td></tr><tr><td>types erased; only the schema exists at runtime</td><td>class exists at runtime</td><td>class exists at runtime</td></tr></table></div><div class="break"><p class="label">Case study · found by review</p><p><strong>A name that satisfied the contract still crashed the database.</strong></p><p>The first <code>Name</code> was <code>z.string().trim().min(1).max(200)</code>. Two reviewers independently sent a name containing a NUL byte. The contract said yes, Postgres said no (text cannot hold NUL), and the client got a 500. The fix is the <code>.regex(/^\P{Cc}*$/u)</code> line: <code>\P{Cc}</code> means "not a control character", and the <code>u</code> flag turns on Unicode property escapes. <em>A contract must be at least as strict as the strictest system behind it.</em></p></div></section><section id="closure"><h2>2 · Privacy without <code>private</code>: the closure</h2><p>The most important rule in a multi-tenant system: <strong>no query may forget the org filter.</strong> In Java you would reach for a <code>private</code> field and code review. Here the rule is made <em>unwritable</em>.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>export type Db = {
+  migrate(): Promise&lt;void&gt;;
+  appliedMigrations(): Promise&lt;string[]&gt;;
+  /** Finds the user with this email or creates one. Emails are compared case-insensitively. */
+  upsertUser(input: { email: string; name: string }): Promise&lt;User&gt;;
+  /** Creates the org and makes `ownerId` its owner, atomically: an org never exists without an owner. */
+  createOrg(input: { name: string; ownerId: string }): Promise&lt;Org&gt;;
+  listOrgsFor(userId: string, page?: PageInput): Promise&lt;Page&lt;Org&gt; | undefined&gt;;
+  /** The org, but only if this user is a member. &quot;Not a member&quot; and &quot;no such org&quot; look the same. */
+  getOrgForMember(orgId: string, userId: string): Promise&lt;Org | undefined&gt;;
+  /** The document, but only if this user is a member of its org. Used where the path names no org. */
+  getDocumentForMember(documentId: string, userId: string): Promise&lt;Document | undefined&gt;;
+  /** Resolves if the database answers a query, rejects otherwise. */
+  ping(): Promise&lt;void&gt;;
+  /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
+  forOrg(orgId: string): OrgScope;
+  close(): Promise&lt;void&gt;;
+};</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>export function createDb({ connectionString, schema }: { connectionString: string; schema?: string }): Db {
+  // `schema` goes into libpq&#x27;s space-separated startup options, where a space would smuggle in
+  // extra `-c` settings (the review set session_replication_role this way). Plain identifiers only.
+  if (schema !== undefined &amp;&amp; !IDENTIFIER.test(schema)) {
+    throw new Error(`invalid schema name: ${JSON.stringify(schema)}`);
+  }
+
+  // The pool lives in this closure and is never returned: there is no way to run an unscoped query from outside.
+  const pool = new Pool({
+    connectionString,
+    application_name: &quot;noon-db&quot;,
+    ...(schema === undefined ? {} : { options: `-c search_path=${schema}` }),
+  });
+  // Postgres restarting, or killing an idle connection, makes the pool emit &#x27;error&#x27;. An &#x27;error&#x27;
+  // event with no listener is an uncaught exception in Node: one dropped connection would take
+  // the whole process down. The pool has already discarded the client; only the message is logged
+  // (the full error object carries the connection password).
+  pool.on(&quot;error&quot;, (err) =&gt; {
+    process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, source: &quot;db&quot;, message: `idle connection lost: ${err.message}` })}\n`);
+  });</code></pre></div><p><code>pool</code> is a local variable of <code>createDb</code>. The functions in the returned object <em>close over</em> it: they can use it, nothing else can reach it. There is no field to make public by mistake, no reflection to bypass it, and no subclass. That is a <strong>closure</strong>, and it is how this codebase does encapsulation.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java / Spring</th><th>Python / FastAPI</th></tr><tr><td>function returning an object of functions; state in the closure</td><td>class with <code>private final</code> fields</td><td>class with <code>_underscore</code> convention</td></tr><tr><td><code>type Db = { ... }</code> describes the shape</td><td><code>interface Db</code></td><td><code>Protocol</code></td></tr><tr><td>truly unreachable</td><td>reachable by reflection</td><td>reachable by anyone</td></tr></table></div><p><strong>Why not a class?</strong> TypeScript's <code>private</code> is a compile-time note that vanishes at runtime (JavaScript's <code>#field</code> is real, but then every method needs <code>this</code>, and <code>this</code> gets lost the moment you pass a method as a callback; you will meet that lint rule in section 8). An object of closures has no <code>this</code> at all.</p><p>And a test proves the door stays shut. <code>@ts-expect-error</code> means "the next line MUST be a type error"; if it ever compiles, the typecheck layer fails:</p><p class="label">From <span class="mono">packages/db/src/scope.typecheck.test.ts</span></p><div class="scroll"><pre><code>function unscopedAccessIsImpossible(db: Db): void {
+  // @ts-expect-error the connection pool is not reachable from outside the package
+  void db.pool;
+  // @ts-expect-error there is no raw query method
+  void db.query(&quot;select * from workspaces&quot;);
+  // @ts-expect-error tenant data cannot be listed without naming an org
+  void db.listWorkspaces();
+  // @ts-expect-error a scope needs an org id
+  void db.forOrg();
+}</code></pre></div><p class="note"><strong>Three layers, not one.</strong> The closure makes the unscoped query unwritable; the compile-time test notices if someone adds a door; and the database refuses a document whose org differs from its workspace's org (a composite foreign key, section 4). Each layer was mutation-checked: remove it, watch a test go red, put it back.</p></section><section id="boundary"><h2>3 · Parse at the boundary, in both directions</h2><p>The <span class='mono'>pg</span> driver returns rows typed as <code>any</code>. Rather than trust it, every row is parsed once, where it enters our code, and converted from the database's <code>snake_case</code> to the contract's shape:</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// Rows arrive as `any` from the driver. Each is parsed once, here, at the database boundary.
+const timestamp = z.date().transform((d) =&gt; d.toISOString());
+const UserRow = z.object({ id: z.string(), email: z.string(), name: z.string() }).transform((r): User =&gt; User.parse(r));
+const OrgRow = z.object({ id: z.string(), name: z.string(), created_at: timestamp })
+  .transform((r): Org =&gt; Org.parse({ id: r.id, name: r.name, createdAt: r.created_at }));
+const WorkspaceRow = z.object({ id: z.string(), org_id: z.string(), name: z.string(), created_at: timestamp })
+  .transform((r): Workspace =&gt; Workspace.parse({ id: r.id, orgId: r.org_id, name: r.name, createdAt: r.created_at }));
+const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id: z.string(), title: z.string(), created_at: timestamp })
+  .transform((r): Document =&gt;
+    Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));</code></pre></div><p><code>.transform()</code> makes a schema whose <em>input</em> type and <em>output</em> type differ: in goes a row with a <code>Date</code>, out comes an <code>Org</code> with an ISO string. The annotation <code>(r): Org =></code> makes the compiler check that the transform really produces the contract.</p><div class="break"><p class="label">Case study · found by review</p><p><strong>Validate BEFORE the write, not only after the read.</strong></p><p>The first version parsed rows only on the way out. The database check was <code>length(name) &gt;= 1</code>; the contract trims first. So <code>"   "</code> was <em>stored</em> (length 3) and then <em>unreadable</em> (trims to empty). One such row made every later <code>listWorkspaces()</code> for that org throw, forever, and nothing in the API could delete it. Two reviewers found it independently.</p><p>The fix has two halves: inputs go through the same <code>Name.parse()</code> <strong>before</strong> the insert, and the column check became <code>name = btrim(name)</code>. The rule: <em>a row the reader cannot parse must never be storable.</em></p></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>    // Inputs are parsed with the SAME contract the reader uses, BEFORE the write: a row that
+    // cannot be read back must never be stored (it would make every later list throw).
+    createOrg: async ({ name, ownerId }) =&gt; {
+      if (!isId(ownerId)) throw new Error(&quot;cannot create an org: invalid owner id&quot;);
+      return exactlyOne(
+        OrgRow,
+        // One statement, so it is atomic without an explicit transaction.
+        &quot;with o as (insert into orgs (name) values ($1) returning *), &quot; +
+          &quot;m as (insert into memberships (org_id, user_id, role) select o.id, $2, &#x27;owner&#x27; from o) select * from o&quot;,
+        [Name.parse(name), ownerId],
+      );
+    },</code></pre></div></section><section id="sql"><h2>4 · Let the database do what it is good at</h2><p>Application code checks first; the database has the last word. Three pieces of SQL carry real weight.</p><p><strong>A composite foreign key</strong> makes "a document's org equals its workspace's org" a fact of the schema, not a hope about the code:</p><p class="label">From <span class="mono">packages/db/migrations/0001_init.sql</span></p><div class="scroll"><pre><code>create table documents (
+  id           uuid primary key default gen_random_uuid(),
+  org_id       uuid not null references orgs (id) on delete cascade,
+  workspace_id uuid not null,
+  title        text not null check (title = btrim(title) and length(title) between 1 and 200),
+  created_at   timestamptz not null default now(),
+  -- The database, not the application, guarantees a document&#x27;s org matches its workspace&#x27;s org.
+  foreign key (workspace_id, org_id) references workspaces (id, org_id) on delete cascade
+);</code></pre></div><p><strong><code>insert ... select</code></strong> creates the row only if the workspace exists <em>in this org</em>. No check-then-insert, so no race:</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        createDocument: async ({ workspaceId, title }) =&gt; {
+          const cleanTitle = Name.parse(title);
+          if (!orgExists || !isId(workspaceId)) return undefined;
+          return one(
+            DocumentRow,
+            // insert ... select: the row is only created if the workspace exists in this org.
+            &quot;insert into documents (org_id, workspace_id, title) &quot; +
+              &quot;select w.org_id, w.id, $3 from workspaces w where w.org_id = $1 and w.id = $2 returning *&quot;,
+            [orgId, workspaceId, cleanTitle],
+          );
+        },</code></pre></div><p><strong>One statement, two writes.</strong> An org must never exist without an owner. A data-modifying CTE does both inserts atomically, with no explicit transaction (Postgres runs every data-modifying <code>with</code> exactly once, to completion, whether or not its result is read):</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>    createOrg: async ({ name, ownerId }) =&gt; {
+      if (!isId(ownerId)) throw new Error(&quot;cannot create an org: invalid owner id&quot;);
+      return exactlyOne(
+        OrgRow,
+        // One statement, so it is atomic without an explicit transaction.
+        &quot;with o as (insert into orgs (name) values ($1) returning *), &quot; +
+          &quot;m as (insert into memberships (org_id, user_id, role) select o.id, $2, &#x27;owner&#x27; from o) select * from o&quot;,
+        [Name.parse(name), ownerId],
+      );
+    },</code></pre></div><p><strong>Keyset paging.</strong> <code>OFFSET</code> gets slower with every page and skips rows when data changes underneath it. A keyset cursor says "everything after this row":</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// Keyset paging on (created_at, id). The cursor carries Postgres&#x27;s own text form of the timestamp,
+// because a JS Date keeps milliseconds while timestamptz keeps microseconds: rounding through a Date
+// would skip or repeat rows created in the same millisecond.
+const CURSOR_TS = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
+const encodeCursor = (ts: string, id: string): string =&gt; Buffer.from(`${ts}|${id}`).toString(&quot;base64url&quot;);
+function decodeCursor(cursor: string): { ts: string; id: string } | undefined {
+  const [ts, id, ...rest] = Buffer.from(cursor, &quot;base64url&quot;).toString(&quot;utf8&quot;).split(&quot;|&quot;);
+  if (ts === undefined || id === undefined || rest.length &gt; 0) return undefined;
+  // Postgres prints the offset as &quot;+00&quot;; ISO 8601 (what Date.parse reads) needs &quot;+00:00&quot;.
+  const iso = ts.replace(&quot; &quot;, &quot;T&quot;).replace(/([+-]\d{2})$/, &quot;$1:00&quot;);
+  if (!CURSOR_TS.test(ts) || Number.isNaN(Date.parse(iso)) || !isId(id)) return undefined;
+  return { ts, id };
+}</code></pre></div><div class="break"><p class="label">Case study · found by review</p><p><strong>A JavaScript <code>Date</code> is too coarse to be a cursor.</strong></p><p>Postgres <code>timestamptz</code> keeps microseconds; a JS <code>Date</code> keeps milliseconds. Rows inserted in the same millisecond would be skipped or repeated if the cursor went through a <code>Date</code>. So the cursor carries <em>Postgres's own text</em> for the timestamp. Drill 2 is this bug, planted in a copy of the code.</p></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java / Spring</th><th>Python / FastAPI</th></tr><tr><td>hand-written SQL, parameters as <code>$1</code></td><td>JPA / jOOQ / JdbcTemplate</td><td>SQLAlchemy</td></tr><tr><td>ordered <span class='mono'>.sql</span> files + an advisory lock</td><td>Flyway / Liquibase</td><td>Alembic</td></tr><tr><td>rows parsed by Zod</td><td>entity mapping</td><td>ORM models</td></tr></table></div><p class="note"><strong>Why no ORM?</strong> A dozen queries do not pay for one, and the hard statements later in this project (the fenced journal append in epic 7) need exact SQL anyway. The trade: you read real SQL, and nothing generates it behind your back.</p></section><section id="http"><h2>5 · The HTTP layer: a handler cannot forget to validate</h2><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>async function body&lt;S extends z.ZodType&gt;(c: Context, schema: S): Promise&lt;z.infer&lt;S&gt;&gt; {
+  // Browsers may send text/plain cross-site WITHOUT a preflight. Demanding JSON closes that door
+  // before any cookie-based auth exists to be abused through it.
+  if (!/^application\/json\b/i.test(c.req.header(&quot;content-type&quot;) ?? &quot;&quot;)) {
+    throw new HTTPException(415, { res: fail(c, 415, &quot;unsupported_media_type&quot;) });
+  }
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    throw new HTTPException(400, { res: fail(c, 400, &quot;invalid_json&quot;) });
+  }
+  const parsed = schema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  throw new HTTPException(400, { res: fail(c, 400, &quot;invalid_body&quot;, issuesOf(parsed.error, &quot;body&quot;)) });
+}</code></pre></div><p>Read the signature slowly: <code>&lt;S extends z.ZodType&gt;(c, schema: S): Promise&lt;z.infer&lt;S&gt;&gt;</code>. It is <strong>generic over the schema</strong>: pass <code>CreateOrgBody</code> and the return type is <em>that schema's</em> inferred type. So in a handler, <code>const { name } = await body(c, CreateOrgBody)</code> gives a <code>name: string</code> with no cast and no annotation. On failure it <em>throws</em> a ready-made 400, which keeps every handler's happy path a straight line:</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  app.post(&quot;/orgs&quot;, async (c) =&gt; {
+    const { name } = await body(c, CreateOrgBody);
+    return c.json(await db.createOrg({ name, ownerId: c.var.user.id }), 201);
+  });</code></pre></div><p><strong><code>satisfies</code></strong> appears all over <span class='mono'>app.ts</span>: <code>{ error: "not_found" } satisfies ErrorBody</code> asks the compiler to check the literal against the type <em>without changing the literal's own type</em>. A plain annotation would widen it; <code>as</code> would not check it at all.</p><p><strong>Errors.</strong> Anything unexpected becomes a bare 500. Database errors echo input, table and constraint names, so none of it goes to the client; the log is one JSON object per line, so a newline inside a message cannot forge a second log entry:</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  app.onError((err, c) =&gt; {
+    if (err instanceof HTTPException) return err.getResponse();
+    // Database errors echo input, table and constraint names: the client gets none of it. The log is
+    // one JSON object per line, so a newline inside a message cannot forge a second log entry.
+    process.stderr.write(`${JSON.stringify({ level: &quot;error&quot;, method: c.req.method, path: c.req.path, message: err.message })}\n`);
+    return fail(c, 500, &quot;internal&quot;);
+  });</code></pre></div><div class="break"><p class="label">Case study · found by review</p><p><strong>One request took the API from 58 MB to 806 MB.</strong></p><p>Nothing limited the size of a request body. A reviewer sent one 200 MB POST and watched the container's memory. The fix is one middleware (<code>bodyLimit</code>, 64 KB, <code>413</code>), plus a demand for <code>application/json</code>: a browser may send <code>text/plain</code> cross-site <em>without a preflight</em>, which becomes a cross-site write the day cookies exist.</p></div></section><section id="auth"><h2>6 · Identity: a function type, and failing closed</h2><p>Who is calling? Until epic 8 brings real sign-in, a development-only header answers. The interesting part is the <em>shape</em>: identity is a function type, and the app receives one as an argument.</p><p class="label">From <span class="mono">apps/api/src/identity.ts</span></p><div class="scroll"><pre><code>/** Works out who is calling. Undefined means &quot;nobody we recognise&quot;, which the app turns into 401. */
+export type Identify = (c: Context, db: Db) =&gt; Promise&lt;User | undefined&gt;;
+
+/**
+ * Development only (SPEC §2.16): the caller names themselves in a header and is created on first
+ * sight. It exists so that tenancy and attribution are real from epic 1; epic 8 swaps in sign-in
+ * and sessions by providing a different `Identify`, and nothing else changes.
+ *
+ * Known costs, accepted because this never runs outside a developer&#x27;s machine: anyone who can reach
+ * the api can be anyone and can create users, and every request WRITES (the upsert), so it takes a
+ * row lock and cannot run against a read replica. Epic 8&#x27;s strategy must be a pure read.
+ */
+export const devHeaderIdentity: Identify = async (c, db) =&gt; {
+  const email = User.shape.email.safeParse(c.req.header(&quot;x-dev-user&quot;));
+  if (!email.success) return undefined;
+  // The display name is the local part, cut to what `Name` allows: a valid address may have a
+  // local part far longer than a name, and that must not turn a request into a 500.
+  const local = (email.data.split(&quot;@&quot;)[0] ?? &quot;&quot;).slice(0, 200);
+  return db.upsertUser({ email: email.data, name: Name.safeParse(local).data ?? &quot;user&quot; });
+};
+
+/** Trusts nothing. Until epic 8 this is what every non-development process gets: all requests are 401. */
+export const noIdentity: Identify = () =&gt; Promise.resolve(undefined);
+
+/**
+ * Only the literal &quot;development&quot; turns the header on. &quot;test&quot; does not: an image built in CI and
+ * promoted with NODE_ENV=test must not accept it. Tests pass the strategy they want directly.
+ */
+export const chooseIdentity = (nodeEnv: &quot;development&quot; | &quot;test&quot; | &quot;production&quot;): Identify =&gt;
+  nodeEnv === &quot;development&quot; ? devHeaderIdentity : noIdentity;</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java / Spring</th><th>Python / FastAPI</th></tr><tr><td><code>type Identify = (c, db) =&gt; Promise&lt;User | undefined&gt;</code></td><td><code>interface AuthenticationProvider</code> + a bean</td><td>a <code>Depends</code> callable</td></tr><tr><td>the strategy is a REQUIRED argument of <code>buildApp</code></td><td>profile-specific beans</td><td>dependency overrides</td></tr></table></div><p>A one-method interface in Java is just a function type here. And it is a <em>required</em> parameter with no default: forget it and the code does not compile, so development auth cannot reach production by omission.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // Identity fails CLOSED: every route needs a caller unless it is listed here. A new top-level
+  // route (E1.5&#x27;s POST /documents/:id/session, for one) is protected without anyone remembering to.
+  // createMiddleware carries the Variables type, so `c.var.user` is typed (not `any`) downstream.
+  const PUBLIC_PATHS = new Set([&quot;/health&quot;, &quot;/ready&quot;]);
+  const requireUser = createMiddleware&lt;{ Variables: { user: User } }&gt;(async (c, next) =&gt; {
+    if (PUBLIC_PATHS.has(c.req.path)) return next();
+    const user = await identify(c, db);
+    if (!user) return fail(c, 401, &quot;unauthenticated&quot;);
+    c.set(&quot;user&quot;, user);
+    await next();
+  });
+  app.use(&quot;*&quot;, requireUser);</code></pre></div><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // EVERYTHING about one org lives behind this middleware, including reading the org itself: it is
+  // the one place that decides whether the caller may see this org. Not a member and no such org
+  // are the same answer, 404, so a response never confirms that someone else&#x27;s org exists (F2).
+  // MEMBERSHIP ONLY: the member&#x27;s role is ignored here, so today a viewer may create workspaces and
+  // documents. Role enforcement arrives in E8.2, which must cover these REST writes, not only ops.
+  const org = new Hono&lt;{ Variables: { user: User; org: Org; scope: ReturnType&lt;Db[&quot;forOrg&quot;]&gt; } }&gt;();
+  org.use(async (c, next) =&gt; {
+    const found = await db.getOrgForMember(c.req.param(&quot;orgId&quot;) ?? &quot;&quot;, c.var.user.id);
+    if (!found) return notFound(c);
+    c.set(&quot;org&quot;, found);
+    c.set(&quot;scope&quot;, db.forOrg(found.id));
+    await next();
+  });</code></pre></div><p><strong>404, never 403.</strong> A <code>403</code> says "this org exists, and you may not see it". That confirms a fact the caller had no right to. So "not a member" and "no such org" are <em>one query</em> and <em>one answer</em>. The test walks every per-org route as an outsider and compares status, bytes and headers with the answer for an org that does not exist.</p><div class="break"><p class="label">Case study · found by review</p><p><strong>Three ways the first version could have leaked, all found by review.</strong></p><ul><li><strong>"Anything except production" is two values too many.</strong> <code>NODE_ENV=test</code> also enabled the header. Now only the literal <code>"development"</code> does, and <em>unset means production</em>.</li><li><strong>Auth was opt-in per path.</strong> Only <code>/orgs/*</code> was guarded, so the next top-level route would have been public by default. Now every route needs a caller except an explicit allowlist. The very next bead added such a route and needed no auth code at all.</li><li><strong>No test proved the real wiring.</strong> Tests handed the strategy to <code>startServer</code> themselves, so <span class='mono'>main.ts</span> could wire the wrong one and the whole gate stayed green. A new test runs the <em>real entry point in a child process</em> with a clean environment. It was mutation-checked: wire it wrong, the test goes red.</li></ul></div></section><section id="token"><h2>7 · A session token, and a function that returns its failure</h2><p><code>POST /documents/:id/session</code> answers "where do I connect for live editing, and with what?". The token is a standard HS256 JWT made with <span class='mono'>node:crypto</span>. Two decisions differ from what a typical JWT library does by default.</p><p class="label">From <span class="mono">packages/session-token/src/index.ts</span></p><div class="scroll"><pre><code>type VerifyResult =
+  | { ok: true; claims: SessionClaims }
+  | { ok: false; reason: &quot;malformed&quot; | &quot;bad_signature&quot; | &quot;expired&quot; | &quot;wrong_document&quot; };</code></pre></div><p>That is a <strong>discriminated union</strong> (Lesson 0, section 3) used as a return type. A bad token is an <em>expected input</em>, not an exceptional event, so <code>verify</code> does not throw: it returns <code>{ ok: false, reason }</code>, and the compiler forces the caller to look at <code>ok</code> before it can touch <code>claims</code>.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java / Spring</th><th>Python / FastAPI</th></tr><tr><td>return a union: <code>{ok:true,...} | {ok:false,reason}</code></td><td>checked exception, or <code>Optional</code>/<code>Either</code></td><td>raise, or return a tuple</td></tr><tr><td>the compiler forces the check</td><td>the compiler forces the catch (checked only)</td><td>nothing forces anything</td></tr></table></div><p class="label">From <span class="mono">packages/session-token/src/index.ts</span></p><div class="scroll"><pre><code>  // Signature first, over the exact bytes received, in constant time: nothing in the token is
+  // trusted (or even parsed) until this passes. The header must be OUR header, byte for byte.
+  const given = Buffer.from(signature, &quot;base64url&quot;);
+  // Node decodes base64url leniently (padding, &quot;+&quot; and &quot;/&quot;, stray characters, the unused bits of
+  // the last character), so several strings decode to one signature. Only the canonical one may
+  // pass, or anything later keyed on the token string (a replay cache, a revocation list) breaks.
+  const canonical = given.toString(&quot;base64url&quot;) === signature;
+  const matches = candidates.some((wanted) =&gt; given.length === wanted.length &amp;&amp; timingSafeEqual(given, wanted));
+  if (header !== HEADER || !canonical || !matches) return { ok: false, reason: &quot;bad_signature&quot; };</code></pre></div><ul><li><strong>The algorithm is pinned.</strong> The token's own <code>alg</code> header is never used to decide how to verify; the header must equal ours byte for byte. The classic attacks (<code>alg: none</code>, swapping the algorithm) have nothing to grab.</li><li><strong>Constant-time comparison</strong> (<code>timingSafeEqual</code>) before anything inside the token is parsed.</li><li><strong>A list of secrets</strong>, so a secret can be rotated without an outage: give verifiers <code>[new, old]</code>, switch the signer, wait out the 60-second lifetime, drop the old one.</li></ul><div class="break"><p class="label">Case study · found by review</p><p><strong>Several different strings were the same token.</strong></p><p>Node decodes base64url leniently: padding, <code>+</code> and <code>/</code>, stray characters and the unused bits of the last character all decode to the same bytes. A reviewer showed four equivalent last characters for one real token. Harmless today; but the day something is keyed on the token <em>string</em> (a replay cache, a revocation list), flipping one character walks around it. The <code>canonical</code> line above requires the one true encoding.</p></div><p class="note"><strong>What is deliberately NOT in the token: the role.</strong> A token is checked once, when the socket opens, and the socket then lives for hours. A role inside it would be stale for the whole session. The sync server will read the role itself and be told when it changes (epic 8).</p></section><section id="ops"><h2>8 · Configuration, startup and shutdown</h2><p>Environment variables are untrusted strings like any other input, so they get a schema too. There are <strong>no defaults for secrets or addresses</strong>: a missing value stops the process instead of pointing it at something with a well-known password.</p><p class="label">From <span class="mono">apps/api/src/config.ts</span></p><div class="scroll"><pre><code>const Env = z.object({
+  DATABASE_URL: z
+    .string({ error: &quot;DATABASE_URL is required&quot; })
+    .refine((value) =&gt; {
+      if (!URL.canParse(value)) return false;
+      const url = new URL(value);
+      return (url.protocol === &quot;postgres:&quot; || url.protocol === &quot;postgresql:&quot;) &amp;&amp; url.hostname !== &quot;&quot;;
+    }, &quot;DATABASE_URL must be a postgres:// URL with a host&quot;),
+  // Signs the tokens that open a document&#x27;s WebSocket; the sync server holds the same value.
+  SESSION_TOKEN_SECRET: z.string({ error: &quot;SESSION_TOKEN_SECRET is required&quot; }).min(32, &quot;SESSION_TOKEN_SECRET must be at least 32 characters&quot;),
+  // The address BROWSERS use to reach the sync server (not the address inside the Docker network).
+  SYNC_PUBLIC_URL: z
+    .string({ error: &quot;SYNC_PUBLIC_URL is required&quot; })
+    .refine((value) =&gt; {
+      if (!URL.canParse(value)) return false;
+      const url = new URL(value);
+      // A query or fragment would swallow the &quot;/documents/&lt;id&gt;&quot; that gets appended to this address.
+      return [&quot;ws:&quot;, &quot;wss:&quot;].includes(url.protocol) &amp;&amp; url.search === &quot;&quot; &amp;&amp; url.hash === &quot;&quot;;
+    }, &quot;SYNC_PUBLIC_URL must be a ws:// or wss:// URL without a query or fragment&quot;)
+    .transform((value) =&gt; value.replace(/\/+$/, &quot;&quot;)),
+  // Unset means production: the safe side. Anything that relaxes security must be asked for by name.
+  NODE_ENV: z.enum([&quot;development&quot;, &quot;test&quot;, &quot;production&quot;]).default(&quot;production&quot;),
+  // An empty variable is how a .env file says &quot;unset&quot;. Digits only: Number(&quot;0x50&quot;) is 80.
+  PORT: z
+    .string()
+    .optional()
+    .transform((value) =&gt; (value === undefined || value === &quot;&quot; ? &quot;3000&quot; : value))
+    .pipe(z.string().regex(/^\d+$/, &quot;PORT must be decimal digits&quot;).transform(Number).pipe(z.number().int().min(1).max(65535))),
+});</code></pre></div><p class="label">From <span class="mono">apps/api/src/shutdown.ts</span></p><div class="scroll"><pre><code>export function createShutdown({ steps, timeoutMs, exit }: {
+  steps: (() =&gt; Promise&lt;void&gt;)[];
+  timeoutMs: number;
+  exit: (code: number) =&gt; void;
+}): () =&gt; Promise&lt;void&gt; {
+  let running: Promise&lt;void&gt; | undefined;
+  return () =&gt;
+    (running ??= (async () =&gt; {
+      let timer: NodeJS.Timeout | undefined;
+      const deadline = new Promise&lt;&quot;late&quot;&gt;((resolve) =&gt; {
+        timer = setTimeout(() =&gt; { resolve(&quot;late&quot;); }, timeoutMs);
+      });
+      const work = (async () =&gt; {
+        for (const step of steps) await step();
+        return &quot;done&quot; as const;
+      })().catch(() =&gt; &quot;failed&quot; as const);
+      const outcome = await Promise.race([work, deadline]);
+      clearTimeout(timer);
+      exit(outcome === &quot;done&quot; ? 0 : 1);
+    })());
+}</code></pre></div><p>Small file, four TypeScript idioms: <code>??=</code> (assign only if currently null/undefined) makes shutdown run <em>once</em>, so a second signal cannot crash it; <code>Promise.race</code> puts a deadline on the work (Docker sends SIGKILL ten seconds after SIGTERM); <code>as const</code> keeps <code>"done"</code> a literal type instead of widening to <code>string</code>; and <code>exit</code> is a parameter, which is why this is testable without killing the test runner.</p><p>In <span class='mono'>main.ts</span> the steps are written <code>() =&gt; server.close()</code>, not <code>server.close</code>. Passing a method by itself detaches it from its object and loses <code>this</code>; the lint rule <code>unbound-method</code> caught exactly that. (An object of closures, section 2, has no such problem.)</p><div class="scroll"><table><tr><th>Probe</th><th>Spring</th><th>FastAPI</th></tr><tr><td><code>/health</code>: is the process up? (never touches the database)</td><td>Actuator liveness</td><td>a liveness route</td></tr><tr><td><code>/ready</code>: can it do its job? (<code>select 1</code>) drives the container healthcheck</td><td>Actuator readiness</td><td>a readiness route</td></tr></table></div><div class="break"><p class="label">Case study · found by review</p><p><strong>Postgres was listening on every network interface, with its password in the repo.</strong></p><p>Compose published the port on <code>0.0.0.0</code> and the superuser password was a committed default. On any shared network, anyone could have connected as the database owner. Now ports bind to <code>127.0.0.1</code>, compose contains no passwords and refuses to start without them, and <span class='mono'>init.sh</span> generates random ones into the git-ignored <span class='mono'>.env</span>.</p></div></section><section id="role"><h2>9 · Least privilege in the database</h2><p>The API does not connect as the database owner. A one-shot <span class='mono'>migrate</span> step runs as the owner, applies migrations, and provisions a login role that can read and write data and do <em>nothing else</em>: no schema changes, no migration history, no temp tables, no other databases. Tests prove each refusal (<code>42501 insufficient_privilege</code>).</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>function scramVerifier(password: string): string {
+  const salt = randomBytes(16);
+  const iterations = 4096;
+  const salted = pbkdf2Sync(password, salt, iterations, 32, &quot;sha256&quot;);
+  const clientKey = createHmac(&quot;sha256&quot;, salted).update(&quot;Client Key&quot;).digest();
+  const storedKey = createHash(&quot;sha256&quot;).update(clientKey).digest(&quot;base64&quot;);
+  const serverKey = createHmac(&quot;sha256&quot;, salted).update(&quot;Server Key&quot;).digest(&quot;base64&quot;);
+  return `SCRAM-SHA-256$${String(iterations)}:${salt.toString(&quot;base64&quot;)}$${storedKey}:${serverKey}`;
+}</code></pre></div><p>Role DDL cannot take bind parameters, so a password would have to be written into the SQL text, where a failing statement copies it into the server log. Instead the client computes what Postgres would store anyway, a SCRAM verifier, and sends that. About ten lines of <span class='mono'>node:crypto</span>.</p><div class="break"><p class="label">Case study · found by review</p><p><strong>Setting what you name is not the same as resetting.</strong></p><p>The first provisioning ran <code>alter role ... nosuperuser nocreatedb</code>. A reviewer created a role with <code>BYPASSRLS</code>, replication and a dangerous role membership, ran our provisioning over it, and everything it had not named <em>survived</em>. The test could not have caught it: it always provisioned a brand-new role. Now every attribute is reset and memberships are revoked, and the test starts from a deliberately over-privileged role. <em>Test against the dirty state, not the clean one.</em></p></div></section><section id="limits"><h2>10 · What the type system could not see</h2><p>Every bug below passed <code>tsc</code> in strict mode, the linter and the first round of tests. They were found by a second pass whose only job was to refute "done". Types prove shapes; they say nothing about whitespace, time, memory, networks or privileges.</p><div class="scroll"><table><tr><th>What went wrong</th><th>Why</th><th>Fix</th></tr><tr><td>whitespace-only name stored, then unreadable forever</td><td>validation only on the read side</td><td>parse before the write; DB check on the trimmed value</td></tr><tr><td>NUL byte in a name became a 500</td><td>contract looser than Postgres</td><td>refuse control characters in <code>Name</code></td></tr><tr><td>idle connection killed by Postgres crashed the process</td><td>no <code>pool.on('error')</code> listener</td><td>add one; log the message only (the object carries the password)</td></tr><tr><td>two processes migrating at once</td><td>bookkeeping table created outside the lock</td><td>create it inside the advisory lock</td></tr><tr><td><code>-c search_path=${schema}</code> took extra settings</td><td>libpq options are space-separated</td><td>plain identifiers only</td></tr><tr><td>200 MB body inflated memory 14x</td><td>no body limit</td><td>64 KB cap, 413</td></tr><tr><td>database open to the local network</td><td>port on 0.0.0.0 + committed password</td><td>127.0.0.1, generated secrets</td></tr><tr><td>role kept privileges across re-provisioning</td><td>set, not reset</td><td>reset everything; test a dirty role</td></tr><tr><td><code>NODE_ENV=test</code> enabled dev auth</td><td>"not production" is too broad</td><td>one literal value; unset means production</td></tr><tr><td>next route would have been public</td><td>auth opt-in per prefix</td><td>fail closed with an allowlist</td></tr><tr><td>wrong wiring in main.ts stayed green</td><td>tests injected the dependency</td><td>run the real entry point in a child process</td></tr><tr><td>four strings verified as one token</td><td>lenient base64url decoding</td><td>require the canonical encoding</td></tr></table></div><p class="note"><strong>The habit to take away:</strong> after every test passes, ask "what production change would make this test fail?" and try it. If nothing does, the test proves nothing. That is mutation-checking, and it caught a test of mine that broke two rules at once and so could not notice when one was deleted.</p></section>
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-1/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-1/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> Give a workspace an optional <code>description</code> (at most 500 characters, no control characters, trimmed). You will touch the contract, a <em>new</em> migration, the db layer, and possibly the route. <span class="mono">make check</span> must stay green: the gate applies to you too.</p>
+      <p>Predict first: which of the four layers needs <em>no</em> change, and why? (Section 5 has the answer.)</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-1/d2-cursor/cursor.ts</span> is a simplified copy of the paging code with one bug. Its test walks five rows created in the same millisecond and expects each exactly once. Form a theory before you read section 4's case study again.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. Why does <code>createDb</code> return an object of closures instead of a class with a private field?</summary>
+        <p>TypeScript's <code>private</code> is erased at runtime, so it is a note to the compiler, not a wall. A closure variable is unreachable by anything: no reflection, no subclass, no <code>this</code> to lose when a method is passed as a callback. The tenancy rule is too important for a convention.</p></details>
+      <details class="recall"><summary>2. Why is a non-member answered with 404 rather than 403?</summary>
+        <p>403 confirms the org exists. "Not a member" and "no such org" are resolved by one query and return byte-identical responses, so the API never tells a caller anything about a tenant they do not belong to.</p></details>
+      <details class="recall"><summary>3. The session token names user, org and document. Why not the role too?</summary>
+        <p>A token is checked once, when the socket opens; the socket then lives for hours. A role baked into it would stay whatever it was at connect time, and epic 8 requires a role change to reach open sessions within ten seconds. The sync server must read the role itself and be pushed changes.</p></details>
+    </div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Trace <code>POST /orgs/:orgId/workspaces</code> through its five steps, and name the three layers that enforce tenancy. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Identity middleware (401) → org middleware: member? (404) → body parsed against the contract (400 naming the field) → <code>db.forOrg(orgId)</code>, the only door → Postgres constraints. Tenancy is enforced by the closure (no unscoped query can be written), a compile-time <code>@ts-expect-error</code> test (a new door fails the build), and the composite foreign key (the database refuses).</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. <code>export const Org = z.object({...})</code> and <code>export type Org = z.infer&lt;typeof Org&gt;</code> in one file. Why is that not a name clash?</p>
+      <button id="q1a" data-correct>Values and types live in separate namespaces</button><button id="q1b">The second declaration overrides the first</button>
+      <button id="q1c">Zod registers the name specially</button><button id="q1d">It is a clash; the linter is configured to allow it</button>
+      <p class="why" hidden><code>Org.parse(x)</code> uses the value; <code>const o: Org</code> uses the type. The compiler always knows which position it is in.</p></div>
+    <div class="quiz"><p class="q">2. The contract trims a name then requires length ≥ 1. The database only requires length ≥ 1. A client sends three spaces. What happened in the first version?</p>
+      <button id="q2a" data-correct>Stored, then every list for that org threw</button><button id="q2b">Rejected with a 400</button>
+      <button id="q2c">Stored as an empty string</button><button id="q2d">Rejected by the database</button>
+      <p class="why" hidden>Validation ran only on the read side. The row was storable but unreadable. Parse inputs with the same contract before writing.</p></div>
+    <div class="quiz"><p class="q">3. What does <code>// @ts-expect-error</code> above <code>void db.pool;</code> prove?</p>
+      <button id="q3a" data-correct>The build fails if <code>db.pool</code> ever type-checks</button><button id="q3b">The line is skipped by the compiler</button>
+      <button id="q3c">The pool throws at runtime if touched</button><button id="q3d">Nothing; it silences an error</button>
+      <p class="why" hidden>Unlike <code>@ts-ignore</code>, it is an assertion: no error on the next line is itself an error (TS2578). A compile-time test.</p></div>
+    <div class="quiz"><p class="q">4. Why does the paging cursor carry the timestamp as Postgres text instead of going through a JavaScript <code>Date</code>?</p>
+      <button id="q4a" data-correct>Date keeps milliseconds; timestamptz keeps microseconds</button><button id="q4b">Dates cannot be base64 encoded</button>
+      <button id="q4c">Time zones differ between Node and Postgres</button><button id="q4d">Text compares faster than timestamps</button>
+      <p class="why" hidden>Rows created in the same millisecond would be skipped or repeated. That is Drill 2.</p></div>
+    <div class="quiz"><p class="q">5. A handler writes <code>const { name } = await body(c, CreateOrgBody)</code>. Where does <code>name</code>'s type come from?</p>
+      <button id="q5a" data-correct>Inferred from the schema through the generic <code>S</code></button><button id="q5b">A cast inside <code>body()</code></button>
+      <button id="q5c">An annotation on the handler</button><button id="q5d">It is <code>any</code></button>
+      <p class="why" hidden><code>body&lt;S extends z.ZodType&gt;(c, schema: S): Promise&lt;z.infer&lt;S&gt;&gt;</code>: the return type is computed from the argument.</p></div>
+    <div class="quiz"><p class="q">6. Auth was first applied to <code>/orgs/*</code> only. What was wrong with that?</p>
+      <button id="q6a" data-correct>The next top-level route would be public by default</button><button id="q6b">Wildcards do not match nested paths</button>
+      <button id="q6c">It ran the identity check twice</button><button id="q6d">Nothing; it was only slower</button>
+      <p class="why" hidden>Security defaults must fail closed: everything needs a caller except an explicit allowlist.</p></div>
+    <div class="quiz"><p class="q">7. Tests passed <code>noIdentity</code> to <code>startServer</code> and saw 401. Why did that NOT prove production is safe?</p>
+      <button id="q7a" data-correct>It never exercised what <span class="mono">main.ts</span> really wires</button><button id="q7b">401 is the wrong status for production</button>
+      <button id="q7c">The test ran with <code>NODE_ENV=test</code></button><button id="q7d">It did prove it</button>
+      <p class="why" hidden>An injected dependency proves the dependency, not the wiring. The fix runs the real entry point in a child process with a clean environment.</p></div>
+    <div class="quiz"><p class="q">8. <code>verifySessionToken</code> returns <code>{ok:false, reason}</code> instead of throwing. Why?</p>
+      <button id="q8a" data-correct>A bad token is expected input, and the union forces callers to check</button><button id="q8b">Exceptions are slow in Node</button>
+      <button id="q8c">TypeScript has no checked exceptions, so throwing is banned</button><button id="q8d">So the error can be logged centrally</button>
+      <p class="why" hidden>TypeScript cannot say what a function throws. A discriminated union puts the failure in the type, where the compiler can see it.</p></div>
+  </section>
+
+  <footer>Next: Lesson 2, after epic 2. One room per document, ops in one order, optimistic edits that reconcile, and a simulator that fuzzes the lot.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
