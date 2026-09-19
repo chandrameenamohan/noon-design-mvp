@@ -14,6 +14,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
 COPY packages/design-system/package.json packages/design-system/
 COPY packages/doc-model/package.json packages/doc-model/
+COPY packages/peer-client/package.json packages/peer-client/
 COPY packages/process/package.json packages/process/
 COPY packages/session-token/package.json packages/session-token/
 RUN pnpm install --frozen-lockfile --prod

@@ -1,37 +1,44 @@
-// Run by init.sh. No dependencies: Node 24 has fetch and a WebSocket client built in.
-// Proves the path a browser will take: api session -> WebSocket with the token -> op -> sequenced.
+// Run by init.sh against the real containers. Proves the path every peer takes, with the client
+// every peer uses: api session -> @noon/peer-client -> WebSocket with the token -> op -> acknowledged.
+import { SessionResponse } from "@noon/contracts";
+import { manifest } from "@noon/design-system";
+import { connectPeer } from "@noon/peer-client";
+
 const api = process.env["API_URL"] ?? "http://localhost:3000";
 const headers = { "x-dev-user": "init-smoke@example.com", "content-type": "application/json" };
-const post = async (path: string, body?: unknown): Promise<Record<string, string>> => {
+const post = async (path: string, body?: unknown): Promise<unknown> => {
   const res = await fetch(`${api}${path}`, { method: "POST", headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   if (!res.ok) throw new Error(`POST ${path} -> ${String(res.status)}`);
-  return (await res.json()) as Record<string, string>;
+  return res.json();
 };
+const idOf = (created: unknown): string => (created as { id: string }).id;
 
-const org = await post("/orgs", { name: "init.sh smoke" });
-const workspace = await post(`/orgs/${org["id"] ?? ""}/workspaces`, { name: "smoke" });
-const doc = await post(`/orgs/${org["id"] ?? ""}/workspaces/${workspace["id"] ?? ""}/documents`, { title: "smoke" });
-const session = await post(`/documents/${doc["id"] ?? ""}/session`);
+const org = idOf(await post("/orgs", { name: "init.sh smoke" }));
+const workspace = idOf(await post(`/orgs/${org}/workspaces`, { name: "smoke" }));
+const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: "smoke" }));
 
-const opId = crypto.randomUUID();
-const socket = new WebSocket(session["wsUrl"] ?? "", ["noon.v1", session["token"] ?? ""]);
 const outcome = await new Promise<string>((resolve) => {
-  const timer = setTimeout(() => { resolve("timed out after 5 s"); }, 5000);
-  socket.addEventListener("error", () => { clearTimeout(timer); resolve("the WebSocket failed to open"); });
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as { type: string; seq?: number; opId?: string };
-    if (message.type === "welcome") {
-      socket.send(JSON.stringify({ type: "op", opId, baseSeq: 0, op: { type: "add_node", nodeId: "smoke", parentId: "root", index: 0, component: "Stack", props: {} } }));
-    } else if (message.type === "op" && message.opId === opId) {
-      clearTimeout(timer);
-      resolve(message.seq === 1 ? "ok" : `expected seq 1, got ${String(message.seq)}`);
-    } else if (message.type === "rejected") {
-      clearTimeout(timer);
-      resolve(`the op was rejected: ${JSON.stringify(message)}`);
-    }
+  const timer = setTimeout(() => { resolve(`timed out after 5 s (status: ${peer.status})`); }, 5000);
+  let submitted = false;
+  const peer = connectPeer({
+    manifest,
+    session: async () => SessionResponse.parse(await post(`/documents/${doc}/session`)),
+    onRejected: (rejection) => { clearTimeout(timer); resolve(`the op was rejected: ${rejection.reason}`); },
+    onStatus: (status) => { if (status === "closed") resolve(`the peer closed: ${String(peer.closedBecause)}`); },
+    onChange: () => {
+      if (peer.status !== "live") return;
+      if (!submitted) {
+        submitted = true;
+        const result = peer.submit({ type: "add_node", nodeId: "smoke", parentId: "root", index: 0, component: "Stack", props: {} });
+        if (!result.ok) resolve(`the op was refused locally: ${result.reason}`);
+      } else if (peer.pendingCount === 0) {
+        clearTimeout(timer);
+        resolve("ok"); // first: close() reports "closed" through onStatus, and the first resolve wins
+        peer.close();
+      }
+    },
   });
 });
-socket.close();
 // The org (and with it the workspace and document) is removed by init.sh, which has database access.
-process.stdout.write(`${JSON.stringify({ smoke: "sync", org: org["id"], outcome })}\n`);
+process.stdout.write(`${JSON.stringify({ smoke: "sync", org, outcome })}\n`);
 process.exit(outcome === "ok" ? 0 : 1);

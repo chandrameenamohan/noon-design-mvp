@@ -17,5 +17,21 @@ export default tseslint.config(
       "no-restricted-imports": ["error", { patterns: [{ group: ["**/testing.ts", "**/testing"], message: "Test-only raw-SQL helper: import it from *.int.test.ts files only." }] }],
     },
   },
+  {
+    // check:single-write-path (SPEC keystone 2). Ops reach a document through @noon/peer-client and
+    // nothing else: a second sender would have its own idea of baseSeq, resends and rollback.
+    // Flat config REPLACES a rule's options instead of merging them, so the block above is repeated here.
+    ignores: ["packages/peer-client/**", "apps/sync/**", "packages/contracts/**", "**/*.test.ts", "**/testing.ts"], // tests may PARSE the wire contract; e2e specs are not exempt
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{ group: ["**/testing.ts", "**/testing"], message: "Test-only raw-SQL helper: import it from *.int.test.ts files only." }],
+        paths: [
+          { name: "@noon/contracts", importNames: ["ClientOp", "ClientMessage"], message: "Only @noon/peer-client sends ops: call peer.submit(op)." },
+          { name: "ws", message: "Only @noon/peer-client talks to the sync service: use connectPeer()." },
+        ],
+      }],
+      "no-restricted-globals": ["error", { name: "WebSocket", message: "Only @noon/peer-client talks to the sync service: use connectPeer()." }],
+    },
+  },
   { files: ["**/*.js"], ...tseslint.configs.disableTypeChecked },
 );

@@ -14,6 +14,15 @@ importers:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.10.0(jiti@2.7.0))
+      '@noon/contracts':
+        specifier: workspace:^
+        version: link:packages/contracts
+      '@noon/design-system':
+        specifier: workspace:^
+        version: link:packages/design-system
+      '@noon/peer-client':
+        specifier: workspace:^
+        version: link:packages/peer-client
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
@@ -90,6 +99,9 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
     devDependencies:
+      '@noon/peer-client':
+        specifier: workspace:^
+        version: link:../../packages/peer-client
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -155,6 +167,19 @@ importers:
       '@noon/contracts':
         specifier: workspace:^
         version: link:../contracts
+
+  packages/peer-client:
+    dependencies:
+      '@noon/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@noon/doc-model':
+        specifier: workspace:^
+        version: link:../doc-model
+    devDependencies:
+      '@noon/design-system':
+        specifier: workspace:^
+        version: link:../design-system
 
   packages/process:
     dependencies:

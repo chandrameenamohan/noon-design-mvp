@@ -1,0 +1,15 @@
+{
+  "name": "@noon/peer-client",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@noon/contracts": "workspace:^",
+    "@noon/doc-model": "workspace:^"
+  },
+  "devDependencies": {
+    "@noon/design-system": "workspace:^"
+  }
+}

@@ -9,6 +9,9 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^10.0.1",
+    "@noon/contracts": "workspace:^",
+    "@noon/design-system": "workspace:^",
+    "@noon/peer-client": "workspace:^",
     "@playwright/test": "^1.63.0",
     "@types/node": "^24.13.5",
     "eslint": "^10.10.0",

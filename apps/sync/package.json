@@ -17,6 +17,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@noon/peer-client": "workspace:^",
     "@types/ws": "^8.18.1"
   }
 }
