@@ -11,7 +11,11 @@ command -v pnpm >/dev/null 2>&1 || { echo "FAIL: pnpm not found (run: corepack e
 
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
-install -m 755 scripts/pre-commit .git/hooks/pre-commit
+# bd points core.hooksPath at .beads/hooks and appends its own section to our hook,
+# so install into whichever path git really uses, and never clobber bd's section.
+hook="$(git rev-parse --git-path hooks)/pre-commit"
+grep -q "make -s check" "$hook" 2>/dev/null || install -m 755 scripts/pre-commit "$hook"
+grep -q "make -s check" "$hook" || { echo "FAIL: the pre-commit gate is not installed at $hook"; exit 1; }
 
 docker compose up -d --wait postgres
 

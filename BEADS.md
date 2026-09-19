@@ -1,4 +1,4 @@
-# Bead graph (revision 2, not yet in bd)
+# Bead graph (revision 2, created in bd; key → id map in .beads/key-map.json)
 
 Outcome-level tasks for SPEC.md. One epic = one lesson. Revised after three
 critics (size, definition of done, edges). Every bead body will carry:
@@ -25,10 +25,15 @@ at a time in the main checkout.
 To keep lessons close to the code, the first bead of epic N+2 depends on epic
 N's handbook bead (never more than one chapter behind).
 
+## E0 — Primer
+| key | outcome (observable acceptance) | checks | out of scope | deps | touches | R |
+|---|---|---|---|---|---|---|
+| E0.H | Lesson 0 "TypeScript for Java and Python engineers" is published before any epic-1 code: only what epic 1 uses (values and inference, object types, `interface` vs `type`, structural typing, unions and literals, narrowing, functions and generics, types vanish at runtime and why Zod, `null`/`undefined`, modules and the `.ts` rule, promises and the event loop, reading `package.json`/`tsconfig`/the workspace), each against Java and Python, with short exercises the learner runs with `node file.ts` | check:chapter-recorded · exercises run under Node 24 and their broken variants fail as stated | anything epic 1 does not use | — | docs/handbook, drills/ | |
+
 ## E1 — Monorepo, typed API, Postgres
 | key | outcome (observable acceptance) | checks | out of scope | deps | touches | R |
 |---|---|---|---|---|---|---|
-| E1.1 | `GET /health` on a running `api` returns a body that parses with `HealthResponse`; `./init.sh` starts api and its smoke test calls it; on a fresh clone with no volumes, images or `node_modules`, `./init.sh` then `make check` exit 0 (F1) | integration:api-health · `make clean-clone` (fresh temp clone; run here and in Z.1, not per commit) | any business route | — | apps/api, packages/contracts, docker-compose, Makefile, init.sh | |
+| E1.1 | `GET /health` on a running `api` returns a body that parses with `HealthResponse`; `./init.sh` starts api and its smoke test calls it; on a fresh clone with no volumes, images or `node_modules`, `./init.sh` then `make check` exit 0 (F1) | integration:api-health · `make clean-clone` (fresh temp clone; run here and in Z.1, not per commit) | any business route | E0.H | apps/api, packages/contracts, docker-compose, Makefile, init.sh | |
 | E1.2 | Migrations create orgs, users, memberships (with role), workspaces, documents, all with `org_id`; `db` is usable only through an org-scoped accessor; the `integration` gate layer exists | integration:db-scope · typecheck:db-unscoped-rejected | auth, sharing | E1.1 | packages/db, Makefile | R |
 | E1.3 | A caller can create, list and fetch orgs, workspaces and documents; a contract-violating body gets `400` naming the field (F2) | integration:api-crud · unit:api-400-names-field | sharing, roles, idempotency keys (job POSTs only, E9.1) | E1.2 | apps/api, packages/contracts | R |
 | E1.4 | Identity comes from the dev-only header, refused when `NODE_ENV=production`; a caller in org A gets exactly `404`, never `403`, for every org-B row on every route (F2, constraint 16) | integration:api-tenant-404-never-403 · unit:dev-header-refused-in-production | real sign-in | E1.3 | apps/api | R |
@@ -128,4 +133,4 @@ N's handbook bead (never more than one chapter behind).
 2. §4 "`api` dies" row: "creating POSTs are idempotent" narrows to "job-creating POSTs are idempotent (F27); other requests are safe to retry".
 3. Gate layers: `integration` and `sim` join `make check`; `make chaos`, `make live`, `make clean-clone`, `make drills` exist outside it.
 
-Totals: 58 beads (9 handbook, 3 final).
+Totals: 59 beads (1 primer, 9 handbook, 3 final).
