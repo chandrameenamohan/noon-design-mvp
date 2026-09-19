@@ -6,7 +6,7 @@
 set -u
 src=$(git rev-parse --show-toplevel)
 tmp=$(mktemp -d)
-export COMPOSE_PROJECT_NAME=noon-clean PG_PORT=55432 API_PORT=53000
+export COMPOSE_PROJECT_NAME=noon-clean PG_PORT=55432 API_PORT=53000 SYNC_PORT=53001
 unset POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET # the clone must generate its own secrets
 command -v docker >/dev/null 2>&1 || PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 

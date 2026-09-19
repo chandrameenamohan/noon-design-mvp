@@ -171,6 +171,7 @@ export const RejectReason = z.enum([
   "unknown_prop",
   "wrong_prop_type",
   "missing_required_prop",
+  "document_limit", // the room caps node count and depth; a document cannot grow without bound
 ]);
 export type RejectReason = z.infer<typeof RejectReason>;
 

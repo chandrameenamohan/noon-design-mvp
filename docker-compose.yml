@@ -51,5 +51,18 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # One room per open document. A single process until epic 7 adds leases and a second node.
+  sync:
+    build: .
+    command: ["node", "apps/sync/src/main.ts"]
+    environment:
+      PORT: "3001"
+      SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+    ports: ["127.0.0.1:${SYNC_PORT:-3001}:3001"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 volumes:
   pgdata:

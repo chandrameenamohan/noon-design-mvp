@@ -3,7 +3,8 @@
   "workspaces": {
     ".": {
       "entry": [
-        "e2e/**/*.ts"
+        "e2e/**/*.ts",
+        "scripts/*.ts"
       ],
       "vitest": {
         "config": [

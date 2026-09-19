@@ -2,7 +2,7 @@ import { createDb } from "@noon/db";
 import { loadConfig } from "./config.ts";
 import { chooseIdentity, devHeaderIdentity } from "./identity.ts";
 import { startServer } from "./server.ts";
-import { createShutdown } from "./shutdown.ts";
+import { createShutdown } from "@noon/process";
 
 const config = loadConfig(process.env);
 const db = createDb({ connectionString: config.databaseUrl });

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { createShutdown } from "./shutdown.ts";
+import { createShutdown } from "./index.ts";
 
 const never = (): Promise<void> => new Promise(() => undefined);
 

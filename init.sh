@@ -29,7 +29,7 @@ docker compose up -d --wait postgres
 # POSTGRES_PASSWORD only applies when the data volume is first created. Setting it here as well keeps an
 # existing volume (and one created with an older password) in step with .env. Local socket, no password needed.
 docker compose exec -T postgres psql -U noon -d noon -qc "alter role noon password '$POSTGRES_PASSWORD'" >/dev/null
-docker compose up -d --build --wait api
+docker compose up -d --build --wait api sync
 
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")
@@ -47,5 +47,8 @@ org_id=$(printf '%s' "$org" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 super=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select rolsuper from pg_roles where rolname = 'noon_app'")
 [ "$super" = "f" ] || { echo "FAIL: the app role is missing or is a superuser ('$super')"; exit 1; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$api/orgs/$org_id")" = "401" ] || { echo "FAIL: a request without an identity was not refused"; exit 1; }
-docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where id = '$org_id'; delete from users where email = 'init-smoke@example.com'" >/dev/null # leave nothing behind
+# The whole live-editing path, with no test helpers: the api mints a session, a real WebSocket opens
+# against the sync server with that token, sends one op and is told it became seq 1.
+API_URL="$api" node scripts/smoke-sync.ts || { echo "FAIL: live-editing smoke test"; exit 1; }
+docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where name = 'init.sh smoke'; delete from users where email = 'init-smoke@example.com'" >/dev/null # leave nothing behind
 echo "PASS: dev environment is up (api writes and reads through a non-superuser role, hook installed)"

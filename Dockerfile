@@ -8,10 +8,13 @@ WORKDIR /repo
 # so the dependency layer is cached until a package.json or the lockfile changes.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
+COPY apps/sync/package.json apps/sync/
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
 COPY packages/design-system/package.json packages/design-system/
+COPY packages/doc-model/package.json packages/doc-model/
+COPY packages/process/package.json packages/process/
 COPY packages/session-token/package.json packages/session-token/
 RUN pnpm install --frozen-lockfile --prod
 
