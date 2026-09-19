@@ -110,7 +110,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     const parsed = ServerMessage.safeParse(raw);
     if (!parsed.success) { finish("protocol"); return; }
 
-    const before = replica.revision;
+    const [revisionBefore, pendingBefore] = [replica.revision, replica.pendingCount];
     const effects = replica.receive(parsed.data);
     if (effects.fatal) { finish(effects.fatal); return; }
     if (parsed.data.type === "welcome") {
@@ -118,7 +118,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
       setStatus("live");
     }
     for (const rejection of effects.rejected) onRejected?.(rejection);
-    if (replica.revision !== before || effects.rejected.length > 0) onChange?.();
+    // The picture changed, or what is still unsaved did (an acknowledgement changes only that).
+    if (replica.revision !== revisionBefore || replica.pendingCount !== pendingBefore) onChange?.();
     if (effects.resync) resync();
     else send(effects.send);
   }

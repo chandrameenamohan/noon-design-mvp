@@ -124,3 +124,19 @@ test("callbacks never run before connectPeer has returned, and revision moves wi
   expect(JSON.parse(net.sockets[0]?.sent[0] ?? "{}")).toMatchObject({ type: "op", baseSeq: 0 });
   peer.close();
 });
+
+test("onChange also fires when only the pending count changes: 'saved' is news even if the picture is the same", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  let changes = 0;
+  const peer = connectPeer(options(net, { onChange: () => changes++ }));
+  await until(() => peer.status === "live", "live");
+  peer.submit(add("a"));
+  const before = changes;
+  const frame = JSON.parse(net.sockets[0]?.sent[0] ?? "{}") as { opId: string; op: Op };
+  net.sockets[0]?.say({ type: "op", seq: 1, opId: frame.opId, actor: { kind: "user", id: "me" }, op: frame.op });
+  expect(peer.pendingCount).toBe(0);
+  expect(changes).toBe(before + 1);
+  net.sockets[0]?.say({ type: "rejected", opId: crypto.randomUUID(), reason: "gone" }); // not ours: nothing changed
+  expect(changes).toBe(before + 1);
+  peer.close();
+});
