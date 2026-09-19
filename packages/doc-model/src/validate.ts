@@ -42,8 +42,11 @@ export function validate(doc: Doc, op: Op, manifest: Manifest): Verdict {
       const node = nodeOf(doc, op.nodeId);
       if (!node || !nodeOf(doc, op.newParentId)) return no("gone");
       if (node.parentId === null) return no("root_is_fixed");
-      for (let at: string | null | undefined = op.newParentId; at != null; at = nodeOf(doc, at)?.parentId) {
+      // `seen`: on a document that already HAS a cycle (one nobody ran checkDoc on) this walk would never end.
+      const seen = new Set<string>();
+      for (let at: string | null | undefined = op.newParentId; at != null && !seen.has(at); at = nodeOf(doc, at)?.parentId) {
         if (at === op.nodeId) return no("cycle");
+        seen.add(at);
       }
       return acceptsChildren(op.newParentId) ? OK : no("parent_takes_no_children");
     }

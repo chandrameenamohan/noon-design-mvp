@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import type { Op } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
-import { connectPeer, type PeerStatus } from "@noon/peer-client";
+import { connectPeer, type PeerOptions, type PeerStatus } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { startSyncServer } from "./server.ts";
 import { connect, TEST_ORG, TEST_SECRET, until, useSyncServer } from "./testing.ts";
@@ -27,7 +27,7 @@ function sabotage() {
   return { WebSocketImpl: Sabotaged, sockets, goDeaf: () => { deaf = true; }, hearAgain: () => { deaf = false; }, drop: () => { sockets.at(-1)?.close(); } };
 }
 
-function peerFor(url: string, documentId: string, extra: Partial<Parameters<typeof connectPeer>[0]> = {}) {
+function peerFor(url: string, documentId: string, extra: Partial<PeerOptions> = {}) {
   const statuses: PeerStatus[] = [];
   const userId = randomUUID();
   const peer = connectPeer({

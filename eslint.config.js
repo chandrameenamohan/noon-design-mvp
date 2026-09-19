@@ -31,6 +31,8 @@ export default tseslint.config(
         ],
       }],
       "no-restricted-globals": ["error", { name: "WebSocket", message: "Only @noon/peer-client talks to the sync service: use connectPeer()." }],
+      // The same global by its other names: what isomorphic browser/Node code tends to write.
+      "no-restricted-properties": ["error", ...["globalThis", "window", "self"].map((object) => ({ object, property: "WebSocket", message: "Only @noon/peer-client talks to the sync service: use connectPeer()." }))],
     },
   },
   { files: ["**/*.js"], ...tseslint.configs.disableTypeChecked },

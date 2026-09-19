@@ -1,10 +1,12 @@
 import { ServerMessage, type ClientMessage, type ClientOp, type Doc, type Manifest, type Op } from "@noon/contracts";
 import { createReplica, type LocalResult, type Rejection } from "./replica.ts";
 
+export type { Rejection };
+
 /** connecting: opening, or waiting for the welcome. live: edits flow. offline: will retry. closed: will not. */
 export type PeerStatus = "connecting" | "live" | "offline" | "closed";
 
-type Options = {
+export type PeerOptions = {
   manifest: Manifest;
   /**
    * Asked before EVERY connection: a session token lives for minutes, a tab for days. Reject = "try
@@ -12,32 +14,36 @@ type Options = {
    */
   session: () => Promise<{ wsUrl: string; token: string } | null>;
   onChange?: () => void;
+  /** An edit of ours that will not happen: refused by the server, or still unsent when the peer ended for good ("connection_closed"). */
   onRejected?: (rejection: Rejection) => void;
   onStatus?: (status: PeerStatus) => void;
   /** Node 24 and every browser have the same WebSocket built in, so one client serves both. Tests pass a saboteur. */
   WebSocketImpl?: typeof WebSocket;
   retryMs?: { min: number; max: number };
-  /** Something is pending and the server has said NOTHING for this long: the connection is dead even if it looks open. */
+  /** We are waiting (for a welcome, or for an answer to an op) and the server has said NOTHING for this long: the connection is dead even if it looks open. */
   ackTimeoutMs?: number;
+  maxPending?: number;
 };
 
 // Close codes that reconnecting cannot cure (apps/sync/src/server.ts): a message the server could
 // not accept (our bug), no such document, a corrupt document, a frame over the size limit.
 const FATAL_CLOSE_CODES = new Set([4400, 4404, 4500, 1009]);
+const KNOWN_TYPES: ReadonlySet<unknown> = new Set(ServerMessage.options.map((option) => option.shape.type.value));
 
 /**
  * The ONE write path to a document (SPEC keystone 2): a browser tab, the AI worker and the git peer
  * all edit through this. The thinking is in replica.ts; this file is only the wire: connect, wait
  * for the welcome, send, reconnect.
  */
-export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000 }: Options) {
-  const replica = createReplica({ manifest });
+export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending }: PeerOptions) {
+  const replica = createReplica({ manifest, ...(maxPending === undefined ? {} : { maxPending }) });
   let status: PeerStatus = "closed"; // until open() below, a line from now; this way the first onStatus is "connecting"
   let closedBecause: string | undefined;
   let socket: WebSocket | undefined;
   let attempt = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let lastHeard = 0;
+  let liveSince = 0;
 
   const setStatus = (next: PeerStatus): void => {
     if (status === next) return;
@@ -48,6 +54,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   function send(ops: ClientOp[]): void {
     if (status !== "live") return; // still pending in the replica; the next welcome sends them
     for (const op of ops) socket?.send(JSON.stringify({ type: "op", ...op } satisfies ClientMessage));
+    replica.markSent(ops.map((op) => op.opId));
   }
 
   function finish(reason: string): void {
@@ -57,12 +64,20 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     const old = socket;
     socket = undefined; // its close event must not start a reconnect
     old?.close();
+    // Whatever is still unsent never will be. Say so, instead of showing edits that no longer exist anywhere.
+    for (const rejection of replica.abandon()) onRejected?.(rejection);
     setStatus("closed");
+    onChange?.();
   }
 
   function retryLater(): void {
     if (status === "closed") return;
     setStatus("offline");
+    // The pause starts over only after a connection that LASTED. Resetting it on every welcome made
+    // "welcome, then drop" (a crash-looping server, a failing database) a reconnect every 250 ms, for ever,
+    // each one costing the api a session token and the room a copy of the document.
+    if (liveSince > 0 && Date.now() - liveSince > retryMs.max) attempt = 0;
+    liveSince = 0;
     // Exponential, capped, with jitter: after a server restart a thousand tabs must not all return in the same millisecond.
     const delay = Math.min(retryMs.max, retryMs.min * 2 ** attempt++) * (0.5 + Math.random() / 2);
     retryTimer = setTimeout(() => void open(), delay);
@@ -78,22 +93,32 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
 
   function onMessage(from: WebSocket, data: unknown): void {
     if (from !== socket) return; // a frame from a connection we have already given up on
-    let parsed;
-    try {
-      parsed = ServerMessage.safeParse(JSON.parse(String(data)));
-    } catch {
-      parsed = undefined;
-    }
-    // The server speaks a protocol this client does not: retrying would loop. The page must be reloaded.
-    if (!parsed?.success) { finish("protocol"); return; }
     lastHeard = Date.now();
+    // What we cannot read, we skip: a binary frame, broken JSON, or a message type added after this
+    // client was loaded (every open tab meets one during a deploy). Ending the peer over it would
+    // throw away the user's unsent edits.
+    if (typeof data !== "string") return;
+    let raw: unknown;
+    try {
+      raw = JSON.parse(data);
+    } catch {
+      return;
+    }
+    const type: unknown = typeof raw === "object" && raw !== null && "type" in raw ? raw.type : undefined;
+    if (!KNOWN_TYPES.has(type)) return;
+    // A type we DO know, in a shape the contract forbids: nothing this server says can be relied on.
+    const parsed = ServerMessage.safeParse(raw);
+    if (!parsed.success) { finish("protocol"); return; }
+
+    const before = replica.revision;
     const effects = replica.receive(parsed.data);
+    if (effects.fatal) { finish(effects.fatal); return; }
     if (parsed.data.type === "welcome") {
-      attempt = 0;
+      liveSince = Date.now();
       setStatus("live");
     }
     for (const rejection of effects.rejected) onRejected?.(rejection);
-    onChange?.();
+    if (replica.revision !== before || effects.rejected.length > 0) onChange?.();
     if (effects.resync) resync();
     else send(effects.send);
   }
@@ -111,7 +136,13 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     if (!target) { finish("no_session"); return; }
 
     // The token rides in Sec-WebSocket-Protocol: the only header a browser lets a WebSocket set.
-    const mine = new WebSocketImpl(target.wsUrl, ["noon.v1", target.token]);
+    let mine: WebSocket;
+    try {
+      mine = new WebSocketImpl(target.wsUrl, ["noon.v1", target.token]);
+    } catch {
+      retryLater(); // a URL the constructor refuses. Thrown here it would be an unhandled rejection: in Node, the end of the process.
+      return;
+    }
     socket = mine;
     lastHeard = Date.now();
     mine.addEventListener("message", (event: MessageEvent) => { onMessage(mine, event.data); });
@@ -125,13 +156,16 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   }
 
   // ponytail: one coarse timer instead of a deadline per op. A browser cannot see the server's pings,
-  // so silence while something is pending is the only sign of a half-open connection.
+  // so silence while we WAIT for something (the welcome, or an answer to an op) is the only sign of a
+  // half-open connection. A peer that only reads has nothing to time: E2.6's presence traffic fixes that.
   const watchdog = setInterval(() => {
-    if (status === "live" && replica.pending.length > 0 && Date.now() - lastHeard > ackTimeoutMs) resync();
+    const waiting = (status === "connecting" && socket !== undefined) || (status === "live" && replica.pendingCount > 0);
+    if (waiting && Date.now() - lastHeard > ackTimeoutMs) resync();
   }, ackTimeoutMs / 2);
   (watchdog as { unref?: () => void }).unref?.(); // in Node, a timer must not keep a finished script alive
 
-  void open();
+  // Not now: a callback that runs before connectPeer has returned cannot use the peer it is given to.
+  queueMicrotask(() => void open());
 
   return {
     /** What the user sees: confirmed edits plus our own unconfirmed ones. Read only. */
@@ -139,13 +173,15 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     get status(): PeerStatus { return status; },
     /** Why the peer ended for good: a close code, "protocol", "no_session" or "closed_by_caller". */
     get closedBecause(): string | undefined { return closedBecause; },
-    get pendingCount(): number { return replica.pending.length; },
+    get pendingCount(): number { return replica.pendingCount; },
+    /** Goes up whenever `doc` changes. `doc` is edited in place, so THIS is what a UI subscribes to (React: the useSyncExternalStore snapshot). */
+    get revision(): number { return replica.revision; },
 
     /** Make an edit. Shown at once; sent now, or after the next welcome if we are not live. */
     submit(op: Op): LocalResult {
       const result = replica.local(op);
       if (result.ok) {
-        if (replica.pending.length === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
+        if (replica.pendingCount === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
         send([result.send]);
         onChange?.();
       }

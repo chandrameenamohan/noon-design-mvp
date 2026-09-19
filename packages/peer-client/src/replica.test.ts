@@ -114,6 +114,7 @@ test("a late acknowledgement for an op already inside the welcome is NOT applied
   applyOpInto(server, setText("t", "theirs"));
   replica.receive({ type: "welcome", doc: server, seq: 3 });
   replica.receive(ack(2, mine));
+  expect(replica.pending.map((p) => p.opId)).not.toContain(mine.opId);
   expect(replica.doc.nodes["t"]?.props["value"]).toBe("theirs");
   expect(replica.seq).toBe(3);
 });
@@ -145,16 +146,32 @@ test("'stale': an op the document already shows is dropped quietly", () => {
   expect(replica.pending).toHaveLength(0);
 });
 
-test("'stale': an op the document does NOT show is sent again on top of what we now know", () => {
+test("'stale', never sent (made offline): nobody can have applied it, so it is sent again on top of what we now know", () => {
   const replica = ready();
-  const out = sent(replica, add("a"));
-  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 9 }); // the room was reloaded without it
+  const out = sent(replica, add("a")); // the transport was offline: markSent was never called
+  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 9 });
   const effects = replica.receive({ type: "rejected", opId: out.opId, reason: "stale" });
   expect(effects.send).toEqual([{ ...out, baseSeq: 9 }]);
   expect(replica.doc.nodes["a"]).toBeDefined();
 });
 
-test("'stale' three times over gives up and reports it", () => {
+test("'stale', already sent once: it MAY have been applied and overwritten since, so it is never sent again", () => {
+  // Mine set gap=1 at seq 11 (unheard); someone set gap=2 at seq 12; the room was reloaded and forgot both.
+  const replica = ready();
+  sent(replica, add("t"));
+  const mine = sent(replica, { type: "set_prop", nodeId: "t", key: "gap", value: 1 });
+  replica.markSent([mine.opId]);
+  const server = emptyDoc();
+  applyOpInto(server, add("t"));
+  applyOpInto(server, { type: "set_prop", nodeId: "t", key: "gap", value: 2 });
+  replica.receive({ type: "welcome", doc: server, seq: 12 });
+  const effects = replica.receive({ type: "rejected", opId: mine.opId, reason: "stale" });
+  expect(effects.send).toEqual([]); // resending would put a seq-11 write on top of a seq-12 write
+  expect(effects.rejected.map((r) => r.reason)).toEqual(["stale"]);
+  expect(replica.doc.nodes["t"]?.props["gap"]).toBe(2);
+});
+
+test("'stale' for a never-sent op gives up after two tries and reports it", () => {
   const replica = ready();
   const out = sent(replica, add("a"));
   const stale: ServerMessage = { type: "rejected", opId: out.opId, reason: "stale" };
@@ -164,12 +181,45 @@ test("'stale' three times over gives up and reports it", () => {
   expect(replica.doc.nodes["a"]).toBeUndefined();
 });
 
-test("someone else's op that carries MY opId is applied as THEIR op, not read as my acknowledgement's content", () => {
+test("someone else's op that carries MY opId is THEIR op: mine stays pending and the guess stays honest", () => {
+  // Reachable: my op was applied and broadcast (so the id is public), I never heard, and I still hold it as pending.
   const replica = ready();
   const out = sent(replica, add("a"));
   replica.receive({ type: "op", seq: 1, opId: out.opId, actor: OTHER, op: add("z") });
   expect(replica.confirmed.nodes["z"]).toBeDefined();
   expect(replica.confirmed.nodes["a"]).toBeUndefined();
+  expect(replica.pending.map((p) => p.opId)).toEqual([out.opId]);
+  expect(replica.doc.nodes["root"]?.children).toEqual(["a", "z"]); // confirmed (z), then pending (a at index 0)
+});
+
+test("a welcome that is not a well-formed document is refused: it would hang the first move", () => {
+  const replica = createReplica({ manifest });
+  const loop = { component: "Stack", props: {}, children: [] };
+  const doc: Doc = { rootId: "root", nodes: { root: { id: "root", component: "Root", props: {}, parentId: null, children: [] }, a: { ...loop, id: "a", parentId: "b" }, b: { ...loop, id: "b", parentId: "a" } } };
+  expect(replica.receive({ type: "welcome", doc, seq: 1 }).fatal).toBe("document_corrupt");
+  expect(replica.local(add("x"))).toEqual({ ok: false, reason: "not_ready" });
+});
+
+test("revision changes exactly when the visible document does", () => {
+  const replica = ready();
+  const start = replica.revision;
+  const out = sent(replica, add("a"));
+  const afterLocal = replica.revision;
+  expect(afterLocal).toBeGreaterThan(start);
+  replica.receive(ack(1, out)); // the guess already showed it
+  replica.receive({ type: "rejected", opId: crypto.randomUUID(), reason: "gone" }); // not ours
+  expect(replica.revision).toBe(afterLocal);
+  replica.receive(remote(2, add("b")));
+  expect(replica.revision).toBeGreaterThan(afterLocal);
+});
+
+test("the pending queue is capped: an offline peer cannot grow without limit", () => {
+  const replica = createReplica({ manifest, maxPending: 2 });
+  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 0 });
+  sent(replica, add("a"));
+  sent(replica, add("b"));
+  expect(replica.local(add("c"))).toEqual({ ok: false, reason: "too_many_pending" });
+  expect(replica.doc.nodes["c"]).toBeUndefined();
 });
 
 // THE property (bead note 5). Whatever mix of local edits, remote edits, acknowledgements and
@@ -179,31 +229,49 @@ test.each(Array.from({ length: 60 }, (_, i) => i + 1))("rebase property, seed %i
   const random = seeded(seed);
   const server = emptyDoc();
   let seq = 0;
+  const appliedAt = new Map<string, number>(); // the server's dedupe memory: opId -> seq
   const replica = ready();
-  const inFlight: ClientOp[] = [];
-  const deliver = (): void => {
+  let inFlight: ClientOp[] = [];
+  /** The server handles the oldest in-flight op; `heard` = does the answer reach the replica? */
+  const deliver = (heard: boolean): void => {
     const next = inFlight.shift();
     if (!next) return;
-    // The server sees the op in ITS order: it may no longer apply, which the server answers with a refusal.
-    if (applyOpInto(server, next.op)) replica.receive(ack(++seq, next));
-    else replica.receive({ type: "rejected", opId: next.opId, reason: "gone" });
+    const before = appliedAt.get(next.opId);
+    let answer: ServerMessage;
+    if (before !== undefined) answer = ack(before, next); // a resend: the original answer, nothing applied
+    else if (applyOpInto(server, next.op)) {
+      appliedAt.set(next.opId, ++seq);
+      answer = ack(seq, next);
+    } else answer = { type: "rejected", opId: next.opId, reason: "gone" };
+    if (heard) replica.receive(answer);
   };
+  // rebuild() SHARES node objects between the two documents. That is only safe while nothing edits
+  // a node in place, so every node the replica holds is frozen: an in-place edit would throw here.
+  const freeze = (doc: Doc): void => { for (const node of Object.values(doc.nodes)) { Object.freeze(node); Object.freeze(node.props); Object.freeze(node.children); } };
+
   for (let step = 0; step < 150; step++) {
     const roll = random();
     if (roll < 0.4) {
       const result = replica.local(randomOp(random, replica.doc));
-      if (result.ok) inFlight.push(result.send);
-    } else if (roll < 0.7) {
+      if (result.ok) { inFlight.push(result.send); replica.markSent([result.send.opId]); }
+    } else if (roll < 0.65) {
       const op = randomOp(random, server);
       if (applyOpInto(server, op)) replica.receive(remote(++seq, op));
-    } else deliver();
+    } else if (roll < 0.9) deliver(true);
+    else {
+      // The connection dies: some answers are lost on the way, then a fresh welcome, then the resend.
+      while (inFlight.length > 0 && random() < 0.5) deliver(false);
+      inFlight = replica.receive({ type: "welcome", doc: structuredClone(server), seq }).send;
+    }
 
     const expected = structuredClone(replica.confirmed);
     for (const pending of replica.pending) applyOpInto(expected, pending.op);
     expect(replica.doc).toEqual(expected);
     expect(checkDoc(replica.doc)).toEqual([]);
+    freeze(replica.doc);
+    freeze(replica.confirmed);
   }
-  while (inFlight.length > 0) deliver();
+  while (inFlight.length > 0) deliver(true);
   expect(replica.pending).toHaveLength(0);
   expect(replica.doc).toEqual(server);
 });

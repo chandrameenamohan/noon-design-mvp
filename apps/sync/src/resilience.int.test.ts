@@ -48,11 +48,15 @@ test("a peer that goes away while its document is still loading does not leave a
 test("a database outage is 4503 'try again', not 4500 'your document is corrupt', and the next peer retries the load", async () => {
   let down = true;
   let loads = 0;
-  // Slow enough that the three peers below are all waiting on ONE load when it fails.
-  const store = fakeStore({ load: async () => { loads++; await sleep(80); if (down) throw new Error("connection refused"); return { doc: undefined, seq: 0 }; } });
+  // The first load does not finish until the test says so: all three peers below are then waiting on
+  // that ONE load when it fails. (A fixed 80 ms delay was enough alone and too short inside `make check`.)
+  let allConnected = (): void => undefined;
+  const gate = new Promise<void>((resolve) => { allConnected = resolve; });
+  const store = fakeStore({ load: async () => { loads++; await gate; if (down) throw new Error("connection refused"); return { doc: undefined, seq: 0 }; } });
   const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store });
   const documentId = randomUUID();
   const peers = await Promise.all([connect(server.url, documentId), connect(server.url, documentId), connect(server.url, documentId)]);
+  allConnected();
   expect((await Promise.all(peers.map((p) => p.closed))).map((c) => c.code)).toEqual([4503, 4503, 4503]); // every waiter, the same reason
 
   down = false;

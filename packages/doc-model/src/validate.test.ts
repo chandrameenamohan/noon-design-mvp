@@ -79,3 +79,12 @@ test("'gone' is the one reason a client must not show: the node vanished, the us
   if (!r.ok) reasons.add(r.reason);
   expect([...reasons]).toEqual(["gone"]);
 });
+
+test("a move on a document that already contains a cycle still gets an answer (it used to loop for ever)", () => {
+  const doc = emptyDoc();
+  const loop = { component: "Stack", props: {}, children: [] };
+  doc.nodes["a"] = { ...loop, id: "a", parentId: "b" };
+  doc.nodes["b"] = { ...loop, id: "b", parentId: "a" };
+  doc.nodes["x"] = { ...loop, id: "x", parentId: ROOT_ID };
+  expect(verdict(doc, { type: "move_node", nodeId: "x", newParentId: "a", index: 0 }).ok).toBe(true);
+});
