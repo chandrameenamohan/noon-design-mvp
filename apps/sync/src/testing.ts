@@ -46,11 +46,15 @@ export async function connect(url: string, documentId: string, userId: string = 
   // a WebSocket, and a query string would end up in proxy logs and Referer headers.
   const socket = new WebSocket(`${url}/documents/${documentId}`, ["noon.v1", tokenFor(documentId, userId, orgId)], wsOptions);
   const inbox: ServerMessage[] = [];
+  let lastSeq = 0;
   const waiters: { test: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] = [];
   const consumed = new Set<ServerMessage>();
   socket.on("message", (data: WebSocket.RawData) => {
     const message = ServerMessage.parse(JSON.parse(frameText(data))); // every frame must satisfy the contract
     inbox.push(message);
+    // A real client reports the last seq it has SEEN as baseSeq: that is how the room can tell a fresh
+    // op from one that may be older than anything it still remembers.
+    if (message.type === "welcome" || message.type === "op") lastSeq = Math.max(lastSeq, message.seq);
     const waiter = waiters.find((w) => w.test(message));
     if (waiter) {
       waiters.splice(waiters.indexOf(waiter), 1);
@@ -65,7 +69,6 @@ export async function connect(url: string, documentId: string, userId: string = 
     socket.once("open", () => { resolve(); });
     socket.once("error", reject);
   });
-  let sentSeq = 0;
   return {
     userId,
     inbox,
@@ -82,7 +85,7 @@ export async function connect(url: string, documentId: string, userId: string = 
         waiters.push({ test, resolve: (m) => { clearTimeout(timer); resolve(m as never); } });
       }),
     send(op, opId = randomUUID()) {
-      socket.send(JSON.stringify({ type: "op", opId, baseSeq: sentSeq++, op } satisfies ClientMessage));
+      socket.send(JSON.stringify({ type: "op", opId, baseSeq: lastSeq, op } satisfies ClientMessage));
       return opId;
     },
     pauseReading: () => {

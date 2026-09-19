@@ -18,9 +18,21 @@ const HEADER = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toStrin
 const MIN_SECRET_LENGTH = 32;
 
 // `aud` says what the token is FOR. Epic 8 will mint other tokens; none of them may open a document.
-const Payload = z.object({ sub: z.uuid(), org: z.uuid(), doc: z.uuid(), aud: z.literal("sync"), iat: z.number().int(), exp: z.number().int() });
+// `knd` and `run` say WHAT is connecting: a person, the AI agent (with the run it belongs to) or the
+// git peer. The room stamps every op with it, so "the AI did this" cannot be claimed by a client.
+const Payload = z.object({
+  sub: z.uuid(),
+  org: z.uuid(),
+  doc: z.uuid(),
+  aud: z.literal("sync"),
+  knd: z.enum(["user", "agent", "git"]).default("user"),
+  run: z.string().min(1).max(100).optional(),
+  iat: z.number().int(),
+  exp: z.number().int(),
+});
 
-type SessionClaims = { userId: string; orgId: string; documentId: string; expiresAt: number };
+type SessionActor = { kind: "user" | "agent" | "git"; runId?: string };
+type SessionClaims = { userId: string; orgId: string; documentId: string; expiresAt: number; actor: SessionActor };
 type VerifyResult =
   | { ok: true; claims: SessionClaims }
   | { ok: false; reason: "malformed" | "bad_signature" | "expired" | "wrong_document" };
@@ -32,16 +44,18 @@ function sign(data: string, secret: string): Buffer {
   return createHmac("sha256", secret).update(data).digest();
 }
 
-export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds, now = nowSeconds() }: {
+export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds, now = nowSeconds(), actor = { kind: "user" } }: {
   userId: string;
   orgId: string;
   documentId: string;
   secret: string;
   ttlSeconds: number;
   now?: number;
+  /** Defaults to a person. Only the api decides this; a client can never choose it. */
+  actor?: SessionActor;
 }): string {
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1) throw new Error("session token ttl must be a whole number of seconds, at least 1");
-  const payload = Payload.parse({ sub: userId, org: orgId, doc: documentId, aud: "sync", iat: now, exp: now + ttlSeconds });
+  const payload = Payload.parse({ sub: userId, org: orgId, doc: documentId, aud: "sync", knd: actor.kind, ...(actor.runId === undefined ? {} : { run: actor.runId }), iat: now, exp: now + ttlSeconds });
   const body = `${HEADER}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   return `${body}.${sign(body, secret).toString("base64url")}`;
 }
@@ -90,5 +104,14 @@ export function verifySessionToken({ token, secrets, documentId, now = nowSecond
   if (!parsed.success) return { ok: false, reason: "malformed" };
   if (now >= parsed.data.exp + leewaySeconds) return { ok: false, reason: "expired" };
   if (parsed.data.doc !== documentId) return { ok: false, reason: "wrong_document" };
-  return { ok: true, claims: { userId: parsed.data.sub, orgId: parsed.data.org, documentId: parsed.data.doc, expiresAt: parsed.data.exp } };
+  return {
+    ok: true,
+    claims: {
+      userId: parsed.data.sub,
+      orgId: parsed.data.org,
+      documentId: parsed.data.doc,
+      expiresAt: parsed.data.exp,
+      actor: { kind: parsed.data.knd, ...(parsed.data.run === undefined ? {} : { runId: parsed.data.run }) },
+    },
+  };
 }

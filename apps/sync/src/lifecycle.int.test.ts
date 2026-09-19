@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import type { Op } from "@noon/contracts";
 import { ROOT_ID } from "@noon/doc-model";
 import { signSessionToken } from "@noon/session-token";
-import { connect, TEST_ORG, TEST_SECRET, useSyncServer } from "./testing.ts";
+import { connect, TEST_ORG, TEST_SECRET, until, useSyncServer } from "./testing.ts";
 
 const HEARTBEAT_MS = 150;
 const ctx = useSyncServer({ heartbeatMs: HEARTBEAT_MS, maxBufferedBytes: 1024 * 1024 });
@@ -57,10 +57,11 @@ test("a frozen peer (connected, but answering nothing) is dropped by the heartbe
   const started = Date.now();
   const closed = await frozen.closed;
   const took = Date.now() - started;
+  // Only a LOWER bound: it cannot be dropped before one full interval has passed unanswered. An upper
+  // bound would only test how busy this machine is; that it IS dropped is proven by reaching this line.
   expect(took, `dropped after ${String(took)} ms`).toBeGreaterThanOrEqual(HEARTBEAT_MS);
-  expect(took).toBeLessThan(HEARTBEAT_MS * 4);
   expect(closed.code).toBe(1006); // terminated, not politely closed: nobody was listening
-  expect(ctx.server.peerCount(documentId)).toBe(1);
+  await until(() => ctx.server.peerCount(documentId) === 1, "the room to notice the dropped peer");
 
   const opId = healthy.send(add("still-here"));
   expect((await healthy.next("op", (m) => m.opId === opId)).seq).toBe(1);

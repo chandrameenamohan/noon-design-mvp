@@ -24,7 +24,8 @@ const check = (token: string, over: Partial<Parameters<typeof verifySessionToken
 
 test("a token names its user, org and document, and says when it expires", () => {
   const result = check(mint());
-  expect(result).toEqual({ ok: true, claims: { ...claims, expiresAt: T0 + 60 } });
+  expect(result).toEqual({ ok: true, claims: { ...claims, expiresAt: T0 + 60, actor: { kind: "user" } } });
+  expect(check(mint({ actor: { kind: "agent", runId: "run-7" } }))).toMatchObject({ ok: true, claims: { actor: { kind: "agent", runId: "run-7" } } });
 });
 
 test("an expired token is rejected, exactly at its expiry second", () => {

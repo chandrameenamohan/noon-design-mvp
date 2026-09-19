@@ -87,9 +87,9 @@ test("a document cannot grow without bound: node count and depth are capped", as
   expect(await peer.next("rejected")).toEqual({ type: "rejected", opId: tooMany, reason: "document_limit" });
 
   const deep = await connect(ctx.server.url, randomUUID());
-  deep.send(add("d1")); deep.send(add("d2", "d1")); // depth 2 under the root
-  await deep.next("op", (m) => m.seq === 2);
-  const tooDeep = deep.send(add("d3", "d2")); // would be depth 3: the cap
+  deep.send(add("d1")); deep.send(add("d2", "d1")); deep.send(add("d3", "d2")); // depth 3 = the cap: allowed
+  await deep.next("op", (m) => m.seq === 3);
+  const tooDeep = deep.send(add("d4", "d3")); // depth 4
   expect(await deep.next("rejected")).toEqual({ type: "rejected", opId: tooDeep, reason: "document_limit" });
   peer.close(); deep.close();
 });

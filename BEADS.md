@@ -54,7 +54,8 @@ N's handbook bead (never more than one chapter behind).
 | E2.5b | Move, remove and prop editing from the UI; a rejected edit rolls back and shows its reason; an edit to a concurrently removed node vanishes with no error UI (F5, F6) | e2e:edit-ops-converge · e2e:reject-shows-reason · e2e:concurrent-remove-silent | preview, AI | E2.5a | apps/web | |
 | E2.6 | Peers see each other's name, cursor, selection; a closed tab vanishes within 5 s; after a `sync` restart presence is empty and no presence data exists in any store (F7) | e2e:presence · integration:presence-gone-after-sync-restart | — | E2.5a | apps/sync, apps/web, packages/contracts | |
 | E2.8 | `make sim` fuzzes real `doc-model` + real `peer-client` under delay/drop/reorder with committed seeds: convergence, no double apply, LWW by `seq`, no cycle; same seed twice in separate processes gives byte-identical traces; a failing seed prints an op trace; breaking a conflict rule fails a named seed; ≤ ~300 lines (F8a) | sim:seeds · sim:determinism · sim:mutation-fails | fake Postgres/Redis/WS | E2.4 | packages/peer-client (test), Makefile | |
-| E2.H | Chapter 2 + drills | check:drills-red · check:chapter-recorded | — | E2.5b, E2.6, E2.8 | docs/handbook, drills/ | |
+| E2.9 | Each peer has an op budget (a token bucket in the room, clock injected so it stays pure): over it, ops are refused with `rate_limited` and a retry hint, and a peer that keeps flooding is dropped; an op that changes nothing (a `set_prop` to the value already there) is acknowledged to the sender without taking a sequence number or being broadcast. Found by the E2.3 review: no bead owned per-peer op limits (E9.6 is HTTP only), and the AI peer of E3.2 is exactly the unbounded producer | unit:room-rate-limit · unit:room-noop-takes-no-seq · integration:flooding-peer-dropped | per-org quotas (F31) | E2.4 | apps/sync, packages/contracts | R |
+| E2.H | Chapter 2 + drills | check:drills-red · check:chapter-recorded | — | E2.5b, E2.6, E2.8, E2.9 | docs/handbook, drills/ | |
 
 ## E3 — AI agent peer
 | key | outcome | checks | out of scope | deps | touches | R |
@@ -135,5 +136,6 @@ N's handbook bead (never more than one chapter behind).
 2. §4 "`api` dies" row: "creating POSTs are idempotent" narrows to "job-creating POSTs are idempotent (F27); other requests are safe to retry".
 3. Gate layers: `integration` and `sim` join `make check`; `make chaos`, `make live`, `make clean-clone`, `make drills` exist outside it.
 
-Totals: 61 beads (1 primer, 9 handbook, 4 final).
+Totals: 62 beads (1 primer, 9 handbook, 4 final).
 4. E9.6 added after the E1.5 review: generic per-user HTTP rate limiting had no owner.
+5. E2.9 added after the E2.3 review: per-peer op rate limiting in the room had no owner; E3.2 (the AI peer) now depends on it.

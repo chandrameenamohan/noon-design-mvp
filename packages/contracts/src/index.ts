@@ -114,6 +114,7 @@ export const PropValue = z.union([
 export type PropValue = z.infer<typeof PropValue>;
 
 const MAX_PROPS = 50;
+const MAX_PROPS_BYTES = 32 * 1024;
 /**
  * A bag of props. NOT z.record(): the Agent SDK cannot convert z.record(k, v) and silently drops
  * every tool of the MCP server that uses it (SPEC §2a); this shape parses the same and converts.
@@ -125,6 +126,9 @@ const Props = z
   .refine((raw) => !(typeof raw === "object" && raw !== null && Object.hasOwn(raw, "__proto__")), "reserved prop name")
   .pipe(z.object({}).catchall(PropValue))
   .refine((props) => Object.keys(props).length <= MAX_PROPS, `at most ${String(MAX_PROPS)} props`)
+  // The sync server caps a frame at 64 KB before parsing it. Without this, an op that is valid here
+  // could be impossible to send: the socket would close, the client would resend, for ever.
+  .refine((props) => JSON.stringify(props).length <= MAX_PROPS_BYTES, `props larger than ${String(MAX_PROPS_BYTES)} bytes`)
   .refine((props) => Object.keys(props).every((key) => PropKey.safeParse(key).success), "invalid prop name");
 
 export const DocNode = z.object({
@@ -172,6 +176,10 @@ export const RejectReason = z.enum([
   "wrong_prop_type",
   "missing_required_prop",
   "document_limit", // the room caps node count and depth; a document cannot grow without bound
+  // The room cannot tell whether this op was already applied: it is older than anything the room still
+  // remembers (a long disconnect, or the room was reloaded). The client must resync, not resend.
+  "stale",
+  "unavailable", // the op could not be made durable, so it was not applied; safe to retry
 ]);
 export type RejectReason = z.infer<typeof RejectReason>;
 

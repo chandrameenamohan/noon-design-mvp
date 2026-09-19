@@ -56,12 +56,20 @@ test("when the last peer leaves the document is saved, the room is dropped, and 
   again.close();
 });
 
-test("an op sent the instant the socket opens is not lost while the document is still loading", async () => {
+test("an op sent the instant the socket opens is never silently lost while the document is still loading", async () => {
   const doc = await aDocument();
   for (let round = 0; round < 15; round++) {
     const peer = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
-    const opId = peer.send(add(`early-${String(round)}`)); // no waiting for "welcome"
-    expect((await peer.next("op", (m) => m.opId === opId)).seq).toBeGreaterThan(0);
+    const opId = peer.send(add(`early-${String(round)}`)); // sent before "welcome", so it cannot know the room's seq
+    // It must get AN ANSWER. On a fresh document that is the op itself. On one reloaded from storage
+    // the room says "stale": it cannot know whether an op from a peer that has seen nothing was
+    // already applied, so the client must resync. What may never happen is silence.
+    const answer = await Promise.race([peer.next("op", (m) => m.opId === opId), peer.next("rejected", (m) => m.opId === opId)]);
+    expect(answer.type === "op" || answer.reason === "stale", JSON.stringify(answer)).toBe(true);
+    if (answer.type === "rejected") {
+      const retry = peer.send(add(`early-${String(round)}`)); // now that it has been welcomed, the same edit goes through
+      expect((await peer.next("op", (m) => m.opId === retry)).seq).toBeGreaterThan(0);
+    }
     peer.close();
     await peer.closed;
     await until(() => server.roomCount() === 0, "the room to be dropped", 5000); // so the next round loads again
