@@ -1,4 +1,4 @@
-import { ServerMessage, type ClientMessage, type ClientOp, type Doc, type Manifest, type Op } from "@noon/contracts";
+import { ServerMessage, type ClientMessage, type Doc, type Manifest, type Op } from "@noon/contracts";
 import { createReplica, type LocalResult, type Rejection } from "./replica.ts";
 
 export type { Rejection };
@@ -44,6 +44,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let lastHeard = 0;
   let liveSince = 0;
+  let pauseTimer: ReturnType<typeof setTimeout> | undefined;
+  const endPause = (): void => { clearTimeout(pauseTimer); pauseTimer = undefined; };
 
   const setStatus = (next: PeerStatus): void => {
     if (status === next) return;
@@ -51,16 +53,17 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     onStatus?.(next);
   };
 
-  function send(ops: ClientOp[]): void {
-    if (status !== "live") return; // still pending in the replica; the next welcome sends them
-    for (const op of ops) socket?.send(JSON.stringify({ type: "op", ...op } satisfies ClientMessage));
-    replica.markSent(ops.map((op) => op.opId));
+  /** Writes whatever the replica says may go out now. Not live, or told to slow down: it all stays pending. */
+  function flush(): void {
+    if (status !== "live" || pauseTimer !== undefined) return;
+    for (const op of replica.takeSendable()) socket?.send(JSON.stringify({ type: "op", ...op } satisfies ClientMessage));
   }
 
   function finish(reason: string): void {
     closedBecause = reason;
     clearTimeout(retryTimer);
     clearInterval(watchdog);
+    endPause();
     const old = socket;
     socket = undefined; // its close event must not start a reconnect
     old?.close();
@@ -114,14 +117,18 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     const effects = replica.receive(parsed.data);
     if (effects.fatal) { finish(effects.fatal); return; }
     if (parsed.data.type === "welcome") {
+      endPause(); // a pause belonged to the old connection
       liveSince = Date.now();
       setStatus("live");
     }
     for (const rejection of effects.rejected) onRejected?.(rejection);
     // The picture changed, or what is still unsaved did (an acknowledgement changes only that).
     if (replica.revision !== revisionBefore || replica.pendingCount !== pendingBefore) onChange?.();
-    if (effects.resync) resync();
-    else send(effects.send);
+    if (effects.resync) { resync(); return; }
+    // The room's budget is spent: say nothing until it has refilled (+ jitter, so that the peers of a
+    // busy room do not all return at once). The refused ops are unsent again and go out first.
+    if (effects.pauseMs !== undefined && pauseTimer === undefined) pauseTimer = setTimeout(() => { endPause(); flush(); }, effects.pauseMs * (1 + Math.random() / 4));
+    flush(); // an answer frees a place in the window
   }
 
   async function open(): Promise<void> {
@@ -183,7 +190,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
       const result = replica.local(op);
       if (result.ok) {
         if (replica.pendingCount === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
-        send([result.send]);
+        flush();
         onChange?.();
       }
       return result;

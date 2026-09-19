@@ -79,6 +79,9 @@ function plan(doc: Doc, op: Op): Patch | undefined {
   }
 }
 
+/** Would this op change anything? Reads only, O(what it touches): how the room spots a no-op before spending a seq on it. */
+export const changes = (doc: Doc, op: Op): boolean => plan(doc, op) !== undefined;
+
 /**
  * PURE: returns a new document and never touches `doc`; untouched nodes are shared, not copied.
  * An op that changes nothing returns the SAME object. This is what a browser uses for optimistic

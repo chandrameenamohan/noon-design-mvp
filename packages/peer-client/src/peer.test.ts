@@ -140,3 +140,23 @@ test("onChange also fires when only the pending count changes: 'saved' is news e
   expect(changes).toBe(before + 1);
   peer.close();
 });
+
+test("'rate_limited' makes the transport WAIT, then send the refused op and its successors again, in order", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  peer.submit(add("a"));
+  peer.submit(add("b"));
+  const socket = net.sockets[0];
+  const frames = (): { opId: string; op: { nodeId: string } }[] => (socket?.sent ?? []).map((f) => JSON.parse(f) as { opId: string; op: { nodeId: string } });
+  const [a, b] = frames();
+  socket?.say({ type: "rejected", opId: a?.opId, reason: "rate_limited", retryAfterMs: 80 });
+  socket?.say({ type: "rejected", opId: b?.opId, reason: "rate_limited", retryAfterMs: 80 });
+  peer.submit(add("c")); // made during the pause: it waits its turn
+  await sleep(40);
+  expect(frames()).toHaveLength(2);
+  await until(() => frames().length === 5, "the resend after the pause");
+  expect(frames().slice(2).map((f) => f.op.nodeId)).toEqual(["a", "b", "c"]);
+  expect(peer.status).toBe("live"); // slowed down, never disconnected
+  peer.close();
+});

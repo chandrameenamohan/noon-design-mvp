@@ -8,7 +8,7 @@ import { manifest } from "@noon/design-system";
 import { checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
-import { createRoom, type Peer, type Room, type RoomLimits } from "./room.ts";
+import { createRoom, type Peer, type RateLimit, type Room, type RoomLimits } from "./room.ts";
 
 export type RunningSyncServer = {
   url: string;
@@ -24,12 +24,14 @@ const MAX_FRAME_BYTES = 64 * 1024; // an op is small; the contract caps props, t
 const TOKEN_LEEWAY_SECONDS = 5; // the api signs, this process verifies: two clocks never agree exactly
 const DOCUMENT_PATH = /^\/documents\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 // 4000-4999 are ours to define. They mirror the HTTP status a REST call would have had.
-const CLOSE = { invalidMessage: 4400, documentNotFound: 4404, documentCorrupt: 4500, unavailable: 4503 } as const;
+const CLOSE = { invalidMessage: 4400, documentNotFound: 4404, tooManyRequests: 4429, documentCorrupt: 4500, unavailable: 4503 } as const;
 
 type Options = {
   port: number;
   secrets: readonly string[];
   limits?: Partial<RoomLimits>;
+  /** Each peer's op budget (room.ts). */
+  rate?: Partial<RateLimit>;
   /** Where documents are loaded from and saved to. Without one, rooms start empty and nothing is kept. */
   store?: DocumentStore;
   /** A peer that has not answered a ping by the next tick is terminated. */
@@ -40,7 +42,7 @@ type Options = {
   saveRetryMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, store, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, saveRetryMs = 5000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, saveRetryMs = 5000 }: Options): Promise<RunningSyncServer> {
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
   // the REASON when a document cannot be opened, so every peer waiting on it is told the same thing.
@@ -82,7 +84,7 @@ export function startSyncServer({ port, secrets, limits, store, heartbeatMs = 15
   /** Loads the document and opens its room, or says why it cannot be opened. Never rejects. */
   async function open(documentId: string, orgId: string): Promise<Opened> {
     const roomLimits = limits ?? {};
-    if (!store) return { room: createRoom({ doc: emptyDoc(), manifest, limits: roomLimits }), orgId };
+    if (!store) return { room: createRoom({ doc: emptyDoc(), manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
     let stored;
     try {
       stored = await store.load(orgId, documentId);
@@ -94,7 +96,7 @@ export function startSyncServer({ port, secrets, limits, store, heartbeatMs = 15
     // The contract checked each node's shape. Whether they form a TREE is checkDoc's job, and a room
     // must never open on top of a corrupt document: every later op would build on the damage.
     if (checkDoc(doc).length > 0) return { closeCode: CLOSE.documentCorrupt };
-    return { room: createRoom({ doc, seq: stored.seq, manifest, limits: roomLimits }), orgId };
+    return { room: createRoom({ doc, seq: stored.seq, manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
   }
 
   async function serve(ws: WebSocket, documentId: string, claims: { userId: string; orgId: string; expiresAt: number; actor: { kind: "user" | "agent" | "git"; runId?: string } }): Promise<void> {
@@ -141,6 +143,7 @@ export function startSyncServer({ port, secrets, limits, store, heartbeatMs = 15
         if (ws.bufferedAmount > maxBufferedBytes) ws.terminate();
         else ws.send(JSON.stringify(message));
       },
+      kick: () => { ws.close(CLOSE.tooManyRequests, "rate_limited"); },
     };
 
     // Heartbeat: a killed peer is noticed at once (TCP says so); a FROZEN one, or one behind a dead

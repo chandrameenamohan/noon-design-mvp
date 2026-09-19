@@ -180,6 +180,9 @@ export const RejectReason = z.enum([
   // remembers (a long disconnect, or the room was reloaded). The client must resync, not resend.
   "stale",
   "unavailable", // the op could not be made durable, so it was not applied; safe to retry
+  // This peer is sending faster than its budget. NOT applied. Wait `retryAfterMs`, then send this op
+  // again and everything after it, in order: until then the room refuses this peer's later ops as well.
+  "rate_limited",
 ]);
 export type RejectReason = z.infer<typeof RejectReason>;
 
@@ -202,6 +205,9 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export const ServerMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0) }),
   SequencedOp.extend({ type: z.literal("op") }),
-  z.object({ type: z.literal("rejected"), opId: z.uuid(), reason: RejectReason }),
+  z.object({ type: z.literal("rejected"), opId: z.uuid(), reason: RejectReason, retryAfterMs: z.number().int().min(0).optional() }),
+  // "Received, and it changed nothing" (the value was already that, the node already there). It gets
+  // no seq and nobody else hears of it: a no-op must not cost every peer a message and a journal row.
+  z.object({ type: z.literal("ack"), opId: z.uuid() }),
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

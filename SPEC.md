@@ -47,7 +47,13 @@ Boxes". This project is also a course: see §7.
    `__proto__`...): they become object keys. Prop text may not contain control
    characters other than tab and newline; `-0` is refused.
 5. **Idempotency by `opId`.** Resending an op never applies it twice; the room
-   answers with the original `seq`.
+   answers with the original `seq`. An op that changes nothing is answered to
+   its sender alone with `ack`: no `seq`, no broadcast, and its resend is again
+   an `ack`. Each actor has an op budget in the room (a token bucket); over it
+   the op is refused with `rate_limited` and `retryAfterMs`, the room refuses
+   that peer's later ops too until the refused one returns (order is kept), and
+   a peer that keeps sending is closed with `4429`. `peer-client` keeps at most
+   50 unanswered ops on the wire, so an honest peer is slowed, never dropped.
 6. **Canvas model.** A document is one page: a tree of instances of the sample
    app's components (Stack, Card, Button, Text, Image, Input) with typed props.
    No absolute positioning, no freeform shapes.

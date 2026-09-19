@@ -18,11 +18,19 @@ function ready(doc: Doc = emptyDoc(), seq = 0) {
   replica.receive({ type: "welcome", doc, seq });
   return replica;
 }
-/** Submits and returns what would go on the wire; fails the test if the replica refused. */
-function sent(replica: ReturnType<typeof createReplica>, op: Op): ClientOp {
+/** Makes an edit that stays in the queue (the transport is offline); fails the test if the replica refused. */
+function queued(replica: ReturnType<typeof createReplica>, op: Op): ClientOp {
   const result = replica.local(op);
   if (!result.ok) throw new Error(`refused: ${result.reason}`);
-  return result.send;
+  const made = replica.pending.at(-1);
+  if (made?.opId !== result.opId) throw new Error("the op was not queued (it changed nothing)");
+  return made;
+}
+/** Makes an edit and puts it on the wire, as a live transport does. */
+function sent(replica: ReturnType<typeof createReplica>, op: Op): ClientOp {
+  const made = queued(replica, op);
+  replica.takeSendable();
+  return made;
 }
 
 test("a local op shows at once, before the server has said anything", () => {
@@ -99,8 +107,8 @@ test("after a reconnect every pending op is sent again, same opId, same baseSeq,
   const replica = ready();
   const first = sent(replica, add("a"));
   const second = sent(replica, add("b"));
-  const effects = replica.receive({ type: "welcome", doc: emptyDoc(), seq: 4 }); // the room moved on meanwhile
-  expect(effects.send).toEqual([first, second]); // baseSeq still 0: what the ops were WRITTEN against
+  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 4 }); // the room moved on meanwhile
+  expect(replica.takeSendable()).toEqual([first, second]); // baseSeq still 0: what the ops were WRITTEN against
   expect(replica.doc.nodes["b"]).toBeDefined();
 });
 
@@ -142,16 +150,17 @@ test("'stale': an op the document already shows is dropped quietly", () => {
   applyOpInto(server, add("a"));
   replica.receive({ type: "welcome", doc: server, seq: 9 });
   const effects = replica.receive({ type: "rejected", opId: out.opId, reason: "stale" });
-  expect(effects).toEqual({ send: [], rejected: [], resync: false });
+  expect(effects).toEqual({ rejected: [], resync: false });
   expect(replica.pending).toHaveLength(0);
 });
 
-test("'stale', never sent (made offline): nobody can have applied it, so it is sent again on top of what we now know", () => {
+test("'stale', first sent AFTER this welcome: no earlier room can have applied it, so it is sent again on top of what we now know", () => {
   const replica = ready();
-  const out = sent(replica, add("a")); // the transport was offline: markSent was never called
+  const out = queued(replica, add("a")); // the transport was offline: it never reached a socket
   replica.receive({ type: "welcome", doc: emptyDoc(), seq: 9 });
-  const effects = replica.receive({ type: "rejected", opId: out.opId, reason: "stale" });
-  expect(effects.send).toEqual([{ ...out, baseSeq: 9 }]);
+  expect(replica.takeSendable()).toEqual([out]);
+  replica.receive({ type: "rejected", opId: out.opId, reason: "stale" });
+  expect(replica.takeSendable()).toEqual([{ ...out, baseSeq: 9 }]);
   expect(replica.doc.nodes["a"]).toBeDefined();
 });
 
@@ -160,20 +169,20 @@ test("'stale', already sent once: it MAY have been applied and overwritten since
   const replica = ready();
   sent(replica, add("t"));
   const mine = sent(replica, { type: "set_prop", nodeId: "t", key: "gap", value: 1 });
-  replica.markSent([mine.opId]);
   const server = emptyDoc();
   applyOpInto(server, add("t"));
   applyOpInto(server, { type: "set_prop", nodeId: "t", key: "gap", value: 2 });
   replica.receive({ type: "welcome", doc: server, seq: 12 });
   const effects = replica.receive({ type: "rejected", opId: mine.opId, reason: "stale" });
-  expect(effects.send).toEqual([]); // resending would put a seq-11 write on top of a seq-12 write
+  expect(replica.takeSendable().map((op) => op.opId)).not.toContain(mine.opId); // resending would put a seq-11 write on top of a seq-12 write
   expect(effects.rejected.map((r) => r.reason)).toEqual(["stale"]);
   expect(replica.doc.nodes["t"]?.props["gap"]).toBe(2);
 });
 
 test("'stale' for a never-sent op gives up after two tries and reports it", () => {
   const replica = ready();
-  const out = sent(replica, add("a"));
+  const out = queued(replica, add("a"));
+  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 0 });
   const stale: ServerMessage = { type: "rejected", opId: out.opId, reason: "stale" };
   replica.receive(stale);
   replica.receive(stale);
@@ -222,6 +231,47 @@ test("the pending queue is capped: an offline peer cannot grow without limit", (
   expect(replica.doc.nodes["c"]).toBeUndefined();
 });
 
+test("at most `window` unanswered ops are on the wire; an answer lets the next one out, in order", () => {
+  const replica = createReplica({ manifest, window: 2 });
+  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 0 });
+  const [a, b, c] = [queued(replica, add("a")), queued(replica, add("b")), queued(replica, add("c"))];
+  expect(replica.takeSendable()).toEqual([a, b]);
+  expect(replica.takeSendable()).toEqual([]);
+  replica.receive(ack(1, a));
+  expect(replica.takeSendable()).toEqual([c]);
+  expect(b.opId).not.toBe(c.opId);
+});
+
+test("'rate_limited': the op stays, sending pauses, then it and everything after it go out again in order", () => {
+  const replica = ready();
+  const [a, b, c] = [sent(replica, add("a")), sent(replica, add("b")), sent(replica, add("c"))];
+  replica.receive(ack(1, a));
+  const effects = replica.receive({ type: "rejected", opId: b.opId, reason: "rate_limited", retryAfterMs: 120 });
+  expect(effects).toEqual({ rejected: [], resync: false, pauseMs: 120 });
+  replica.receive({ type: "rejected", opId: c.opId, reason: "rate_limited", retryAfterMs: 1 });
+  expect(replica.doc.nodes["c"]).toBeDefined(); // still shown: it is late, not refused
+  expect(replica.takeSendable()).toEqual([b, c]);
+});
+
+test("'ack' (the server found the op changed nothing) ends the wait and drops the guess", () => {
+  const replica = ready();
+  const out = sent(replica, add("a"));
+  replica.receive(remote(1, add("a"))); // someone else added the very same node first
+  replica.receive({ type: "ack", opId: out.opId });
+  expect(replica.pending).toHaveLength(0);
+  expect(replica.doc).toEqual(replica.confirmed);
+});
+
+test("a local edit that changes nothing is not queued or sent at all", () => {
+  const replica = ready();
+  sent(replica, add("n"));
+  sent(replica, { type: "set_prop", nodeId: "n", key: "gap", value: 4 });
+  const before = replica.revision;
+  expect(replica.local({ type: "set_prop", nodeId: "n", key: "gap", value: 4 }).ok).toBe(true);
+  expect(replica.pending).toHaveLength(2);
+  expect(replica.revision).toBe(before);
+});
+
 // THE property (bead note 5). Whatever mix of local edits, remote edits, acknowledgements and
 // refusals arrives, the optimistic document is ALWAYS exactly "confirmed, then every pending op",
 // it is always well formed, and once nothing is pending it IS the server's document.
@@ -253,7 +303,7 @@ test.each(Array.from({ length: 60 }, (_, i) => i + 1))("rebase property, seed %i
     const roll = random();
     if (roll < 0.4) {
       const result = replica.local(randomOp(random, replica.doc));
-      if (result.ok) { inFlight.push(result.send); replica.markSent([result.send.opId]); }
+      if (result.ok) inFlight.push(...replica.takeSendable());
     } else if (roll < 0.65) {
       const op = randomOp(random, server);
       if (applyOpInto(server, op)) replica.receive(remote(++seq, op));
@@ -261,7 +311,8 @@ test.each(Array.from({ length: 60 }, (_, i) => i + 1))("rebase property, seed %i
     else {
       // The connection dies: some answers are lost on the way, then a fresh welcome, then the resend.
       while (inFlight.length > 0 && random() < 0.5) deliver(false);
-      inFlight = replica.receive({ type: "welcome", doc: structuredClone(server), seq }).send;
+      replica.receive({ type: "welcome", doc: structuredClone(server), seq });
+      inFlight = replica.takeSendable();
     }
 
     const expected = structuredClone(replica.confirmed);

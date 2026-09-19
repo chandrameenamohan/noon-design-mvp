@@ -6,12 +6,15 @@ export type Rejection = { opId: string; op: Op; reason: RejectReason | "connecti
 
 /** What the caller must do after a message: frames to send, refusals to show, or "reconnect and start from a fresh welcome". */
 /** `fatal`: this server cannot be worked with; reconnecting would only repeat it. */
-export type Effects = { send: ClientOp[]; rejected: Rejection[]; resync: boolean; fatal?: "document_corrupt" };
+export type Effects = { rejected: Rejection[]; resync: boolean; fatal?: "document_corrupt"; /** Send nothing for this long (the server's budget). */ pauseMs?: number };
 
-export type LocalResult = { ok: true; send: ClientOp } | { ok: false; reason: RejectReason | "not_ready" | "invalid_op" | "too_many_pending" };
+export type LocalResult = { ok: true; opId: string } | { ok: false; reason: RejectReason | "not_ready" | "invalid_op" | "too_many_pending" };
 
-/** `everSent`: has this op ever been written to a socket? If not, no server can have applied it. */
-type Pending = ClientOp & { staleCount: number; everSent: boolean };
+/**
+ * `inFlight`: on the wire of the CURRENT connection, not answered yet.
+ * `maybeApplied`: it was on the wire of an EARLIER connection, so a room we no longer talk to may have applied it.
+ */
+type Pending = ClientOp & { staleCount: number; inFlight: boolean; maybeApplied: boolean };
 
 // An op that comes back "stale" is rebased and sent again; if the room STILL cannot place it, stop.
 const MAX_STALE_RETRIES = 2;
@@ -25,7 +28,7 @@ const MAX_STALE_RETRIES = 2;
  *   optimistic  confirmed + every op of ours the server has not answered yet. What the user sees.
  * The invariant (tested as a property): optimistic == confirmed, then each pending op, in order.
  */
-export function createReplica({ manifest, maxPending = 2000 }: { manifest: Manifest; maxPending?: number }) {
+export function createReplica({ manifest, maxPending = 2000, window = 50 }: { manifest: Manifest; maxPending?: number; /** How many unanswered ops may be on the wire at once. */ window?: number }) {
   let confirmed: Doc = emptyDoc();
   let optimistic: Doc = emptyDoc();
   let seq = 0;
@@ -53,20 +56,25 @@ export function createReplica({ manifest, maxPending = 2000 }: { manifest: Manif
     // client trusts no one: a cycle in here would send the first move_node check round for ever.
     if (checkDoc(doc).length > 0) {
       ready = false;
-      return { send: [], rejected: [], resync: false, fatal: "document_corrupt" };
+      return { rejected: [], resync: false, fatal: "document_corrupt" };
     }
     confirmed = doc;
     seq = welcomeSeq;
     ready = true;
-    rebuild();
+    // A new connection: nothing is on ITS wire yet, so everything pending goes out again (takeSendable).
     // Same opId: if the server did apply one of these before the connection dropped, it answers with
     // the original acknowledgement instead of applying it twice. Same baseSeq: it says what the op was
     // written against, and claiming something newer would switch the server's "stale" guard off.
-    return { send: pending.map(wire), rejected: [], resync: false };
+    for (const each of pending) {
+      each.maybeApplied ||= each.inFlight;
+      each.inFlight = false;
+    }
+    rebuild();
+    return { rejected: [], resync: false };
   }
 
   function onOp(message: Extract<ServerMessage, { type: "op" }>): Effects {
-    const effects: Effects = { send: [], rejected: [], resync: false };
+    const effects: Effects = { rejected: [], resync: false };
     if (message.seq > seq + 1) return { ...effects, resync: true }; // we missed something: touch nothing, start again from a welcome
     // Ours only if the id AND the content match. The room keys its memory by sender, so another peer
     // can submit a different op under an opId of ours that it saw in a broadcast; if we had not heard
@@ -94,10 +102,17 @@ export function createReplica({ manifest, maxPending = 2000 }: { manifest: Manif
     return effects;
   }
 
-  function onRejected({ opId, reason }: Extract<ServerMessage, { type: "rejected" }>): Effects {
-    const effects: Effects = { send: [], rejected: [], resync: false };
+  function onRejected({ opId, reason, retryAfterMs }: Extract<ServerMessage, { type: "rejected" }>): Effects {
+    const effects: Effects = { rejected: [], resync: false };
     const mine = pending.find((each) => each.opId === opId);
     if (!mine) return effects;
+
+    // Too fast. Nothing is wrong with the op: it and everything after it (the room refuses those too,
+    // to keep the order) count as unsent again, and the transport waits before it sends anything.
+    if (reason === RejectReason.enum.rate_limited) {
+      for (const each of pending.slice(pending.indexOf(mine))) each.inFlight = false;
+      return { ...effects, pauseMs: retryAfterMs ?? 1000 };
+    }
 
     // Not applied, and nothing wrong with the op: keep it and come back through a fresh welcome,
     // after a pause that GROWS (peer.ts), which resends everything pending.
@@ -108,13 +123,14 @@ export function createReplica({ manifest, maxPending = 2000 }: { manifest: Manif
       // is already there (or no longer makes sense): drop it quietly. If it WOULD change something,
       // that proves nothing: it may have been applied and then overwritten, and sending it again would
       // put an old write on top of a newer one, or bring back a node someone removed. So only an op
-      // that never reached a socket is sent again; any other is given up and the user is told.
+      // that no EARLIER connection ever carried is sent again; any other is given up and the user is told.
       // E6.1a's journal remembers every opId for good; from then on a resend is always safe.
       const alreadyThere = applyOp(confirmed, mine.op) === confirmed;
-      if (!alreadyThere && !mine.everSent && mine.staleCount < MAX_STALE_RETRIES) {
+      if (!alreadyThere && !mine.maybeApplied && mine.staleCount < MAX_STALE_RETRIES) {
         mine.staleCount++;
         mine.baseSeq = seq; // honest again: it is now written against what we have seen
-        return { ...effects, send: [wire(mine)] };
+        mine.inFlight = false; // takeSendable() sends it again
+        return effects;
       }
       pending = pending.filter((each) => each !== mine);
       rebuild();
@@ -136,9 +152,24 @@ export function createReplica({ manifest, maxPending = 2000 }: { manifest: Manif
     get pendingCount(): number { return pending.length; },
     get revision(): number { return revision; },
 
-    /** The transport reports what it actually wrote to a socket (see the "stale" rule above). */
-    markSent(opIds: readonly string[]): void {
-      for (const each of pending) if (opIds.includes(each.opId)) each.everSent = true;
+    /**
+     * What the transport should write to the socket NOW: the oldest unsent ops, in order, as far as the
+     * window allows. Calling this IS sending: never call it without writing the result to the wire.
+     * The window is what keeps a peer that made 2,000 edits offline inside the room's rate limit: the
+     * server's answers pace the client, with no timer and no guess at the server's budget.
+     */
+    takeSendable(): ClientOp[] {
+      let room = window - pending.filter((each) => each.inFlight).length;
+      const out: ClientOp[] = [];
+      for (const each of pending) {
+        if (room <= 0) break;
+        if (each.inFlight) continue;
+        // In order, always: never let an op out while an OLDER one is still waiting to be sent.
+        each.inFlight = true;
+        out.push(wire(each));
+        room--;
+      }
+      return out;
     },
 
     /** The peer has ended for good: forget what was never confirmed, and return it so the caller can say so. */
@@ -157,14 +188,26 @@ export function createReplica({ manifest, maxPending = 2000 }: { manifest: Manif
       if (!clientOp.success) return { ok: false, reason: "invalid_op" }; // e.g. props over 32 KB: the server would drop the connection
       const verdict = validate(optimistic, op, manifest);
       if (!verdict.ok) return { ok: false, reason: verdict.reason };
-      if (applyOpInto(optimistic, clientOp.data.op)) revision++;
-      pending.push({ ...clientOp.data, staleCount: 0, everSent: false });
-      return { ok: true, send: clientOp.data };
+      // An edit that changes nothing (a drag that ended where it began) is not worth a message.
+      if (!applyOpInto(optimistic, clientOp.data.op)) return { ok: true, opId: clientOp.data.opId };
+      revision++;
+      pending.push({ ...clientOp.data, staleCount: 0, inFlight: false, maybeApplied: false });
+      return { ok: true, opId: clientOp.data.opId };
     },
 
     receive(message: ServerMessage): Effects {
-      if (message.type === "welcome") return onWelcome(message.doc, message.seq);
-      return message.type === "op" ? onOp(message) : onRejected(message);
+      switch (message.type) {
+        case "welcome": return onWelcome(message.doc, message.seq);
+        case "op": return onOp(message);
+        case "rejected": return onRejected(message);
+        case "ack": {
+          // The server found the op changed nothing: the wait is over, and so is our guess about it.
+          const before = pending.length;
+          pending = pending.filter((each) => each.opId !== message.opId);
+          if (pending.length !== before) rebuild();
+          return { rejected: [], resync: false };
+        }
+      }
     },
   };
 }

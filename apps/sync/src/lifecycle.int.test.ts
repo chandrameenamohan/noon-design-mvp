@@ -7,7 +7,8 @@ import { signSessionToken } from "@noon/session-token";
 import { connect, TEST_ORG, TEST_SECRET, until, useSyncServer } from "./testing.ts";
 
 const HEARTBEAT_MS = 150;
-const ctx = useSyncServer({ heartbeatMs: HEARTBEAT_MS, maxBufferedBytes: 1024 * 1024 });
+// This file floods on purpose (a stalled reader, a full backlog): the op budget of E2.9 is lifted so that it tests what it means to test.
+const ctx = useSyncServer({ heartbeatMs: HEARTBEAT_MS, maxBufferedBytes: 1024 * 1024, rate: { perSecond: 1_000_000, burst: 1_000_000 } });
 const add = (nodeId: string, props: Record<string, string> = {}): Op => ({ type: "add_node", nodeId, parentId: ROOT_ID, index: 99, component: "Text", props: { value: "x", ...props } });
 
 function upgradeStatus(url: string, protocols: string[]): Promise<number> {
