@@ -16,7 +16,7 @@ function openStore(documentId: string, onRejected: (rejection: Rejection) => voi
     peer,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     // peer.doc is edited IN PLACE and never changes identity, so the snapshot is built from what does move.
-    snapshot: () => `${String(peer.revision)}:${String(peer.pendingCount)}:${peer.status}`,
+    snapshot: () => `${String(peer.revision)}:${String(peer.pendingCount)}:${peer.status}:${String(peer.presenceRevision)}`,
   };
 }
 const NOTHING = { subscribe: () => () => undefined, snapshot: () => "" };

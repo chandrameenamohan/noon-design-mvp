@@ -50,7 +50,7 @@ test("when the last peer leaves the document is saved, the room is dropped, and 
   expect(stored).toMatchObject({ rows: [{ content: expected, seq: "3" }] }); // bigint arrives as a string
 
   const again = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
-  expect(await again.next("welcome")).toEqual({ type: "welcome", doc: expected, seq: 3 });
+  expect(await again.next("welcome")).toMatchObject({ type: "welcome", doc: expected, seq: 3, peers: [] });
   const opId = again.send(add("after-reopen"));
   expect((await again.next("op", (m) => m.opId === opId)).seq).toBe(4); // numbering continues, it does not restart
   again.close();

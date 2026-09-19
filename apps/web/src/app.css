@@ -17,3 +17,7 @@ button:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
 .inspector label { display: inline-block; min-width: 6rem; }
 input, select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid #5b6472; border-radius: 4px; }
 .refusal { background: #fdecea; border: 1px solid #b42318; padding: 0.5rem 0.75rem; border-radius: 4px; }
+.canvas { position: relative; }
+.also-here { display: flex; gap: 0.75rem; list-style: none; padding: 0; margin: 0.5rem 0; min-height: 1.5rem; font-weight: 600; }
+.selected-by { font-size: 0.8rem; font-weight: 600; margin-inline-start: 0.4rem; }
+.presence-cursor { position: absolute; pointer-events: none; transform: translate(4px, 4px); padding: 0 0.3rem; border-radius: 0 6px 6px 6px; color: #fff; font-size: 0.75rem; white-space: nowrap; }

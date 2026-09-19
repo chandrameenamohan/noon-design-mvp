@@ -1,4 +1,4 @@
-import { ServerMessage, type ClientMessage, type Doc, type Manifest, type Op } from "@noon/contracts";
+import { ServerMessage, type ClientMessage, type Doc, type Presence, type Manifest, type Op } from "@noon/contracts";
 import { createReplica, type LocalResult, type Rejection } from "./replica.ts";
 
 export type { Rejection };
@@ -23,7 +23,12 @@ export type PeerOptions = {
   /** We are waiting (for a welcome, or for an answer to an op) and the server has said NOTHING for this long: the connection is dead even if it looks open. */
   ackTimeoutMs?: number;
   maxPending?: number;
+  /** Presence timing: send our own at most every `sendEveryMs`, repeat it every `refreshMs`, forget a peer silent for `forgetAfterMs`. */
+  presence?: { sendEveryMs: number; refreshMs: number; forgetAfterMs: number };
 };
+
+/** What we show of ourselves: where the pointer is (a fraction of the canvas) and what is selected. */
+type OwnPresence = Pick<Presence, "cursor" | "selection">;
 
 // Close codes that reconnecting cannot cure (apps/sync/src/server.ts): a message the server could
 // not accept (our bug), no such document, a corrupt document, a frame over the size limit.
@@ -35,7 +40,7 @@ const KNOWN_TYPES: ReadonlySet<unknown> = new Set(ServerMessage.options.map((opt
  * all edit through this. The thinking is in replica.ts; this file is only the wire: connect, wait
  * for the welcome, send, reconnect.
  */
-export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending }: PeerOptions) {
+export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
   const replica = createReplica({ manifest, ...(maxPending === undefined ? {} : { maxPending }) });
   let status: PeerStatus = "closed"; // until open() below, a line from now; this way the first onStatus is "connecting"
   let closedBecause: string | undefined;
@@ -63,10 +68,41 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     for (const op of replica.takeSendable()) socket?.send(JSON.stringify({ type: "op", ...op } satisfies ClientMessage));
   }
 
+  // --- presence: who else is here. Not part of the document, so not the replica's business. ---
+  // Others are kept with the time we last heard of them: a connection that DIES says no goodbye, and
+  // the server may not notice for a while, so silence is what removes a peer here (F7: within 5 s).
+  let others = new Map<string, { entry: Presence; heardAt: number }>();
+  let presenceRevision = 0;
+  let own: OwnPresence | undefined;
+  let ownSentAt = 0;
+  let ownTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function changePresence(change: () => void): void {
+    change();
+    presenceRevision++;
+    onChange?.();
+  }
+
+  /** Sends our presence now, or as soon as the interval allows; always the LATEST state, never a backlog. */
+  function sendOwn(): void {
+    clearTimeout(ownTimer);
+    ownTimer = undefined;
+    if (own === undefined || status === "closed") return;
+    const wait = ownSentAt + timing.sendEveryMs - Date.now();
+    if (status === "live" && wait <= 0) {
+      socket?.send(JSON.stringify({ type: "presence", ...own } satisfies ClientMessage));
+      ownSentAt = Date.now();
+      ownTimer = setTimeout(sendOwn, timing.refreshMs); // "still here": what keeps us in the others' lists
+    } else if (status === "live") ownTimer = setTimeout(sendOwn, wait);
+    // not live: the next welcome calls this again
+  }
+
   function finish(reason: string): void {
     closedBecause = reason;
     clearTimeout(retryTimer);
     clearInterval(watchdog);
+    clearInterval(sweeper);
+    clearTimeout(ownTimer);
     endPause();
     const old = socket;
     socket = undefined; // its close event must not start a reconnect
@@ -120,14 +156,30 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     if (!parsed.success && type === "rejected") parsed = ServerMessage.safeParse({ ...(raw as object), reason: "unavailable" });
     if (!parsed.success) { finish("protocol"); return; }
 
+    const message = parsed.data;
+    if (message.type === "presence") {
+      const entry: Presence = { peerId: message.peerId, actor: message.actor, name: message.name, cursor: message.cursor, selection: message.selection };
+      changePresence(() => others.set(entry.peerId, { entry, heardAt: Date.now() }));
+      return;
+    }
+    if (message.type === "presence_left") {
+      if (others.has(message.peerId)) changePresence(() => others.delete(message.peerId));
+      return;
+    }
+
     const [revisionBefore, pendingBefore] = [replica.revision, replica.pendingCount];
-    const effects = replica.receive(parsed.data);
+    const effects = replica.receive(message);
     if (effects.fatal) { finish(effects.fatal); return; }
-    if (parsed.data.type === "welcome") {
+    if (message.type === "welcome") {
+      const here = message.peers ?? [];
+      // The room's list replaces ours: whoever we knew on the old connection may be long gone.
+      changePresence(() => { others = new Map(here.map((entry) => [entry.peerId, { entry, heardAt: Date.now() }])); });
+      ownSentAt = 0; // the new room has never heard of us
       endPause(); // a pause belonged to the old connection
       liveSince = Date.now();
       setStatus("live");
     }
+    if (message.type === "welcome") sendOwn();
     for (const rejection of effects.rejected) onRejected?.(rejection);
     // The picture changed, or what is still unsaved did (an acknowledgement changes only that).
     if (replica.revision !== revisionBefore || replica.pendingCount !== pendingBefore) onChange?.();
@@ -183,6 +235,13 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   }, ackTimeoutMs / 2);
   (watchdog as { unref?: () => void }).unref?.(); // in Node, a timer must not keep a finished script alive
 
+  // Forget whoever has been silent too long. One coarse timer, like the watchdog.
+  const sweeper = setInterval(() => {
+    const silent = [...others].filter(([, each]) => Date.now() - each.heardAt > timing.forgetAfterMs);
+    if (silent.length > 0) changePresence(() => { for (const [peerId] of silent) others.delete(peerId); });
+  }, timing.forgetAfterMs / 4);
+  (sweeper as { unref?: () => void }).unref?.();
+
   // Not now: a callback that runs before connectPeer has returned cannot use the peer it is given to.
   queueMicrotask(() => void open());
 
@@ -195,6 +254,15 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     get pendingCount(): number { return replica.pendingCount; },
     /** Goes up whenever `doc` changes. `doc` is edited in place, so THIS is what a UI subscribes to (React: the useSyncExternalStore snapshot). */
     get revision(): number { return replica.revision; },
+
+    /** Everyone else in the document, as last heard. A NEW array whenever presenceRevision moves. */
+    get others(): readonly Presence[] { return [...others.values()].map((each) => each.entry); },
+    get presenceRevision(): number { return presenceRevision; },
+    /** Where our pointer is and what we have selected. A peer that never calls this has no presence (the AI worker, the git peer). */
+    setPresence(next: OwnPresence): void {
+      own = next;
+      sendOwn(); // now if the interval allows, otherwise (re)scheduled for when it does; it always carries the latest state
+    },
 
     /** Make an edit. Shown at once; sent now, or after the next welcome if we are not live. */
     submit(op: Op): LocalResult {

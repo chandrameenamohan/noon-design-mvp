@@ -14,6 +14,9 @@ export type LocalResult = { ok: true; opId: string } | { ok: false; reason: Reje
  * `inFlight`: on the wire of the CURRENT connection, not answered yet.
  * `maybeApplied`: it was on the wire of an EARLIER connection, so a room we no longer talk to may have applied it.
  */
+/** Everything the server says about the DOCUMENT. Presence is not the replica's business (peer.ts keeps it). */
+export type DocMessage = Exclude<ServerMessage, { type: "presence" | "presence_left" }>;
+
 type Pending = ClientOp & { staleCount: number; inFlight: boolean; maybeApplied: boolean };
 
 // An op that comes back "stale" is rebased and sent again; if the room STILL cannot place it, stop.
@@ -207,7 +210,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
       return { ok: true, opId: clientOp.data.opId };
     },
 
-    receive(message: ServerMessage): Effects {
+    receive(message: DocMessage): Effects {
       switch (message.type) {
         case "welcome": return onWelcome(message.doc, message.seq);
         case "op": return onOp(message);

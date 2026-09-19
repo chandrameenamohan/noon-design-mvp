@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { Doc, DocNode, Manifest, Op } from "@noon/contracts";
+import { useEffect, useRef, useState } from "react";
+import type { Doc, DocNode, Manifest, Op, Presence } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
 import { Inspector } from "./Inspector.tsx";
@@ -37,25 +37,34 @@ function labelsOf(doc: Doc): Map<string, string> {
   return labels;
 }
 
+/** A colour per connection, from its id: the same person keeps the same colour in every window. */
+function colourOf(peerId: string): string {
+  let hash = 0;
+  for (const char of peerId) hash = (hash * 31 + char.charCodeAt(0)) % 360;
+  return `hsl(${String(hash)} 70% 35%)`; // dark enough to be read as text on white
+}
+
 /**
  * One node as a wireframe: its name, its props, its children. NOT the real component: the real app
  * is rendered by the sandbox preview (epic 4). ponytail: every node re-rendered on every change (the
  * document is at most 64 deep and checkDoc'd on arrival); memo per node, keyed on the node object
  * (which keeps its identity while untouched), is the upgrade when a big document lags.
  */
-function NodeView({ doc, node, labels, selected, onSelect }: { doc: Doc; node: DocNode; labels: Map<string, string>; selected: string; onSelect: (id: string) => void }) {
+function NodeView({ doc, node, labels, selected, selectedBy, onSelect }: { doc: Doc; node: DocNode; labels: Map<string, string>; selected: string; selectedBy: Map<string, Presence[]>; onSelect: (id: string) => void }) {
   const direction = node.props["direction"] === "row" ? "row" : "column";
+  const others = selectedBy.get(node.id) ?? [];
   return (
-    <div data-node-id={node.id} data-component={node.component} className={node.id === selected ? "node selected" : "node"}>
+    <div data-node-id={node.id} data-component={node.component} className={node.id === selected ? "node selected" : "node"} {...(others[0] ? { "data-selected-by": others.map((p) => p.name).join(", "), style: { outline: `2px solid ${colourOf(others[0].peerId)}` } } : {})}>
       <button type="button" className="node-name" aria-pressed={node.id === selected} onClick={() => { onSelect(node.id); }}>
         <span className="visually-hidden">Select </span>
         {labels.get(node.id) ?? node.component}
       </button>
+      {others.map((p) => <span key={p.peerId} className="selected-by" style={{ color: colourOf(p.peerId) }}>{p.name}</span>)}
       <span className="node-props">{Object.entries(node.props).map(([key, value]) => `${key}=${String(value)}`).join(" ")}</span>
       <div data-children style={{ flexDirection: direction }}>
         {node.children.map((id) => {
           const child = doc.nodes[id];
-          return child ? <NodeView key={id} doc={doc} node={child} labels={labels} selected={selected} onSelect={onSelect} /> : null;
+          return child ? <NodeView key={id} doc={doc} node={child} labels={labels} selected={selected} selectedBy={selectedBy} onSelect={onSelect} /> : null;
         })}
       </div>
     </div>
@@ -65,6 +74,10 @@ function NodeView({ doc, node, labels, selected, onSelect }: { doc: Doc; node: D
 export function Canvas({ documentId }: { documentId: string }) {
   const { peer, refusals, refuse, dismiss } = usePeer(documentId);
   const [wanted, setSelected] = useState(ROOT_ID);
+  // A ref, not state: the pointer moves sixty times a second and nothing on OUR screen depends on it.
+  const cursor = useRef<Presence["cursor"]>(null);
+  const selection = peer && wanted !== ROOT_ID && peer.doc.nodes[wanted] ? wanted : null;
+  useEffect(() => { peer?.setPresence({ cursor: cursor.current, selection }); }, [peer, selection]);
   if (!peer) return <main><h1>Noon MVP</h1><p><span role="status">connecting</span></p></main>;
   if (peer.status === "closed") {
     // The peer ended for good (peer.closedBecause: no session, a fatal close code, a corrupt document).
@@ -76,6 +89,8 @@ export function Canvas({ documentId }: { documentId: string }) {
   // DERIVED, not stored: if someone else removes the selected node, the selection is simply the page again.
   const node = doc.nodes[wanted] ?? root;
   const labels = labelsOf(doc);
+  const selectedBy = Map.groupBy(peer.others.filter((p) => p.selection !== null), (p) => p.selection ?? "");
+  const point = (next: Presence["cursor"]): void => { cursor.current = next; peer.setPresence({ cursor: next, selection }); };
   const holdsChildren = (each: DocNode): boolean => each.parentId === null || componentOf(each.component)?.acceptsChildren === true;
   const containers = [...labels].flatMap(([id, label]) => { const each = doc.nodes[id]; return each && holdsChildren(each) ? [{ id, label }] : []; });
 
@@ -103,9 +118,26 @@ export function Canvas({ documentId }: { documentId: string }) {
           {sentenceFor(refusal.reason)} <button type="button" onClick={() => { dismiss(refusal.id); }}>Dismiss</button>
         </p>
       ))}
+      <ul aria-label="Also here" className="also-here">
+        {peer.others.map((p) => <li key={p.peerId} style={{ color: colourOf(p.peerId) }}>{p.name === "" ? p.actor.kind : p.name}</li>)}
+      </ul>
+      {/* Said, not shown: someone who cannot see the canvas still learns that their selection is gone. */}
+      <p aria-live="polite" className="visually-hidden">{wanted !== ROOT_ID && !doc.nodes[wanted] ? "The element you had selected was removed by someone else." : ""}</p>
       <div className="workspace">
-        <section aria-label="Canvas" className="canvas">
-          <NodeView doc={doc} node={root} labels={labels} selected={node.id} onSelect={setSelected} />
+        <section
+          aria-label="Canvas"
+          className="canvas"
+          onPointerMove={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            // A FRACTION of the canvas, not pixels: the other window is a different size.
+            point({ x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)), y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)) });
+          }}
+          onPointerLeave={() => { point(null); }}
+        >
+          <NodeView doc={doc} node={root} labels={labels} selected={node.id} selectedBy={selectedBy} onSelect={setSelected} />
+          {peer.others.map((p) => p.cursor && (
+            <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
+          ))}
         </section>
         <Inspector key={node.id} doc={doc} node={node} label={labels.get(node.id) ?? node.component} component={componentOf(node.component)} containers={containers} submit={submit} />
       </div>

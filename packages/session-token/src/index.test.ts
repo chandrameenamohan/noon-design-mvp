@@ -113,3 +113,11 @@ test("a token that would already be expired cannot be minted", () => {
   expect(() => mint({ ttlSeconds: 0 })).toThrow(/ttl/);
   expect(() => mint({ ttlSeconds: -5 })).toThrow(/ttl/);
 });
+
+test("a token can carry the display name the api knows; without one the claims simply have none", () => {
+  const named = check(mint({ name: "Ada Lovelace" }));
+  expect(named.ok && named.claims.name).toBe("Ada Lovelace");
+  const plain = check(mint());
+  expect(plain.ok && "name" in plain.claims).toBe(false);
+  expect(() => mint({ name: "x".repeat(201) })).toThrow();
+});

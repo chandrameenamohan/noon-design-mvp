@@ -24,8 +24,8 @@ export function useSyncServer(options: Omit<Parameters<typeof startSyncServer>[0
   };
 }
 
-const tokenFor = (documentId: string, userId: string, orgId: string): string =>
-  signSessionToken({ userId, orgId, documentId, secret: TEST_SECRET, ttlSeconds: 60 });
+const tokenFor = (documentId: string, userId: string, orgId: string, name?: string): string =>
+  signSessionToken({ userId, orgId, documentId, secret: TEST_SECRET, ttlSeconds: 60, ...(name === undefined ? {} : { name }) });
 
 /** A test peer: a real WebSocket plus an inbox you can await on. */
 export type TestPeer = {
@@ -41,10 +41,10 @@ export type TestPeer = {
   close(): void;
 };
 
-export async function connect(url: string, documentId: string, userId: string = randomUUID(), wsOptions: WebSocket.ClientOptions = {}, orgId: string = TEST_ORG): Promise<TestPeer> {
+export async function connect(url: string, documentId: string, userId: string = randomUUID(), wsOptions: WebSocket.ClientOptions = {}, orgId: string = TEST_ORG, name?: string): Promise<TestPeer> {
   // The token rides in the Sec-WebSocket-Protocol header: a browser cannot set any other header on
   // a WebSocket, and a query string would end up in proxy logs and Referer headers.
-  const socket = new WebSocket(`${url}/documents/${documentId}`, ["noon.v1", tokenFor(documentId, userId, orgId)], wsOptions);
+  const socket = new WebSocket(`${url}/documents/${documentId}`, ["noon.v1", tokenFor(documentId, userId, orgId, name)], wsOptions);
   const inbox: ServerMessage[] = [];
   let lastSeq = 0;
   const waiters: { test: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] = [];

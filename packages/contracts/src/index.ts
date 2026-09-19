@@ -198,12 +198,31 @@ export type ClientOp = z.infer<typeof ClientOp>;
 export const SequencedOp = z.object({ seq: z.number().int().min(1), opId: z.uuid(), actor: Actor, op: Op });
 export type SequencedOp = z.infer<typeof SequencedOp>;
 
-// --- WebSocket messages (presence messages join in E2.6) -------------------------------------
-export const ClientMessage = z.discriminatedUnion("type", [ClientOp.extend({ type: z.literal("op") })]);
+// --- Presence: who else is here, where they point, what they have selected ---------------------
+// Not an op: it is never put in order, never stored, and nothing about it survives a restart (F7).
+/** Where the pointer is, as a FRACTION of the canvas (0..1): two windows are never the same size. */
+const Cursor = z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) });
+const PresenceState = { cursor: Cursor.nullable(), selection: NodeId.nullable() };
+/**
+ * One CONNECTION's presence (a user with two tabs is here twice). `peerId` is minted by the room for
+ * the connection; `actor` and `name` come from its verified session, never from a message.
+ */
+export const Presence = z.object({ peerId: z.string().min(1).max(100), actor: Actor, name: z.string().max(200), ...PresenceState });
+export type Presence = z.infer<typeof Presence>;
+
+// --- WebSocket messages ------------------------------------------------------------------------
+export const ClientMessage = z.discriminatedUnion("type", [
+  ClientOp.extend({ type: z.literal("op") }),
+  z.strictObject({ type: z.literal("presence"), ...PresenceState }), // strict: a client cannot slip in a name or an actor
+]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerMessage = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0) }),
+  // `you`: this connection's own peerId. `peers`: who was already here. Optional, so that a welcome
+  // from a server that predates presence still parses: absent means "nobody else is here".
+  z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0), you: z.string().optional(), peers: z.array(Presence).optional() }),
+  Presence.extend({ type: z.literal("presence") }),
+  z.object({ type: z.literal("presence_left"), peerId: z.string() }),
   SequencedOp.extend({ type: z.literal("op") }),
   z.object({ type: z.literal("rejected"), opId: z.uuid(), reason: RejectReason, retryAfterMs: z.number().int().min(0).optional() }),
   // "Received, and it changed nothing" (the value was already that, the node already there). It gets

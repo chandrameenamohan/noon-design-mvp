@@ -1,4 +1,4 @@
-import type { Actor, ClientOp, Doc, Manifest, Op, SequencedOp, ServerMessage } from "@noon/contracts";
+import type { Actor, ClientMessage, ClientOp, Doc, Manifest, Op, Presence, SequencedOp, ServerMessage } from "@noon/contracts";
 import { applyOpInto, changes, nodeOf, validate } from "@noon/doc-model";
 
 /**
@@ -11,6 +11,10 @@ export type Peer = {
   /** The session this connection was opened with: what presence, role checks and revocation look up. */
   session: { userId: string; orgId: string; expiresAt: number };
   send(message: ServerMessage): void;
+  /** The same, already serialised. A broadcast is turned into JSON ONCE, not once per recipient. */
+  sendText?(text: string): void;
+  /** What presence shows for this connection; from the verified session. */
+  name?: string;
   /** Ends this peer's connection. Called for a peer that keeps sending while it is being refused. */
   kick?(): void;
 };
@@ -27,6 +31,9 @@ const DEFAULT_RATE: RateLimit = { perSecond: 100, burst: 200, maxStrikes: 500 };
 const MAX_RETRY_AFTER_MS = 60_000;
 const REMEMBERED_NO_OPS = 2000;
 const WORTH_RETURNING_FOR = 8; // tokens
+// Presence faster than this is dropped, not queued: only the latest pointer position matters.
+// peer-client sends at most every 50 ms, so an honest client never loses one.
+const MIN_PRESENCE_INTERVAL_MS = 25;
 
 export type RoomLimits = {
   maxNodes: number;
@@ -156,6 +163,21 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     return false;
   }
 
+  /** To everyone (but `except`). Serialised once: with N peers at 20 presence messages a second each, once per recipient is N x N x 20 stringifies. */
+  function broadcast(message: ServerMessage, except?: Peer): void {
+    let text: string | undefined;
+    for (const each of peers) {
+      if (each === except) continue;
+      if (each.sendText) each.sendText((text ??= JSON.stringify(message)));
+      else each.send(message);
+    }
+  }
+
+  // Presence lives HERE and nowhere else: in this process's memory, per connection, gone with it.
+  const present = new Map<Peer, { entry: Presence; at: number }>();
+  let nextPeerId = 0;
+  const entryOf = (peer: Peer): Presence => present.get(peer)?.entry ?? { peerId: "", actor: peer.actor, name: peer.name ?? "", cursor: null, selection: null };
+
   function remember(key: string, op: SequencedOp): void {
     const bytes = JSON.stringify(op.op).length;
     remembered.set(key, { op, bytes });
@@ -229,8 +251,7 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     seq = sequenced.seq;
     nodeCount = op.type === "add_node" ? nodeCount + 1 : op.type === "remove_node" ? Object.keys(doc.nodes).length : nodeCount;
     remember(key, sequenced);
-    const message: ServerMessage = { type: "op", ...sequenced };
-    for (const each of peers) each.send(message); // the sender's copy is its acknowledgement
+    broadcast({ type: "op", ...sequenced }); // the sender's copy is its acknowledgement
   }
 
   return {
@@ -241,13 +262,28 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     get doc() { return doc; },
 
     join(peer: Peer): void {
+      const peerId = `p${String(++nextPeerId)}`; // unique in this room, which is all it needs to be
+      const others = [...present.values()].map((each) => each.entry);
       peers.add(peer);
+      present.set(peer, { entry: { ...entryOf(peer), peerId }, at: -Infinity });
       // A COPY: the room goes on editing `doc` in place, and a message must not change after it is sent.
-      peer.send({ type: "welcome", doc: structuredClone(doc), seq });
+      peer.send({ type: "welcome", doc: structuredClone(doc), seq, you: peerId, peers: others });
     },
 
     leave(peer: Peer): void {
       peers.delete(peer);
+      const was = present.get(peer);
+      present.delete(peer);
+      if (was) broadcast({ type: "presence_left", peerId: was.entry.peerId });
+    },
+
+    /** Relays where a peer points. Not an op: no queue, no seq, no persist. Too fast = dropped (the next one replaces it anyway). */
+    presence(peer: Peer, { cursor, selection }: Omit<Extract<ClientMessage, { type: "presence" }>, "type">): void {
+      const was = present.get(peer);
+      if (!was || !peers.has(peer) || now() - was.at < MIN_PRESENCE_INTERVAL_MS) return;
+      const entry: Presence = { ...was.entry, cursor, selection };
+      present.set(peer, { entry, at: now() });
+      broadcast({ type: "presence", ...entry }, peer);
     },
 
     /** Resolves when this op has been fully handled (accepted and broadcast, or refused). Never rejects. */

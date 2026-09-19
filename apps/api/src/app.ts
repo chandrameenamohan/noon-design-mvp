@@ -164,7 +164,7 @@ export function buildApp({ db, identify, sessions }: { db: Db; identify: Identif
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     if (!doc) return notFound(c);
     const now = Math.floor(Date.now() / 1000);
-    const token = signSessionToken({ userId: c.var.user.id, orgId: doc.orgId, documentId: doc.id, secret: sessions.secret, ttlSeconds: sessions.ttlSeconds, now });
+    const token = signSessionToken({ userId: c.var.user.id, name: c.var.user.name, orgId: doc.orgId, documentId: doc.id, secret: sessions.secret, ttlSeconds: sessions.ttlSeconds, now });
     return c.json({
       wsUrl: `${sessions.syncUrl}/documents/${doc.id}`,
       token,

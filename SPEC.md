@@ -207,7 +207,11 @@ conditional, `.map()`, extra statement or hook, second export.
   shows the reason; other peers never see it.
 - **F7. Presence.** Each peer sees the others' name, cursor and selection.
   A closed tab's presence vanishes from others within 5 s. Presence is never
-  stored (nothing about it survives a sync restart).
+  stored (nothing about it survives a sync restart). Presence belongs to the
+  CONNECTION (two tabs are two presences); its name and actor come from the
+  session token, never from a message; the cursor is a fraction of the canvas;
+  it is not an op (no seq, no queue, no persist); a peer silent for 5 s is
+  forgotten by the viewers, because a dead connection says no goodbye.
 - **F8. Idle persistence (pre-journal).** A document reopened after all peers
   left shows its last state. *Known limit until F18:* a sync crash may lose
   edits since the last idle save.

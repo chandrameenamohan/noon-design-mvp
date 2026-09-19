@@ -9,7 +9,7 @@ const add = (nodeId: string, parentId = ROOT_ID, component = "Stack"): Op => ({ 
 
 test("a joining peer is welcomed with the document and its sequence number", async () => {
   const peer = await connect(ctx.server.url, randomUUID());
-  expect(await peer.next("welcome")).toEqual({ type: "welcome", doc: emptyDoc(), seq: 0 });
+  expect(await peer.next("welcome")).toMatchObject({ type: "welcome", doc: emptyDoc(), seq: 0, peers: [] });
   peer.close();
 });
 
@@ -27,7 +27,7 @@ test("ops from several peers get ONE order, every peer sees the same order, and 
 
   const expected = seenByA.reduce<Doc>((doc, m) => applyOp(doc, m.op), emptyDoc());
   const late = await connect(ctx.server.url, documentId);
-  expect(await late.next("welcome")).toEqual({ type: "welcome", doc: expected, seq: 5 });
+  expect(await late.next("welcome")).toMatchObject({ type: "welcome", doc: expected, seq: 5 });
   for (const peer of [a, b, late]) peer.close();
 });
 

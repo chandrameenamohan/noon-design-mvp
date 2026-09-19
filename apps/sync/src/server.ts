@@ -99,7 +99,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
     return { room: createRoom({ doc, seq: stored.seq, manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
   }
 
-  async function serve(ws: WebSocket, documentId: string, claims: { userId: string; orgId: string; expiresAt: number; actor: { kind: "user" | "agent" | "git"; runId?: string } }): Promise<void> {
+  async function serve(ws: WebSocket, documentId: string, claims: { userId: string; orgId: string; expiresAt: number; actor: { kind: "user" | "agent" | "git"; runId?: string }; name?: string }): Promise<void> {
     // Listeners first: between the upgrade and the end of the load, this socket can already fail.
     // Without an 'error' listener a protocol error on ONE socket (an oversized frame, for one) would be
     // an uncaught exception and take the whole process down (learning-tests/ws).
@@ -143,6 +143,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
         if (ws.bufferedAmount > maxBufferedBytes) ws.terminate();
         else ws.send(JSON.stringify(message));
       },
+      sendText: (text) => { if (ws.readyState === ws.OPEN && ws.bufferedAmount <= maxBufferedBytes) ws.send(text); else if (ws.readyState === ws.OPEN) ws.terminate(); },
+      ...(claims.name === undefined ? {} : { name: claims.name }),
       kick: () => { ws.close(CLOSE.tooManyRequests, "rate_limited"); },
     };
 
@@ -175,7 +177,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
         ws.close(CLOSE.invalidMessage, "invalid_message");
         return;
       }
-      void room.submit(peer, parsed.data);
+      if (parsed.data.type === "presence") room.presence(peer, parsed.data);
+      else void room.submit(peer, parsed.data);
     };
     room.join(peer); // welcome first...
     for (const data of early.splice(0)) onFrame(data); // ...then whatever arrived while the document was loading

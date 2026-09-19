@@ -27,12 +27,14 @@ const Payload = z.object({
   aud: z.literal("sync"),
   knd: z.enum(["user", "agent", "git"]).default("user"),
   run: z.string().min(1).max(100).optional(),
+  // The display name the api knows for `sub`. Presence shows it; a client cannot choose its own.
+  nam: z.string().max(200).optional(),
   iat: z.number().int(),
   exp: z.number().int(),
 });
 
 type SessionActor = { kind: "user" | "agent" | "git"; runId?: string };
-type SessionClaims = { userId: string; orgId: string; documentId: string; expiresAt: number; actor: SessionActor };
+type SessionClaims = { userId: string; orgId: string; documentId: string; expiresAt: number; actor: SessionActor; name?: string };
 type VerifyResult =
   | { ok: true; claims: SessionClaims }
   | { ok: false; reason: "malformed" | "bad_signature" | "expired" | "wrong_document" };
@@ -44,7 +46,7 @@ function sign(data: string, secret: string): Buffer {
   return createHmac("sha256", secret).update(data).digest();
 }
 
-export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds, now = nowSeconds(), actor = { kind: "user" } }: {
+export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds, now = nowSeconds(), actor = { kind: "user" }, name }: {
   userId: string;
   orgId: string;
   documentId: string;
@@ -53,9 +55,10 @@ export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds
   now?: number;
   /** Defaults to a person. Only the api decides this; a client can never choose it. */
   actor?: SessionActor;
+  name?: string;
 }): string {
   if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1) throw new Error("session token ttl must be a whole number of seconds, at least 1");
-  const payload = Payload.parse({ sub: userId, org: orgId, doc: documentId, aud: "sync", knd: actor.kind, ...(actor.runId === undefined ? {} : { run: actor.runId }), iat: now, exp: now + ttlSeconds });
+  const payload = Payload.parse({ sub: userId, org: orgId, doc: documentId, aud: "sync", knd: actor.kind, ...(actor.runId === undefined ? {} : { run: actor.runId }), ...(name === undefined ? {} : { nam: name }), iat: now, exp: now + ttlSeconds });
   const body = `${HEADER}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   return `${body}.${sign(body, secret).toString("base64url")}`;
 }
@@ -112,6 +115,7 @@ export function verifySessionToken({ token, secrets, documentId, now = nowSecond
       documentId: parsed.data.doc,
       expiresAt: parsed.data.exp,
       actor: { kind: parsed.data.knd, ...(parsed.data.run === undefined ? {} : { runId: parsed.data.run }) },
+      ...(parsed.data.nam === undefined ? {} : { name: parsed.data.nam }),
     },
   };
 }

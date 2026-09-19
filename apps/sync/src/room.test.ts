@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { Actor, ClientOp, Manifest, Op, SequencedOp, ServerMessage } from "@noon/contracts";
 import { emptyDoc, ROOT_ID } from "@noon/doc-model";
 import { createRoom, type Peer } from "./room.ts";
@@ -25,7 +25,7 @@ test("the welcome carries a COPY of the document: later ops must not change a me
   room.join(a);
   const welcomed = a.inbox[0];
   await room.submit(a, clientOp(add("n1")));
-  expect(welcomed).toEqual({ type: "welcome", doc: emptyDoc(), seq: 0 });
+  expect(welcomed).toEqual({ type: "welcome", doc: emptyDoc(), seq: 0, you: "p1", peers: [] });
 });
 
 test("dedupe is per SENDER: a peer that replays an opId it saw in a broadcast gets its own op handled, not the other peer's answer", async () => {
@@ -287,4 +287,70 @@ test("a no-op is REMEMBERED: its resend stays a no-op even if the document has m
   await room.submit(b, same); // the resend of an ack b never heard: must not put 4 back over 9
   expect(room.doc.nodes["n"]?.props["gap"]).toBe(9);
   expect(b.inbox.at(-1)).toEqual({ type: "ack", opId: same.opId });
+});
+
+// --- E2.6 presence: relayed, remembered in memory for newcomers, never sequenced or persisted -----
+const presenceOf = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<ServerMessage, { type: "presence" }> => m.type === "presence");
+
+test("presence goes to the OTHERS, stamped with who sent it; it takes no seq and never reaches persist", async () => {
+  const persisted: SequencedOp[] = [];
+  const room = createRoom({ doc: emptyDoc(), manifest, persist: (op) => { persisted.push(op); return Promise.resolve(); } });
+  const [a, b] = [{ ...peer("a"), name: "Ada" }, peer("b")];
+  room.join(a); room.join(b);
+  room.presence(a, { cursor: { x: 0.1, y: 0.2 }, selection: "n1" });
+  await room.settled();
+  expect(presenceOf(b)).toEqual([{ type: "presence", peerId: expect.any(String) as string, actor: { kind: "user", id: "a" }, name: "Ada", cursor: { x: 0.1, y: 0.2 }, selection: "n1" }]);
+  expect(presenceOf(a)).toEqual([]); // not echoed to the sender
+  expect(room.seq).toBe(0);
+  expect(persisted).toEqual([]);
+  expect(JSON.stringify(room.doc)).not.toContain("0.1");
+});
+
+test("a newcomer is told who is already here (and its own peerId); someone who leaves is announced", () => {
+  const room = createRoom({ doc: emptyDoc(), manifest });
+  const [a, b] = [{ ...peer("a"), name: "Ada" }, peer("b")];
+  room.join(a);
+  room.presence(a, { cursor: null, selection: "n1" });
+  room.join(b);
+  const welcome = b.inbox[0];
+  expect(welcome?.type === "welcome" && welcome.peers?.map((p) => [p.name, p.selection])).toEqual([["Ada", "n1"]]);
+  expect(welcome?.type === "welcome" && typeof welcome.you).toBe("string");
+  room.leave(a);
+  const peerId = welcome?.type === "welcome" ? welcome.peers?.[0]?.peerId : undefined;
+  expect(b.inbox.at(-1)).toEqual({ type: "presence_left", peerId });
+  room.join(peer("c"));
+});
+
+test("two tabs of one user are two presences: presence belongs to the CONNECTION", () => {
+  const room = createRoom({ doc: emptyDoc(), manifest });
+  const [tab1, tab2, watcher] = [peer("u"), peer("u"), peer("w")];
+  room.join(tab1); room.join(tab2); room.join(watcher);
+  room.presence(tab1, { cursor: null, selection: "n1" });
+  room.presence(tab2, { cursor: null, selection: "n2" });
+  expect(new Set(presenceOf(watcher).map((p) => p.peerId)).size).toBe(2);
+});
+
+test("presence that arrives faster than the room relays it is dropped, and the room needs no timer for that", () => {
+  const clock = { now: 0 };
+  const room = createRoom({ doc: emptyDoc(), manifest, now: () => clock.now });
+  const [a, b] = [peer("a"), peer("b")];
+  room.join(a); room.join(b);
+  for (let i = 0; i < 100; i++) room.presence(a, { cursor: { x: i / 100, y: 0 }, selection: null });
+  expect(presenceOf(b)).toHaveLength(1);
+  clock.now += 30;
+  room.presence(a, { cursor: { x: 1, y: 1 }, selection: null });
+  expect(presenceOf(b)).toHaveLength(2);
+});
+
+test("a presence message is turned into JSON ONCE however many peers receive it", () => {
+  const room = createRoom({ doc: emptyDoc(), manifest });
+  const texts: string[] = [];
+  for (const n of [1, 2, 3]) room.join({ ...peer(`p${String(n)}`), sendText: (text: string) => void texts.push(text) });
+  const sender = peer("sender");
+  room.join(sender);
+  const stringify = vi.spyOn(JSON, "stringify");
+  room.presence(sender, { cursor: null, selection: "n1" });
+  expect(stringify).toHaveBeenCalledTimes(1);
+  stringify.mockRestore();
+  expect(texts.filter((t) => t.includes('"presence"'))).toHaveLength(3);
 });

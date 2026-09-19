@@ -1,17 +1,17 @@
 import { expect, test } from "vitest";
-import type { Actor, ClientOp, Doc, Op, ServerMessage } from "@noon/contracts";
+import type { Actor, ClientOp, Doc, Op } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { randomOp, seeded } from "@noon/doc-model/random-ops";
-import { createReplica } from "./replica.ts";
+import { createReplica, type DocMessage } from "./replica.ts";
 
 const ME: Actor = { kind: "user", id: "me" };
 const OTHER: Actor = { kind: "user", id: "other" };
 const add = (nodeId: string, parentId = "root", index = 0): Extract<Op, { type: "add_node" }> => ({ type: "add_node", nodeId, parentId, index, component: "Stack", props: {} });
 const text = (nodeId: string, value: string): Op => ({ type: "add_node", nodeId, parentId: "root", index: 0, component: "Text", props: { value } });
 const setText = (nodeId: string, value: string): Op => ({ type: "set_prop", nodeId, key: "value", value });
-const ack = (seq: number, sent: ClientOp, actor = ME): ServerMessage => ({ type: "op", seq, opId: sent.opId, actor, op: sent.op });
-const remote = (seq: number, op: Op): ServerMessage => ({ type: "op", seq, opId: crypto.randomUUID(), actor: OTHER, op });
+const ack = (seq: number, sent: ClientOp, actor = ME): DocMessage => ({ type: "op", seq, opId: sent.opId, actor, op: sent.op });
+const remote = (seq: number, op: Op): DocMessage => ({ type: "op", seq, opId: crypto.randomUUID(), actor: OTHER, op });
 
 function ready(doc: Doc = emptyDoc(), seq = 0) {
   const replica = createReplica({ manifest });
@@ -183,7 +183,7 @@ test("'stale' for a never-sent op gives up after two tries and reports it", () =
   const replica = ready();
   const out = queued(replica, add("a"));
   replica.receive({ type: "welcome", doc: emptyDoc(), seq: 0 });
-  const stale: ServerMessage = { type: "rejected", opId: out.opId, reason: "stale" };
+  const stale: DocMessage = { type: "rejected", opId: out.opId, reason: "stale" };
   replica.receive(stale);
   replica.receive(stale);
   expect(replica.receive(stale).rejected).toEqual([{ opId: out.opId, op: add("a"), reason: "stale", quiet: false }]);
@@ -314,7 +314,7 @@ test.each(Array.from({ length: 60 }, (_, i) => i + 1))("rebase property, seed %i
     const next = inFlight.shift();
     if (!next) return;
     const before = appliedAt.get(next.opId);
-    let answer: ServerMessage;
+    let answer: DocMessage;
     if (before !== undefined) answer = ack(before, next); // a resend: the original answer, nothing applied
     else if (applyOpInto(server, next.op)) {
       appliedAt.set(next.opId, ++seq);

@@ -38,3 +38,22 @@ test("a prop value is a string, a finite number or a boolean, and nothing else",
     expect(PropValue.safeParse(bad).success, typeof bad).toBe(false);
   }
 });
+
+// --- presence (E2.6): never sequenced, never stored -----------------------------------------------
+test("presence from a client: a cursor inside the canvas (fractions 0..1) and a selection, both optional", () => {
+  expect(ClientMessage.safeParse({ type: "presence", cursor: { x: 0.25, y: 1 }, selection: "n1" }).success).toBe(true);
+  expect(ClientMessage.safeParse({ type: "presence", cursor: null, selection: null }).success).toBe(true);
+  for (const bad of [{ x: 1.5, y: 0 }, { x: -0.1, y: 0 }, { x: Number.NaN, y: 0 }, { x: 0 }]) expect(ClientMessage.safeParse({ type: "presence", cursor: bad, selection: null }).success).toBe(false);
+  // Who is speaking comes from the connection, never from the message.
+  expect(ClientMessage.safeParse({ type: "presence", cursor: null, selection: null, name: "Mallory" }).success).toBe(false);
+  expect(ClientMessage.safeParse({ type: "presence", cursor: null, selection: "__proto__" }).success).toBe(false);
+});
+
+test("presence from the server names the connection, who it is, and what they point at", () => {
+  const entry = { peerId: "p1", actor: { kind: "user", id: "u1" }, name: "Ada", cursor: { x: 0.5, y: 0.5 }, selection: null };
+  expect(ServerMessage.safeParse({ type: "presence", ...entry }).success).toBe(true);
+  expect(ServerMessage.safeParse({ type: "presence_left", peerId: "p1" }).success).toBe(true);
+  expect(ServerMessage.safeParse({ type: "welcome", doc: { rootId: "root", nodes: {} }, seq: 0, you: "p2", peers: [entry] }).success).toBe(true);
+  // An older server sends neither: a welcome without them still parses, as "nobody else here".
+  expect(ServerMessage.safeParse({ type: "welcome", doc: { rootId: "root", nodes: {} }, seq: 0 }).success).toBe(true);
+});

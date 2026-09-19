@@ -64,7 +64,7 @@ test("frames this client cannot read are ignored: binary, not JSON, or a message
   await until(() => peer.status === "live", "live");
   net.sockets[0]?.say(new ArrayBuffer(4));
   net.sockets[0]?.say("not json {");
-  net.sockets[0]?.say({ type: "presence", cursors: [] });
+  net.sockets[0]?.say({ type: "telepathy", thoughts: [] });
   net.sockets[0]?.say(null);
   expect(peer.status).toBe("live");
   peer.close();
@@ -209,4 +209,63 @@ test("close() right after connectPeer() wins: the connection that had not starte
   expect(asked).toBe(0);
   expect(net.sockets).toHaveLength(0);
   expect(peer.status).toBe("closed");
+});
+
+// --- presence ------------------------------------------------------------------------------------
+const ada = { peerId: "p7", actor: { kind: "user", id: "u-ada" }, name: "Ada", cursor: { x: 0.5, y: 0.5 }, selection: null } as const;
+const framesOf = (socket: FakeSocket | undefined, type: string): Record<string, unknown>[] => (socket?.sent ?? []).map((f) => JSON.parse(f) as Record<string, unknown>).filter((f) => f["type"] === type);
+
+test("others: who the welcome says is here, then every presence message, until they leave", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [ada] }); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  expect(peer.others.map((p) => p.name)).toEqual(["Ada"]);
+  const before = peer.presenceRevision;
+  net.sockets[0]?.say({ type: "presence", ...ada, selection: "n1" });
+  net.sockets[0]?.say({ type: "presence", ...ada, peerId: "p9", name: "Bob" });
+  expect(peer.others.map((p) => [p.name, p.selection])).toEqual([["Ada", "n1"], ["Bob", null]]);
+  expect(peer.presenceRevision).toBeGreaterThan(before);
+  net.sockets[0]?.say({ type: "presence_left", peerId: "p7" });
+  expect(peer.others.map((p) => p.name)).toEqual(["Bob"]);
+  peer.close();
+});
+
+test("someone who goes silent is forgotten: a dead connection never says goodbye", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [ada] }); });
+  const peer = connectPeer(options(net, { presence: { sendEveryMs: 10, refreshMs: 40, forgetAfterMs: 120 } }));
+  await until(() => peer.status === "live", "live");
+  await sleep(60);
+  net.sockets[0]?.say({ type: "presence", ...ada }); // a refresh keeps her
+  await sleep(80);
+  expect(peer.others).toHaveLength(1);
+  await until(() => peer.others.length === 0, "Ada to be forgotten");
+  peer.close();
+});
+
+test("our own presence: the latest state only, not more often than allowed, refreshed while idle, sent again after a reconnect", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [] }); });
+  const peer = connectPeer(options(net, { presence: { sendEveryMs: 40, refreshMs: 100, forgetAfterMs: 5000 } }));
+  await until(() => peer.status === "live", "live");
+  for (let i = 0; i <= 20; i++) peer.setPresence({ cursor: { x: i / 20, y: 0 }, selection: null }); // a fast pointer
+  await sleep(70);
+  const sent = framesOf(net.sockets[0], "presence");
+  expect(sent.length).toBeLessThanOrEqual(2); // the first at once, the LAST one after the interval; never 21
+  expect(sent.at(-1)).toEqual({ type: "presence", cursor: { x: 1, y: 0 }, selection: null });
+
+  await until(() => framesOf(net.sockets[0], "presence").length > sent.length, "a refresh while idle");
+
+  net.sockets[0]?.close(1006);
+  await until(() => net.sockets.length === 2 && peer.status === "live", "live again");
+  await until(() => framesOf(net.sockets[1], "presence").length > 0, "presence on the new connection");
+  expect(framesOf(net.sockets[1], "presence")[0]).toEqual({ type: "presence", cursor: { x: 1, y: 0 }, selection: null });
+  peer.close();
+});
+
+test("a peer that never calls setPresence sends none: the AI worker and the git peer have no pointer", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [] }); });
+  const peer = connectPeer(options(net, { presence: { sendEveryMs: 10, refreshMs: 20, forgetAfterMs: 5000 } }));
+  await until(() => peer.status === "live", "live");
+  await sleep(80);
+  expect(framesOf(net.sockets[0], "presence")).toEqual([]);
+  peer.close();
 });
