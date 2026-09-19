@@ -56,7 +56,7 @@ test("a node can be added INSIDE a selected container, and the other browser nes
   await expect(page.getByRole("status")).toHaveText("live"); // only now does the address bar name the document
   const other = await open(browser, page.url());
   await page.getByRole("button", { name: "Add Card", exact: true }).click();
-  await page.getByRole("button", { name: "Select Card", exact: true }).click();
+  await page.getByRole("button", { name: "Select Card 1", exact: true }).click();
   await page.getByRole("button", { name: "Add Button", exact: true }).click();
   await expect(other.locator("[data-component=Card] [data-component=Button]")).toHaveCount(1);
   expect(await treeOf(page)).toBe(await treeOf(other));

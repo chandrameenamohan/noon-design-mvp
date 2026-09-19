@@ -1,6 +1,11 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { manifest } from "@noon/design-system";
 import { connectPeer, type Rejection } from "@noon/peer-client";
+import type { sentenceFor } from "./reasons.ts";
+
+type Reason = Parameters<typeof sentenceFor>[0];
+/** An edit that did not happen, waiting for the user to read it. `id` only makes it dismissible. */
+type Refusal = { id: string; reason: Reason };
 import { openSession } from "./api.ts";
 
 function openStore(documentId: string, onRejected: (rejection: Rejection) => void) {
@@ -28,13 +33,15 @@ const NOTHING = { subscribe: () => () => undefined, snapshot: () => "" };
  * development, to catch exactly this). An effect comes with a cleanup; a render does not.
  */
 export function usePeer(documentId: string) {
-  const [rejections, setRejections] = useState<Rejection[]>([]);
+  const [refusals, setRefusals] = useState<Refusal[]>([]);
   const [store, setStore] = useState<ReturnType<typeof openStore>>();
+  const refuse = (reason: Reason): void => { setRefusals((before) => [...before, { id: crypto.randomUUID(), reason }]); };
   useEffect(() => {
-    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) setRejections((before) => [...before, rejection]); });
+    // `quiet` (someone else removed the node first) is not news: the canvas already shows it (F5).
+    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason); });
     setStore(opened);
     return () => { opened.peer.close(); };
   }, [documentId]);
   useSyncExternalStore((store ?? NOTHING).subscribe, (store ?? NOTHING).snapshot);
-  return { peer: store?.peer, rejections };
+  return { peer: store?.peer, refusals, refuse, dismiss: (id: string): void => { setRefusals((before) => before.filter((each) => each.id !== id)); } };
 }
