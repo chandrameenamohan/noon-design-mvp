@@ -11,9 +11,12 @@ import {
   type ErrorBody,
   type HealthResponse,
   type Org,
+  type SessionResponse,
   type User,
 } from "@noon/contracts";
 import type { Db } from "@noon/db";
+import { signSessionToken } from "@noon/session-token";
+import type { SessionConfig } from "./config.ts";
 import type { Identify } from "./identity.ts";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -62,7 +65,7 @@ function pageQuery(c: Context): PageQuery {
 const badCursor = (c: Context) => fail(c, 400, "invalid_query", [{ field: "cursor", message: "not a cursor issued by this server" }]);
 
 /** Builds the HTTP app. Pure: no port is opened here, and the database arrives as an argument. */
-export function buildApp({ db, identify }: { db: Db; identify: Identify }): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions }: { db: Db; identify: Identify; sessions: SessionConfig }): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
 
   app.use(async (c, next) => {
@@ -153,6 +156,21 @@ export function buildApp({ db, identify }: { db: Db; identify: Identify }): Hono
   });
 
   app.route("/orgs/:orgId", org);
+
+  // The routing hook (SPEC §2.11): a peer never knows a sync address in advance, it asks here.
+  // Today there is one sync server; from epic 7 this answers with whichever node owns the room,
+  // and no client changes. The path names no org, so the lookup itself is membership-filtered.
+  app.post("/documents/:id/session", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    if (!doc) return notFound(c);
+    const now = Math.floor(Date.now() / 1000);
+    const token = signSessionToken({ userId: c.var.user.id, orgId: doc.orgId, documentId: doc.id, secret: sessions.secret, ttlSeconds: sessions.ttlSeconds, now });
+    return c.json({
+      wsUrl: `${sessions.syncUrl}/documents/${doc.id}`,
+      token,
+      expiresAt: new Date((now + sessions.ttlSeconds) * 1000).toISOString(),
+    } satisfies SessionResponse);
+  });
 
   app.notFound(notFound);
   app.onError((err, c) => {

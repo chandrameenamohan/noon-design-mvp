@@ -4,6 +4,9 @@ import { devHeaderIdentity } from "./identity.ts";
 import { startServer, type RunningServer } from "./server.ts";
 
 /** A real api on a free port over a throwaway database schema, for one test file. */
+/** Session settings for tests; the sync server's tests will share the secret to verify tokens. */
+export const TEST_SESSIONS = { secret: "test-only-session-secret-0123456789abcdef", syncUrl: "ws://sync.test:3001", ttlSeconds: 60 };
+
 type Ctx = {
   readonly db: TestDb;
   readonly server: RunningServer;
@@ -16,7 +19,7 @@ export function useTestServer(): Ctx {
   let server: RunningServer | undefined;
   beforeAll(async () => {
     db = await createTestDb();
-    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity });
+    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS });
   });
   afterAll(async () => {
     await server?.close();

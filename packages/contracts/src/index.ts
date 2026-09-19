@@ -46,6 +46,11 @@ export const ErrorBody = z.object({
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
 
+// --- Live editing session (F3) ---------------------------------------------------
+/** Where to open the WebSocket for a document, and the short-lived token that lets you in. */
+export const SessionResponse = z.object({ wsUrl: z.url(), token: z.string().min(1), expiresAt: Timestamp });
+export type SessionResponse = z.infer<typeof SessionResponse>;
+
 // --- Paging --------------------------------------------------------------------
 // Every list is paged from the first version: adding it later would break every client.
 export const PageQuery = z.strictObject({

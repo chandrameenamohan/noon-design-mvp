@@ -12,7 +12,7 @@ async function boot(env: Record<string, string>): Promise<{ url: string; stderr:
   const port = String(20000 + Math.floor(Math.random() * 20000));
   let stderr = "";
   // A clean environment: nothing from the test runner (such as NODE_ENV=test) leaks into the child.
-  child = spawn(process.execPath, [MAIN], { env: { PATH: process.env["PATH"] ?? "", DATABASE_URL: TEST_DATABASE_URL, PORT: port, ...env } });
+  child = spawn(process.execPath, [MAIN], { env: { PATH: process.env["PATH"] ?? "", DATABASE_URL: TEST_DATABASE_URL, PORT: port, SESSION_TOKEN_SECRET: "m".repeat(32), SYNC_PUBLIC_URL: "ws://localhost:3001", ...env } });
   child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
   const url = `http://127.0.0.1:${port}`;
   for (let i = 0; i < 100; i++) {

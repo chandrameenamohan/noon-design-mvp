@@ -11,6 +11,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
+COPY packages/session-token/package.json packages/session-token/
 RUN pnpm install --frozen-lockfile --prod
 
 COPY apps apps

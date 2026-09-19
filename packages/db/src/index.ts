@@ -17,6 +17,8 @@ export type Db = {
   listOrgsFor(userId: string, page?: PageInput): Promise<Page<Org> | undefined>;
   /** The org, but only if this user is a member. "Not a member" and "no such org" look the same. */
   getOrgForMember(orgId: string, userId: string): Promise<Org | undefined>;
+  /** The document, but only if this user is a member of its org. Used where the path names no org. */
+  getDocumentForMember(documentId: string, userId: string): Promise<Document | undefined>;
   /** Resolves if the database answers a query, rejects otherwise. */
   ping(): Promise<void>;
   /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
@@ -188,6 +190,11 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     getOrgForMember: async (orgId, userId) =>
       isId(orgId) && isId(userId)
         ? one(OrgRow, "select o.* from orgs o join memberships m on m.org_id = o.id where o.id = $1 and m.user_id = $2", [orgId, userId])
+        : undefined,
+
+    getDocumentForMember: async (documentId, userId) =>
+      isId(documentId) && isId(userId)
+        ? one(DocumentRow, "select d.* from documents d join memberships m on m.org_id = d.org_id where d.id = $1 and m.user_id = $2", [documentId, userId])
         : undefined,
 
     forOrg(orgId) {

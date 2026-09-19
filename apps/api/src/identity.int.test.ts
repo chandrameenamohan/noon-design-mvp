@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { ErrorBody, Org, Workspace } from "@noon/contracts";
 import { devHeaderIdentity, noIdentity } from "./identity.ts";
 import { startServer } from "./server.ts";
-import { useTestServer } from "./testing.ts";
+import { TEST_SESSIONS, useTestServer } from "./testing.ts";
 
 const ctx = useTestServer();
 
@@ -79,7 +79,7 @@ test("a caller outside the org gets exactly 404, never 403, on every per-org rou
 });
 
 test("the dev header is never trusted in production", async () => {
-  const prod = await startServer({ port: 0, db: ctx.db.db, identify: noIdentity });
+  const prod = await startServer({ port: 0, db: ctx.db.db, identify: noIdentity, sessions: TEST_SESSIONS });
   try {
     const res = await fetch(`${prod.url}/orgs`, { headers: { "x-dev-user": "ann@example.com" } });
     expect(res.status).toBe(401);

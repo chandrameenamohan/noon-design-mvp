@@ -2,14 +2,15 @@ import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 import type { Db } from "@noon/db";
 import { buildApp } from "./app.ts";
+import type { SessionConfig } from "./config.ts";
 import type { Identify } from "./identity.ts";
 
 export type RunningServer = { url: string; close: () => Promise<void> };
 
 /** Starts listening and resolves once the port is really open. */
-export function startServer({ port, db, identify }: { port: number; db: Db; identify: Identify }): Promise<RunningServer> {
+export function startServer({ port, ...app }: { port: number; db: Db; identify: Identify; sessions: SessionConfig }): Promise<RunningServer> {
   return new Promise((resolve) => {
-    const server = serve({ fetch: buildApp({ db, identify }).fetch, port }, (info: AddressInfo) => {
+    const server = serve({ fetch: buildApp(app).fetch, port }, (info: AddressInfo) => {
       // A client that opens a request and never finishes it must not hold a socket for Node's
       // default 5 minutes. (Bodies are capped at 64 KB, so 30 s is generous.)
       if ("requestTimeout" in server) {

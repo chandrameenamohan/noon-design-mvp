@@ -20,7 +20,7 @@ grep -q "make -s check" "$hook" || { echo "FAIL: the pre-commit gate is not inst
 # Local secrets: random, generated once, kept in the git-ignored .env that compose reads by itself.
 # Hex only, so a value can sit inside a postgres:// URL without escaping.
 touch .env
-for name in POSTGRES_PASSWORD APP_DB_PASSWORD; do
+for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET; do
   grep -q "^$name=" .env || printf '%s=%s\n' "$name" "$(openssl rand -hex 24)" >> .env
 done
 . ./.env

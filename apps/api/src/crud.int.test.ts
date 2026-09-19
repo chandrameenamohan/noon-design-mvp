@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { Document, ErrorBody, Org, Workspace } from "@noon/contracts";
 import { devHeaderIdentity } from "./identity.ts";
 import { startServer } from "./server.ts";
-import { useTestServer } from "./testing.ts";
+import { TEST_SESSIONS, useTestServer } from "./testing.ts";
 
 const ctx = useTestServer();
 
@@ -73,7 +73,7 @@ test("things that do not exist are 404: unknown ids, malformed ids, a workspace 
 });
 
 test("a database failure is a 500 that says nothing about the database", async () => {
-  const broken = await startServer({ port: 0, identify: devHeaderIdentity, db: { ...ctx.db.db, createOrg: () => Promise.reject(new Error('relation "orgs" does not exist; password=hunter2')) } });
+  const broken = await startServer({ port: 0, identify: devHeaderIdentity, sessions: TEST_SESSIONS, db: { ...ctx.db.db, createOrg: () => Promise.reject(new Error('relation "orgs" does not exist; password=hunter2')) } });
   try {
     const res = await fetch(`${broken.url}/orgs`, { method: "POST", headers: { "content-type": "application/json", "x-dev-user": "tester@example.com" }, body: '{"name":"x"}' });
     expect(res.status).toBe(500);

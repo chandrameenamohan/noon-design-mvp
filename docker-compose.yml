@@ -35,6 +35,9 @@ services:
       # Development only: lets a caller name themselves with the x-dev-user header (SPEC §2.16).
       # Unset, the api behaves as production and answers 401 to everything until epic 8.
       NODE_ENV: development
+      SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+      # What a BROWSER on this machine dials to reach the sync server (which arrives in epic 2).
+      SYNC_PUBLIC_URL: "ws://localhost:${SYNC_PORT:-3001}"
       # The app connects as noon_app: data access only, not a superuser, cannot alter the schema.
       # init.sh generates hex passwords, so the value is safe inside a URL without escaping.
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
