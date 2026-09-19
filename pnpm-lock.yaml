@@ -111,12 +111,24 @@ importers:
       '@noon/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts
+      '@noon/design-system':
+        specifier: workspace:^
+        version: link:../../packages/design-system
+      '@noon/doc-model':
+        specifier: workspace:^
+        version: link:../../packages/doc-model
+      '@noon/peer-client':
+        specifier: workspace:^
+        version: link:../../packages/peer-client
       react:
         specifier: ^19.3.0
         version: 19.3.0
       react-dom:
         specifier: ^19.3.0
         version: 19.3.0(react@19.3.0)
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@types/react':
         specifier: ^19.3.0
