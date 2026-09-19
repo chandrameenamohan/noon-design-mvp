@@ -198,3 +198,15 @@ test("edits that change nothing do not reset the silence clock: a dead connectio
   clearInterval(fidget);
   peer.close();
 });
+
+test("close() right after connectPeer() wins: the connection that had not started yet never starts", async () => {
+  // Exactly what React's StrictMode does in development: mount, clean up, mount again, in one tick.
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  let asked = 0;
+  const peer = connectPeer(options(net, { session: () => { asked++; return Promise.resolve({ wsUrl: "ws://test/documents/d", token: "t" }); } }));
+  peer.close();
+  await sleep(50);
+  expect(asked).toBe(0);
+  expect(net.sockets).toHaveLength(0);
+  expect(peer.status).toBe("closed");
+});

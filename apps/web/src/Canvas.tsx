@@ -46,6 +46,10 @@ export function Canvas({ documentId }: { documentId: string }) {
   const { peer, rejections } = usePeer(documentId);
   const [selected, setSelected] = useState(ROOT_ID);
   if (!peer) return <main><h1>Noon MVP</h1><p><span role="status">connecting</span></p></main>;
+  if (peer.status === "closed") {
+    // The peer ended for good (peer.closedBecause: no session, a fatal close code, a corrupt document).
+    return <main><h1>Noon MVP</h1><p role="alert">This document cannot be opened ({peer.closedBecause ?? "closed"}). <a href="/">Back to start</a></p></main>;
+  }
   const root = peer.doc.nodes[peer.doc.rootId];
 
   // New nodes go INTO the selection when it can hold children, otherwise onto the page.

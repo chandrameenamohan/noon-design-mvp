@@ -139,6 +139,10 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   }
 
   async function open(): Promise<void> {
+    // close() may have come first: connectPeer() only SCHEDULES this, and React's StrictMode (in
+    // development) mounts, cleans up and mounts again within one tick. Without this line the peer
+    // that was closed connected anyway, and nothing ever closed it again.
+    if (closedBecause !== undefined) return;
     setStatus("connecting");
     let target;
     try {

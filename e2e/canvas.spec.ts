@@ -61,3 +61,20 @@ test("a node can be added INSIDE a selected container, and the other browser nes
   await expect(other.locator("[data-component=Card] [data-component=Button]")).toHaveCount(1);
   expect(await treeOf(page)).toBe(await treeOf(other));
 });
+
+test.describe("a document that cannot be opened", () => {
+  // The browser itself logs every failed request; here a 404 is the point of the test.
+  test.use({ allowedConsole: /40[04] \((Not Found|Bad Request)\)/ });
+
+  for (const [what, id] of [["does not exist", "11111111-1111-4111-8111-111111111111"], ["is not an id at all", "abc"]] as const) {
+    test(`a link to a document that ${what} says so, once, and stops trying`, async ({ page }) => {
+      const sessions: string[] = [];
+      page.on("request", (request) => { if (request.url().includes("/session")) sessions.push(request.url()); });
+      await page.goto(`/?user=${user}&doc=${id}`);
+      await expect(page.getByRole("alert")).toContainText("cannot be opened");
+      await page.waitForTimeout(1500); // several retry periods, had it been retrying
+      // (React's StrictMode mounts twice in development; the first mount is closed before it asks.)
+      expect(sessions).toHaveLength(1);
+    });
+  }
+});
