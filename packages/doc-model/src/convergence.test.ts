@@ -41,3 +41,37 @@ test("the generator really exercises every op type and the awkward cases", () =>
   expect(noOps).toBeGreaterThan(100); // stale and invalid ops are part of the mix, not avoided
   expect(noOps).toBeLessThan(1900);
 });
+
+// validate() is the policy and applyOp() the safety net. They must never disagree about structure:
+// whatever validate refuses for a structural reason, applyOp must also leave untouched.
+import type { Manifest } from "@noon/contracts";
+import { validate } from "./index.ts";
+
+const permissive: Manifest = {
+  version: 1,
+  components: ["Stack", "Card", "Button", "Text"].map((name) => ({
+    name,
+    acceptsChildren: true,
+    props: [
+      { name: "gap", type: { kind: "number" }, required: false },
+      { name: "label", type: { kind: "string" }, required: false },
+      { name: "variant", type: { kind: "string" }, required: false },
+      { name: "disabled", type: { kind: "boolean" }, required: false },
+    ],
+  })),
+};
+
+test.each(Array.from({ length: 100 }, (_, seed) => seed + 1000))("seed %i: validate and applyOp agree about structure", (seed) => {
+  const random = seeded(seed);
+  let doc = emptyDoc();
+  for (let i = 0; i < 80; i++) {
+    const op = randomOp(random, doc);
+    const verdict = validate(doc, op, permissive);
+    const next = applyOp(doc, op);
+    if (!verdict.ok && ["gone", "cycle", "duplicate_node", "root_is_fixed"].includes(verdict.reason)) {
+      expect(next, `${verdict.reason}: ${JSON.stringify(op)}`).toBe(doc);
+    }
+    if (verdict.ok && op.type !== "set_prop") expect(next, `accepted but not applied: ${JSON.stringify(op)}`).not.toBe(doc);
+    doc = next;
+  }
+});

@@ -38,6 +38,7 @@ test("an op that cannot apply leaves the document untouched (the SAME object)", 
     { type: "remove_node", nodeId: ROOT_ID },
     { type: "move_node", nodeId: ROOT_ID, newParentId: "a", index: 0 },
     { type: "set_prop", nodeId: "ghost", key: "gap", value: 8 },
+    { type: "set_prop", nodeId: ROOT_ID, key: "gap", value: 8 }, // the root has no props
   ] satisfies Op[]) {
     expect(applyOp(doc, op), JSON.stringify(op)).toBe(doc);
   }

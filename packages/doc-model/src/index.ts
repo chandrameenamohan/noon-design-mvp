@@ -1,5 +1,7 @@
 import type { Doc, DocNode, Op } from "@noon/contracts";
 
+export { validate } from "./validate.ts"; // RejectReason and Verdict get exported when the room (E2.3a) needs to name them
+
 export const ROOT_ID = "root";
 
 export const emptyDoc = (): Doc => ({
@@ -54,7 +56,7 @@ export function applyOp(doc: Doc, op: Op): Doc {
     }
     case "set_prop": {
       const node = doc.nodes[op.nodeId];
-      if (!node) return doc;
+      if (!node || node.parentId === null) return doc; // unknown node, or the root (which has no props)
       const props = { ...node.props };
       if (op.value === null) delete props[op.key]; // eslint-disable-line @typescript-eslint/no-dynamic-delete -- props is a fresh copy; the key set is data
       else props[op.key] = op.value;
