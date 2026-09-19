@@ -50,7 +50,10 @@ Boxes". This project is also a course: see §7.
    limits, leases. Losing Redis never loses document data. Journal append
    happens before broadcast. A room snapshots every N ops or T seconds
    (tunable) and when its last peer leaves, so a never-idle session still snapshots.
-10. **Tenancy and attribution from day one.** Every table has `org_id`; `db`
+10. **Tenancy and attribution from day one.** Every tenant-owned table has
+    `org_id` (`orgs` IS the tenant; `users` are global identities that join
+    orgs through `memberships`, which is what lets a document be shared with
+    someone outside the org); a new table without `org_id` must say why. `db`
     exposes only an org-scoped accessor; every op carries its actor. Document
     id is a UUID and is the room key.
 11. **Routing hook from day one.** Peers obtain `{wsUrl, token}` from

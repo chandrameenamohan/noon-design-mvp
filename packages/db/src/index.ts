@@ -1,6 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { Pool, type QueryResultRow } from "pg";
-import { Document, Org, Workspace } from "@noon/contracts";
+import { Document, Id, Name, Org, Workspace } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -35,11 +35,27 @@ const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id:
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
 
+const isId = (x: string): boolean => Id.safeParse(x).success;
+
 export function createDb({ connectionString, schema }: { connectionString: string; schema?: string }): Db {
+  // `schema` goes into libpq's space-separated startup options, where a space would smuggle in
+  // extra `-c` settings (the review set session_replication_role this way). Plain identifiers only.
+  if (schema !== undefined && !/^[a-z_][a-z0-9_]*$/.test(schema)) {
+    throw new Error(`invalid schema name: ${JSON.stringify(schema)}`);
+  }
+
   // The pool lives in this closure and is never returned: there is no way to run an unscoped query from outside.
   const pool = new Pool({
     connectionString,
+    application_name: "noon-db",
     ...(schema === undefined ? {} : { options: `-c search_path=${schema}` }),
+  });
+  // Postgres restarting, or killing an idle connection, makes the pool emit 'error'. An 'error'
+  // event with no listener is an uncaught exception in Node: one dropped connection would take
+  // the whole process down. The pool has already discarded the client; only the message is logged
+  // (the full error object carries the connection password).
+  pool.on("error", (err) => {
+    process.stderr.write(`db: idle connection lost: ${err.message}\n`);
   });
 
   async function rows<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T[]> {
@@ -58,14 +74,16 @@ export function createDb({ connectionString, schema }: { connectionString: strin
   return {
     async migrate() {
       const client = await pool.connect();
+      let broken: Error | undefined;
       try {
-        await client.query("create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())");
         const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
         for (const name of files) {
           await client.query("begin");
           try {
-            // Two processes may start at once; the lock makes them take turns, the check makes the loser skip.
+            // Two processes may start at once. The lock makes them take turns; everything that can
+            // race, including creating the bookkeeping table, happens after it.
             await client.query("select pg_advisory_xact_lock(hashtext('noon:migrate'))");
+            await client.query("create table if not exists schema_migrations (name text primary key, applied_at timestamptz not null default now())");
             const done = await client.query("select 1 from schema_migrations where name = $1", [name]);
             if (done.rowCount === 0) {
               await client.query(await readFile(new URL(name, MIGRATIONS_DIR), "utf8"));
@@ -73,12 +91,16 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             }
             await client.query("commit");
           } catch (err) {
-            await client.query("rollback");
-            throw err;
+            // If the connection itself died, rollback fails too; never let that hide the real error.
+            await client.query("rollback").catch(() => undefined);
+            broken = new Error(`migration ${name} failed`, { cause: err });
+            throw broken;
           }
         }
       } finally {
-        client.release(); // always: an unreleased client is how a pool starves (learning-tests/postgres #6)
+        // Always release (an unreleased client starves the pool); after a failure, release WITH the
+        // error so the pool destroys a connection whose transaction state is unknown.
+        client.release(broken);
       }
     },
 
@@ -86,26 +108,40 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       return rows(z.object({ name: z.string() }).transform((r) => r.name), "select name from schema_migrations order by name", []);
     },
 
-    createOrg: ({ name }) => exactlyOne(OrgRow, "insert into orgs (name) values ($1) returning *", [name]),
+    // Inputs are parsed with the SAME contract the reader uses, BEFORE the write: a row that
+    // cannot be read back must never be stored (it would make every later list throw).
+    createOrg: async ({ name }) => exactlyOne(OrgRow, "insert into orgs (name) values ($1) returning *", [Name.parse(name)]),
 
     forOrg(orgId) {
+      // An id that is not a UUID cannot name anything, so it means "not found" rather than a
+      // Postgres 22P02 error (which would surface as a 500 and echo the caller's input).
+      const orgExists = isId(orgId);
       return {
-        createWorkspace: ({ name }) =>
-          exactlyOne(WorkspaceRow, "insert into workspaces (org_id, name) values ($1, $2) returning *", [orgId, name]),
-        listWorkspaces: () =>
-          rows(WorkspaceRow, "select * from workspaces where org_id = $1 order by created_at, id", [orgId]),
-        getWorkspace: (id) => one(WorkspaceRow, "select * from workspaces where org_id = $1 and id = $2", [orgId, id]),
-        createDocument: ({ workspaceId, title }) =>
-          one(
+        createWorkspace: async ({ name }) => {
+          if (!orgExists) throw new Error("cannot create a workspace: invalid org id");
+          return exactlyOne(WorkspaceRow, "insert into workspaces (org_id, name) values ($1, $2) returning *", [orgId, Name.parse(name)]);
+        },
+        listWorkspaces: async () =>
+          orgExists ? rows(WorkspaceRow, "select * from workspaces where org_id = $1 order by created_at, id", [orgId]) : [],
+        getWorkspace: async (id) =>
+          orgExists && isId(id) ? one(WorkspaceRow, "select * from workspaces where org_id = $1 and id = $2", [orgId, id]) : undefined,
+        createDocument: async ({ workspaceId, title }) => {
+          const cleanTitle = Name.parse(title);
+          if (!orgExists || !isId(workspaceId)) return undefined;
+          return one(
             DocumentRow,
             // insert ... select: the row is only created if the workspace exists in this org.
             "insert into documents (org_id, workspace_id, title) " +
               "select w.org_id, w.id, $3 from workspaces w where w.org_id = $1 and w.id = $2 returning *",
-            [orgId, workspaceId, title],
-          ),
-        listDocuments: (workspaceId) =>
-          rows(DocumentRow, "select * from documents where org_id = $1 and workspace_id = $2 order by created_at, id", [orgId, workspaceId]),
-        getDocument: (id) => one(DocumentRow, "select * from documents where org_id = $1 and id = $2", [orgId, id]),
+            [orgId, workspaceId, cleanTitle],
+          );
+        },
+        listDocuments: async (workspaceId) =>
+          orgExists && isId(workspaceId)
+            ? rows(DocumentRow, "select * from documents where org_id = $1 and workspace_id = $2 order by created_at, id", [orgId, workspaceId])
+            : [],
+        getDocument: async (id) =>
+          orgExists && isId(id) ? one(DocumentRow, "select * from documents where org_id = $1 and id = $2", [orgId, id]) : undefined,
       };
     },
 

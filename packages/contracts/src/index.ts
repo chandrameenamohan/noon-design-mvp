@@ -8,8 +8,9 @@ export const HealthResponse = z.object({
 
 export type HealthResponse = z.infer<typeof HealthResponse>;
 
-const Id = z.uuid();
-const Name = z.string().trim().min(1).max(200);
+export const Id = z.uuid();
+/** Trimmed, 1-200 characters. Used on the way IN (before a write) and on the way out. */
+export const Name = z.string().trim().min(1).max(200);
 const Timestamp = z.iso.datetime();
 
 export const Org = z.object({ id: Id, name: Name, createdAt: Timestamp });

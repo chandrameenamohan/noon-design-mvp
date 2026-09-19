@@ -8,3 +8,6 @@ docs
 e2e
 playwright-report
 test-results
+# tests and test-only helpers never ship
+**/*.test.ts
+**/testing.ts
