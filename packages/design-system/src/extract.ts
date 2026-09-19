@@ -34,13 +34,26 @@ export function extractManifest(entryFile: string): Manifest {
     .getExportsOfModule(moduleSymbol)
     .map((exported) => (exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported))
     .flatMap((symbol) => {
-      const declaration = symbol.declarations?.find(ts.isFunctionDeclaration);
-      // A component is an exported function with a capitalised name. Exported TYPES are skipped here.
-      if (!declaration || !/^[A-Z]/.test(symbol.name)) return [];
-      return [describeComponent(symbol.name, declaration)];
+      // Only values with a capitalised name can be components; exported types and helpers are skipped.
+      if ((symbol.flags & ts.SymbolFlags.Value) === 0 || !/^[A-Z]/.test(symbol.name)) return [];
+      const fn = componentFunction(symbol);
+      // Anything else that LOOKS like a component must not vanish quietly: a manifest that silently
+      // lacks a component is a wrong answer nobody notices until the canvas cannot place it.
+      if (!fn) throw new Error(`${symbol.name}: exported with a capitalised name but not a function component this extractor understands (function declaration, arrow function or function expression). Rename it, or teach the extractor.`);
+      return [describeComponent(symbol.name, fn)];
     });
 
-  function describeComponent(name: string, declaration: ts.FunctionDeclaration): Manifest["components"][number] {
+  /** `function C(props)`, `const C = (props) => ...` and `const C = function (props) {...}`. */
+  function componentFunction(symbol: ts.Symbol): ts.SignatureDeclaration | undefined {
+    for (const declaration of symbol.declarations ?? []) {
+      if (ts.isFunctionDeclaration(declaration)) return declaration;
+      const init = ts.isVariableDeclaration(declaration) ? declaration.initializer : undefined;
+      if (init && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) return init;
+    }
+    return undefined;
+  }
+
+  function describeComponent(name: string, declaration: ts.SignatureDeclaration): Manifest["components"][number] {
     const parameter = declaration.parameters[0];
     if (!parameter) return { name, acceptsChildren: false, props: [] };
     const defaults = readDefaults(parameter);

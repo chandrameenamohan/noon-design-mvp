@@ -40,3 +40,40 @@ test("serialization is stable: the same input gives byte-identical JSON", () => 
   expect(serializeManifest(extractManifest(ENTRY))).toBe(serializeManifest(manifest));
   expect(serializeManifest(manifest).endsWith("\n")).toBe(true);
 });
+
+// --- components written other ways (found by verification: arrow components were silently skipped)
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+function extractFrom(source: string) {
+  const dir = mkdtempSync(join(tmpdir(), "noon-extract-"));
+  try {
+    writeFileSync(join(dir, "index.tsx"), source);
+    return extractManifest(join(dir, "index.tsx"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("arrow-function and function-expression components are found, with their defaults", () => {
+  const result = extractFrom(`
+    export type BadgeProps = { label: string; tone?: "info" | "warn" };
+    export const Badge = ({ label, tone = "info" }: BadgeProps) => null;
+    export const Chip = function ({ text }: { text: string }) { return null; };
+  `);
+  expect(result.components.map((c) => c.name)).toEqual(["Badge", "Chip"]);
+  expect(result.components[0]?.props).toEqual([
+    { name: "label", type: { kind: "string" }, required: true },
+    { name: "tone", type: { kind: "enum", options: ["info", "warn"] }, required: false, default: "info" },
+  ]);
+});
+
+test("a capitalised export that is not a recognisable component fails loudly instead of vanishing", () => {
+  expect(() => extractFrom(`export const Theme = { accent: "blue" };`)).toThrow(/Theme/);
+  expect(() => extractFrom(`const Inner = () => null; export const Wrapped = wrap(Inner); declare function wrap<T>(c: T): T;`)).toThrow(/Wrapped/);
+});
+
+test("lower-case exports and types are ignored: they cannot be components", () => {
+  expect(extractFrom(`export const spacing = 8; export type Size = "sm" | "md"; export function helper() { return 1; }`).components).toEqual([]);
+});
