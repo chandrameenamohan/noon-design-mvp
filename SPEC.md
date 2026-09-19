@@ -52,8 +52,14 @@ Boxes". This project is also a course: see §7.
    an `ack`. Each actor has an op budget in the room (a token bucket); over it
    the op is refused with `rate_limited` and `retryAfterMs`, the room refuses
    that peer's later ops too until the refused one returns (order is kept), and
-   a peer that keeps sending is closed with `4429`. `peer-client` keeps at most
-   50 unanswered ops on the wire, so an honest peer is slowed, never dropped.
+   a peer that keeps sending SOONER than it was told to is closed with `4429`
+   (a peer that waits as told is never dropped). The budget is per actor
+   (kind, id, run) and is charged as the op arrives. `peer-client` keeps at
+   most 50 unanswered ops on the wire and, after a refusal, restarts at one op
+   and grows by one per answer, so an honest peer is slowed, never dropped.
+   `peer-client` does not send a local edit that changes nothing in the
+   document the user sees. A reject reason a client does not know means "not
+   applied": it resyncs, it never ends the session.
 6. **Canvas model.** A document is one page: a tree of instances of the sample
    app's components (Stack, Card, Button, Text, Image, Input) with typed props.
    No absolute positioning, no freeform shapes.

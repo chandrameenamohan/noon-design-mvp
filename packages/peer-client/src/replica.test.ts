@@ -250,7 +250,34 @@ test("'rate_limited': the op stays, sending pauses, then it and everything after
   expect(effects).toEqual({ rejected: [], resync: false, pauseMs: 120 });
   replica.receive({ type: "rejected", opId: c.opId, reason: "rate_limited", retryAfterMs: 1 });
   expect(replica.doc.nodes["c"]).toBeDefined(); // still shown: it is late, not refused
-  expect(replica.takeSendable()).toEqual([b, c]);
+  expect(replica.takeSendable()).toEqual([b]); // carefully: one first
+  replica.receive(ack(2, b));
+  expect(replica.takeSendable()).toEqual([c]);
+});
+
+test("after 'rate_limited' the window restarts at ONE op and grows by one per answer: no burst into an empty budget", () => {
+  const replica = createReplica({ manifest, window: 4 });
+  replica.receive({ type: "welcome", doc: emptyDoc(), seq: 0 });
+  const made = ["a", "b", "c", "d", "e", "f"].map((id) => queued(replica, add(id)));
+  expect(replica.takeSendable()).toHaveLength(4);
+  replica.receive({ type: "rejected", opId: made[0]?.opId ?? "", reason: "rate_limited", retryAfterMs: 10 });
+  expect(replica.takeSendable().map((op) => op.opId)).toEqual([made[0]?.opId]); // one, not four
+  replica.receive(ack(1, made[0] ?? queued(replica, add("x"))));
+  expect(replica.takeSendable()).toHaveLength(2);
+});
+
+test("a pause the server asks for is capped: a hostile retryAfterMs cannot silence the client for weeks", () => {
+  const replica = ready();
+  const out = sent(replica, add("a"));
+  expect(replica.receive({ type: "rejected", opId: out.opId, reason: "rate_limited", retryAfterMs: 2 ** 31 }).pauseMs).toBe(30_000);
+});
+
+test("an 'ack' for an op that WOULD change the confirmed document is not believed: keep the op, resync", () => {
+  const replica = ready();
+  sent(replica, add("a"));
+  const effects = replica.receive({ type: "ack", opId: replica.pending[0]?.opId ?? "" });
+  expect(effects.resync).toBe(true);
+  expect(replica.pending).toHaveLength(1);
 });
 
 test("'ack' (the server found the op changed nothing) ends the wait and drops the guess", () => {

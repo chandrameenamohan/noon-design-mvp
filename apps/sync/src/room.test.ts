@@ -131,7 +131,7 @@ test("rate limit: a peer may spend its burst, then is refused with a hint of whe
   room.join(a);
   for (const id of ["n1", "n2", "n3", "n4"]) await room.submit(a, clientOp(add(id)));
   expect(ops(a)).toHaveLength(3);
-  expect(rejects(a)).toEqual([{ type: "rejected", opId: expect.any(String) as string, reason: "rate_limited", retryAfterMs: 100 }]);
+  expect(rejects(a)).toEqual([{ type: "rejected", opId: expect.any(String) as string, reason: "rate_limited", retryAfterMs: 300 }]); // until the whole burst of 3 is back: worth returning for
   expect(room.seq).toBe(3); // a refused op takes no sequence number
 });
 
@@ -142,9 +142,9 @@ test("rate limit: the budget refills with time, and one peer's flood does not sp
   for (const id of ["a1", "a2", "a3"]) await room.submit(a, clientOp(add(id)));
   await room.submit(b, clientOp(add("b1")));
   expect(room.doc.nodes["b1"]).toBeDefined();
+  expect(rejects(a)).toHaveLength(1);
   clock.now += 100; // one token's worth
-  const again = clientOp(add("a3"));
-  await room.submit(a, { ...again, opId: rejects(a)[0]?.opId ?? "" });
+  await room.submit(a, { ...clientOp(add("a3")), opId: rejects(a)[0]?.opId ?? "" });
   expect(room.doc.nodes["a3"]).toBeDefined();
 });
 
@@ -186,7 +186,80 @@ test("rate limit: a peer that keeps sending while refused is dropped", async () 
   for (let i = 0; i < 10; i++) await room.submit(a, clientOp(add(`n${String(i)}`)));
   expect(kicked).toBe(1);
   expect(room.peerCount).toBe(0);
-  expect(rejects(a).length).toBeLessThanOrEqual(6); // and it is no longer answered
+  expect(rejects(a)).toHaveLength(5); // refused maxStrikes times, dropped on the next, and no longer answered
+});
+
+test("rate limit: a peer that WAITS as told is never dropped, however often it loses the race for the token", async () => {
+  // Two tabs of one user share one budget. Tab A is greedy and always gets there first.
+  const { room, clock } = timedRoom({ perSecond: 10, burst: 1, maxStrikes: 3 });
+  let kicked = 0;
+  const greedy = peer("u");
+  const patient = { ...peer("u"), kick: () => { kicked++; } };
+  room.join(greedy); room.join(patient);
+  const wanted = clientOp(add("patient"));
+  for (let tick = 0; tick < 20; tick++) {
+    await room.submit(greedy, clientOp(add(`g${String(tick)}`)));
+    await room.submit(patient, wanted); // refused again: but it came back no sooner than it was told to
+    clock.now += 100;
+  }
+  expect(kicked).toBe(0);
+  expect(rejects(patient).length).toBeGreaterThan(10);
+});
+
+test("rate limit: an agent run has its own budget and cannot spend its owner's", async () => {
+  const { room } = timedRoom({ perSecond: 10, burst: 2 });
+  const human = peer("u");
+  const agent: ReturnType<typeof peer> = { ...peer("u", "agent"), actor: { kind: "agent", id: "u", runId: "run-1" } };
+  room.join(human); room.join(agent);
+  for (const id of ["a1", "a2", "a3", "a4"]) await room.submit(agent, clientOp(add(id)));
+  await room.submit(human, clientOp(add("h1")));
+  expect(room.doc.nodes["h1"]).toBeDefined();
+});
+
+test("rate limit: the budget is charged ON ARRIVAL, not when a slow journal finally reaches the op", async () => {
+  let release = (): void => undefined;
+  const slow = new Promise<void>((resolve) => { release = resolve; });
+  const room = createRoom({ doc: emptyDoc(), manifest, rate: { perSecond: 10, burst: 3 }, now: () => 0, persist: () => slow });
+  const a = peer("a");
+  room.join(a);
+  for (let i = 0; i < 50; i++) void room.submit(a, clientOp(add(`n${String(i)}`)));
+  expect(rejects(a)).toHaveLength(47); // refused at once: 47 ops are NOT sitting in memory behind the journal
+  release();
+  await room.settled();
+  expect(room.seq).toBe(3);
+});
+
+test("rate limit: odd budgets and an odd clock still give a finite, whole retryAfterMs and no debt", async () => {
+  const frozen = timedRoom({ perSecond: 0, burst: 1 });
+  const a = peer("a");
+  frozen.room.join(a);
+  await frozen.room.submit(a, clientOp(add("n1")));
+  await frozen.room.submit(a, clientOp(add("n2")));
+  expect(Number.isSafeInteger(rejects(a)[0]?.retryAfterMs)).toBe(true);
+
+  const { room, clock } = timedRoom({ perSecond: 10, burst: 1 });
+  const b = peer("b");
+  room.join(b);
+  clock.now = 1_000_000;
+  await room.submit(b, clientOp(add("n1")));
+  clock.now = 0; // the clock was corrected backwards
+  const n2 = clientOp(add("n2"));
+  await room.submit(b, n2); // refused: no token yet. The room now measures from the corrected clock...
+  expect(rejects(b)[0]?.retryAfterMs).toBe(100);
+  clock.now += 100;
+  await room.submit(b, n2);
+  expect(room.doc.nodes["n2"]).toBeDefined(); // ...so one token later it works: no debt of a million ms
+});
+
+test("a flood of no-ops cannot push real ops out of the room's memory: an honest resend is still recognised", async () => {
+  const room = createRoom({ doc: emptyDoc(), manifest, limits: { rememberedOps: 5 }, rate: { perSecond: 1e6, burst: 1e6 } });
+  const [honest, flooder] = [peer("honest"), peer("flooder")];
+  room.join(honest); room.join(flooder);
+  const mine = clientOp(add("mine"));
+  await room.submit(honest, mine);
+  for (let i = 0; i < 50; i++) await room.submit(flooder, clientOp({ type: "set_prop", nodeId: "mine", key: "gap", value: null }, 1));
+  await room.submit(honest, mine); // the acknowledgement was lost: the ordinary resend
+  expect(honest.inbox.at(-1)).toMatchObject({ type: "op", seq: 1 }); // the original answer, not "stale"
 });
 
 /** Two peers; `a` has made node "n" with gap 4 (seq 2); then `b` sets gap to 4 again: an op that changes nothing. */

@@ -45,7 +45,11 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   let lastHeard = 0;
   let liveSince = 0;
   let pauseTimer: ReturnType<typeof setTimeout> | undefined;
-  const endPause = (): void => { clearTimeout(pauseTimer); pauseTimer = undefined; };
+  const endPause = (): void => {
+    clearTimeout(pauseTimer);
+    pauseTimer = undefined;
+    lastHeard = Date.now(); // the silence during a pause was ours, not the server's
+  };
 
   const setStatus = (next: PeerStatus): void => {
     if (status === next) return;
@@ -110,7 +114,10 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     const type: unknown = typeof raw === "object" && raw !== null && "type" in raw ? raw.type : undefined;
     if (!KNOWN_TYPES.has(type)) return;
     // A type we DO know, in a shape the contract forbids: nothing this server says can be relied on.
-    const parsed = ServerMessage.safeParse(raw);
+    let parsed = ServerMessage.safeParse(raw);
+    // A refusal whose REASON is newer than this client: all we need to know is that the op was not
+    // applied. "unavailable" says exactly that (keep it, come back through a fresh welcome).
+    if (!parsed.success && type === "rejected") parsed = ServerMessage.safeParse({ ...(raw as object), reason: "unavailable" });
     if (!parsed.success) { finish("protocol"); return; }
 
     const [revisionBefore, pendingBefore] = [replica.revision, replica.pendingCount];
@@ -167,7 +174,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   // so silence while we WAIT for something (the welcome, or an answer to an op) is the only sign of a
   // half-open connection. A peer that only reads has nothing to time: E2.6's presence traffic fixes that.
   const watchdog = setInterval(() => {
-    const waiting = (status === "connecting" && socket !== undefined) || (status === "live" && replica.pendingCount > 0);
+    const waiting = (status === "connecting" && socket !== undefined) || (status === "live" && replica.pendingCount > 0 && pauseTimer === undefined);
     if (waiting && Date.now() - lastHeard > ackTimeoutMs) resync();
   }, ackTimeoutMs / 2);
   (watchdog as { unref?: () => void }).unref?.(); // in Node, a timer must not keep a finished script alive
@@ -187,9 +194,10 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
 
     /** Make an edit. Shown at once; sent now, or after the next welcome if we are not live. */
     submit(op: Op): LocalResult {
+      const waitingBefore = replica.pendingCount;
       const result = replica.local(op);
       if (result.ok) {
-        if (replica.pendingCount === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
+        if (waitingBefore === 0 && replica.pendingCount === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
         flush();
         onChange?.();
       }

@@ -18,6 +18,8 @@ type Pending = ClientOp & { staleCount: number; inFlight: boolean; maybeApplied:
 
 // An op that comes back "stale" is rebased and sent again; if the room STILL cannot place it, stop.
 const MAX_STALE_RETRIES = 2;
+// The longest silence we accept on a server's say-so.
+const MAX_PAUSE_MS = 30_000;
 
 /**
  * One peer's copy of a document. Pure logic: no socket, no timer, no clock, so the reconcile
@@ -37,6 +39,11 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
   // Goes up whenever `optimistic` changes. The document is edited IN PLACE, so its identity says
   // nothing; this number is what a UI compares (React: useSyncExternalStore's snapshot).
   let revision = 0;
+  // How many unanswered ops we allow ourselves right now: `window` normally, ONE after the server said
+  // "too fast", then one more per answer. Sending the whole window into a budget that has refilled by
+  // a single token got 49 refusals per accepted op (measured: 18,524 for 600 ops).
+  let allowance = window;
+  const answered = (): void => { allowance = Math.min(window, allowance + 1); };
 
   /**
    * Throw the guess away and make it again. Only the node MAP is copied; the nodes are shared.
@@ -84,7 +91,10 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
     const body = JSON.stringify(message.op);
     const mineAt = pending.findIndex((each) => each.opId === message.opId && JSON.stringify(each.op) === body);
     const wasHead = mineAt === 0;
-    if (mineAt >= 0) pending = pending.filter((_, i) => i !== mineAt);
+    if (mineAt >= 0) {
+      pending = pending.filter((_, i) => i !== mineAt);
+      answered();
+    }
     if (message.seq <= seq) {
       // An answer to a resend, for an op the welcome ALREADY contains. Applying it again could
       // overwrite a later edit by someone else; it only tells us the op is no longer pending.
@@ -111,7 +121,8 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
     // to keep the order) count as unsent again, and the transport waits before it sends anything.
     if (reason === RejectReason.enum.rate_limited) {
       for (const each of pending.slice(pending.indexOf(mine))) each.inFlight = false;
-      return { ...effects, pauseMs: retryAfterMs ?? 1000 };
+      allowance = 1;
+      return { ...effects, pauseMs: Math.min(retryAfterMs ?? 1000, MAX_PAUSE_MS) };
     }
 
     // Not applied, and nothing wrong with the op: keep it and come back through a fresh welcome,
@@ -129,7 +140,9 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
       if (!alreadyThere && !mine.maybeApplied && mine.staleCount < MAX_STALE_RETRIES) {
         mine.staleCount++;
         mine.baseSeq = seq; // honest again: it is now written against what we have seen
-        mine.inFlight = false; // takeSendable() sends it again
+        // It goes out again, and so does everything after it: our own edits must reach the room in the
+        // order we made them (red, then blue). The room answers the repeats from its memory.
+        for (const each of pending.slice(pending.indexOf(mine))) each.inFlight = false;
         return effects;
       }
       pending = pending.filter((each) => each !== mine);
@@ -159,12 +172,11 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
      * server's answers pace the client, with no timer and no guess at the server's budget.
      */
     takeSendable(): ClientOp[] {
-      let room = window - pending.filter((each) => each.inFlight).length;
+      let room = allowance - pending.filter((each) => each.inFlight).length;
       const out: ClientOp[] = [];
       for (const each of pending) {
         if (room <= 0) break;
-        if (each.inFlight) continue;
-        // In order, always: never let an op out while an OLDER one is still waiting to be sent.
+        if (each.inFlight) continue; // (whoever clears inFlight clears it for every LATER op too, so order holds)
         each.inFlight = true;
         out.push(wire(each));
         room--;
@@ -202,9 +214,14 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
         case "rejected": return onRejected(message);
         case "ack": {
           // The server found the op changed nothing: the wait is over, and so is our guess about it.
-          const before = pending.length;
-          pending = pending.filter((each) => each.opId !== message.opId);
-          if (pending.length !== before) rebuild();
+          const mine = pending.find((each) => each.opId === message.opId);
+          if (!mine) return { rejected: [], resync: false };
+          // We can check: when the ack was sent, the server's document was exactly our confirmed one.
+          // If the op WOULD change it, this ack is wrong; believing it would silently delete an edit.
+          if (applyOp(confirmed, mine.op) !== confirmed) return { rejected: [], resync: true };
+          pending = pending.filter((each) => each !== mine);
+          answered();
+          rebuild();
           return { rejected: [], resync: false };
         }
       }

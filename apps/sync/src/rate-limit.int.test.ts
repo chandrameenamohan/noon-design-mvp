@@ -23,7 +23,9 @@ test("a flooding peer is told to slow down, then dropped with 4429; the document
   // The room is still fine for everyone else, and the flood did not get in.
   const opId = witness.send(add("after"));
   const accepted = await witness.next("op", (m) => m.opId === opId);
-  expect(accepted.seq).toBeLessThan(80); // about the burst, not 400
+  // At most the burst of 50 got in, plus this one. (Often fewer: the kick happens as the flood ARRIVES,
+  // and what a dropped peer still had waiting in the room's queue is discarded.)
+  expect(accepted.seq).toBeLessThanOrEqual(51);
   witness.close();
 });
 
@@ -31,8 +33,16 @@ test("an HONEST client that makes 300 edits at once lands every one, in order, a
   const documentId = randomUUID();
   const userId = randomUUID();
   const statuses: string[] = [];
+  let refusals = 0;
+  class Counting extends WebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols);
+      this.addEventListener("message", (event) => { if (String(event.data).includes('"rate_limited"')) refusals++; });
+    }
+  }
   const peer = connectPeer({
     manifest,
+    WebSocketImpl: Counting,
     onStatus: (status) => statuses.push(status),
     session: () => Promise.resolve({ wsUrl: `${ctx.server.url}/documents/${documentId}`, token: signSessionToken({ userId, orgId: TEST_ORG, documentId, secret: TEST_SECRET, ttlSeconds: 60 }) }),
   });
@@ -48,6 +58,11 @@ test("an HONEST client that makes 300 edits at once lands every one, in order, a
   expect(Object.keys(doc.nodes)).toHaveLength(301);
   expect(seq).toBe(300); // each applied exactly once
   expect(statuses).toEqual(["connecting", "live"]); // slowed down by the budget, never disconnected
+  // Paced, not brute force: fewer refusals than ops (measured ~215, of which ~50 are the window that was
+  // already on the wire at the first refusal). Before the window restarted at ONE op after a refusal it
+  // was ~30 refusals PER OP. ponytail: a credit the server advertises would make this ~0 (noted on E9.6).
+  expect(refusals).toBeGreaterThan(0);
+  expect(refusals).toBeLessThan(300);
   peer.close();
   observer.close();
 });

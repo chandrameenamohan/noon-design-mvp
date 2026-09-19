@@ -155,8 +155,46 @@ test("'rate_limited' makes the transport WAIT, then send the refused op and its 
   peer.submit(add("c")); // made during the pause: it waits its turn
   await sleep(40);
   expect(frames()).toHaveLength(2);
-  await until(() => frames().length === 5, "the resend after the pause");
-  expect(frames().slice(2).map((f) => f.op.nodeId)).toEqual(["a", "b", "c"]);
+  await until(() => frames().length === 3, "the first resend after the pause");
+  expect(frames()[2]?.op.nodeId).toBe("a"); // one op first: the budget has refilled by about one token
+  socket?.say({ type: "op", seq: 1, opId: a?.opId, actor: { kind: "user", id: "me" }, op: add("a") });
+  expect(frames().slice(3).map((f) => f.op.nodeId)).toEqual(["b", "c"]); // an answer widens the window again
   expect(peer.status).toBe("live"); // slowed down, never disconnected
+  peer.close();
+});
+
+test("a reject reason this client has never heard of is 'not applied, come back later', never the end of the peer", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  peer.submit(add("a"));
+  const sentOp = JSON.parse(net.sockets[0]?.sent[0] ?? "{}") as { opId: string };
+  net.sockets[0]?.say({ type: "rejected", opId: sentOp.opId, reason: "a_reason_from_next_year" });
+  expect(peer.closedBecause).toBeUndefined();
+  expect(peer.pendingCount).toBe(1);
+  await until(() => net.sockets.length === 2, "a reconnect, which resends it");
+  peer.close();
+});
+
+test("the watchdog leaves a pause alone: waiting as the server asked is not a dead connection", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net, { ackTimeoutMs: 40 }));
+  await until(() => peer.status === "live", "live");
+  peer.submit(add("a"));
+  const sentOp = JSON.parse(net.sockets[0]?.sent[0] ?? "{}") as { opId: string };
+  net.sockets[0]?.say({ type: "rejected", opId: sentOp.opId, reason: "rate_limited", retryAfterMs: 250 });
+  await sleep(200);
+  expect(net.sockets).toHaveLength(1);
+  peer.close();
+});
+
+test("edits that change nothing do not reset the silence clock: a dead connection is still noticed", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net, { ackTimeoutMs: 60 }));
+  await until(() => peer.status === "live", "live");
+  peer.submit(add("a")); // never answered
+  const fidget = setInterval(() => { peer.submit({ type: "move_node", nodeId: "a", newParentId: "root", index: 0 }); }, 15); // a drag that goes nowhere
+  await until(() => net.sockets.length === 2, "the reconnect");
+  clearInterval(fidget);
   peer.close();
 });

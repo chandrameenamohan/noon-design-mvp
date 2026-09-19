@@ -15,11 +15,18 @@ export type Peer = {
   kick?(): void;
 };
 
-/** A token bucket per actor: `burst` ops at once, refilled at `perSecond`. `maxStrikes` refusals in a row and the peer is dropped. */
+/**
+ * A token bucket per actor: `burst` ops at once, refilled at `perSecond`. A STRIKE is an op that
+ * arrives sooner than the peer was told to wait; `maxStrikes` in a row and the peer is dropped.
+ * INVARIANT: maxStrikes must be larger than peer-client's window (50): the ops that were already on
+ * the wire when the first refusal went out arrive "too soon" through no fault of the client.
+ */
 export type RateLimit = { perSecond: number; burst: number; maxStrikes: number };
-// A person dragging a node makes about 60 ops a second; peer-client keeps at most 50 unanswered ops
-// on the wire, so an honest client stays inside this even when it resends 2,000 edits made offline.
+// A person dragging a node makes about 60 ops a second.
 const DEFAULT_RATE: RateLimit = { perSecond: 100, burst: 200, maxStrikes: 500 };
+const MAX_RETRY_AFTER_MS = 60_000;
+const REMEMBERED_NO_OPS = 2000;
+const WORTH_RETURNING_FOR = 8; // tokens
 
 export type RoomLimits = {
   maxNodes: number;
@@ -65,47 +72,64 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
   // oldest is first. Keyed by SENDER too: every broadcast shows every opId to every peer, and a peer
   // that replayed someone else's opId must not get their answer while its own op is thrown away.
   // ponytail: this memory dies with the room. From E6.1a the journal's unique index is the real one.
-  // `op: undefined` = "that one changed nothing": its resend must get the same answer, not a second look.
-  const remembered = new Map<string, { op: SequencedOp | undefined; seq: number; bytes: number }>();
+  const remembered = new Map<string, { op: SequencedOp; bytes: number }>();
+  // Ops that changed nothing, so that a resend gets the same answer instead of a second look at a
+  // document that has moved on. Their OWN small memory: they cost their sender almost nothing, and in
+  // the map above a flood of them would push out real ops and turn honest resends into "stale".
+  // ponytail: a no-op that falls out of here is judged afresh if it is resent; the worst case is one
+  // old value written late. From E6.1a the journal... cannot help (a no-op has no row): keep this.
+  const rememberedNoOps = new Set<string>();
   let rememberedBytes = 0;
   // Everything up to this seq may have been applied and forgotten. A room loaded from storage starts
   // here: it remembers nothing about the ops that built the document it was given.
   let forgottenUpTo = seq;
   let tail: Promise<void> = Promise.resolve();
 
-  // Budgets are kept per ACTOR, not per connection: otherwise reconnecting would be a free refill.
-  // ponytail: an entry stays until a join finds it full again; one number pair per actor ever seen here.
+  // Budgets are kept per ACTOR (kind + id + run), not per connection: otherwise reconnecting would be
+  // a free refill. An agent run gets its own, so that it cannot spend the budget of the person who started it.
+  // ponytail: never pruned; one small entry per actor that ever edited here, for as long as the room lives.
+  // ponytail: a user could start many runs to multiply their budget; E3.2 caps concurrent runs per user.
   const buckets = new Map<string, { tokens: number; at: number }>();
-  // Per CONNECTION: the op this peer was last refused for, and how many refusals in a row.
-  const throttled = new WeakMap<Peer, { blockedOn: string; strikes: number }>();
+  // Per CONNECTION: the op this peer was first refused for, when it may come back, and its strikes.
+  const throttled = new WeakMap<Peer, { blockedOn: string; notBefore: number; strikes: number }>();
+  const bucketKey = ({ kind, id, runId }: Actor): string => `${kind}:${id}:${runId ?? ""}`;
 
   /** Takes one token (unless `take` is false), or says how many ms until there is one. 0 = taken. */
-  function spend(actorId: string, take = true): number {
-    const bucket = buckets.get(actorId) ?? { tokens: rate.burst, at: now() };
-    bucket.tokens = Math.min(rate.burst, bucket.tokens + ((now() - bucket.at) / 1000) * rate.perSecond);
+  function spend(actor: Actor, take = true): number {
+    const key = bucketKey(actor);
+    const bucket = buckets.get(key) ?? { tokens: rate.burst, at: now() };
+    // max(0): a clock that was corrected BACKWARDS must not turn into a debt of that many milliseconds.
+    bucket.tokens = Math.min(rate.burst, bucket.tokens + (Math.max(0, now() - bucket.at) / 1000) * rate.perSecond);
     bucket.at = now();
-    buckets.set(actorId, bucket);
+    buckets.set(key, bucket);
     if (bucket.tokens >= 1) {
       if (take) bucket.tokens -= 1;
       return 0;
     }
-    return Math.ceil(((1 - bucket.tokens) / rate.perSecond) * 1000);
+    // "Come back when it is worth it": when a few tokens have gathered, not the first one. A client told
+    // to return for ONE token sends one op, is refused on the next, and pays a refusal for every op.
+    // Capped: a budget of 0 per second would make this Infinity, which JSON writes as null.
+    const worthIt = Math.min(rate.burst, WORTH_RETURNING_FOR);
+    return Math.min(MAX_RETRY_AFTER_MS, Math.ceil(((worthIt - bucket.tokens) / rate.perSecond) * 1000));
   }
 
-  /** Refuses the op if this peer is over budget. True = refused (or dropped). */
+  /** Refuses the op if this peer is over budget. True = refused (or dropped). Runs ON ARRIVAL, outside the queue. */
   function overBudget(peer: Peer, opId: string): boolean {
     const state = throttled.get(peer);
     // Once an op is refused, everything AFTER it is refused too until that op comes back. Otherwise
     // the bucket refills mid-stream, a child is let in while its parent was refused, and the child is
     // lost for good as "gone".
     const outOfTurn = state !== undefined && state.blockedOn !== opId;
-    const waitMs = outOfTurn ? Math.max(1, spend(peer.actor.id, false)) : spend(peer.actor.id);
+    const waitMs = outOfTurn ? Math.max(Math.ceil(1000 / Math.max(rate.perSecond, 1)), spend(peer.actor, false)) : spend(peer.actor);
     if (waitMs === 0) {
       throttled.delete(peer);
       return false;
     }
-    const strikes = (state?.strikes ?? 0) + 1;
-    throttled.set(peer, { blockedOn: state?.blockedOn ?? opId, strikes });
+    // Only an op that came back TOO SOON is a strike. A peer that waits as told and is refused again
+    // (another tab of the same user took the token) is unlucky, not abusive.
+    const tooSoon = state === undefined || now() < state.notBefore;
+    const strikes = (state?.strikes ?? 0) + (tooSoon ? 1 : 0);
+    throttled.set(peer, { blockedOn: state?.blockedOn ?? opId, notBefore: outOfTurn ? state.notBefore : now() + waitMs, strikes });
     if (strikes > rate.maxStrikes) {
       peers.delete(peer); // it is not listening to "slow down": stop talking to it
       peer.kick?.();
@@ -132,16 +156,16 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     return false;
   }
 
-  function remember(key: string, op: SequencedOp | undefined): void {
-    const bytes = op ? JSON.stringify(op.op).length : 0;
-    remembered.set(key, { op, seq, bytes });
+  function remember(key: string, op: SequencedOp): void {
+    const bytes = JSON.stringify(op.op).length;
+    remembered.set(key, { op, bytes });
     rememberedBytes += bytes;
     while (remembered.size > limits.rememberedOps || rememberedBytes > limits.rememberedBytes) {
       const oldest = remembered.entries().next().value;
       if (!oldest) break;
       remembered.delete(oldest[0]);
       rememberedBytes -= oldest[1].bytes;
-      forgottenUpTo = Math.max(forgottenUpTo, oldest[1].seq);
+      forgottenUpTo = Math.max(forgottenUpTo, oldest[1].op.seq);
     }
   }
 
@@ -150,15 +174,18 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
       peer.send({ type: "rejected", opId, reason });
     };
 
-    // 0. The budget: every submission costs the same, whatever it turns out to be.
-    if (!peers.has(peer) || overBudget(peer, opId)) return;
+    if (!peers.has(peer)) return; // dropped while this op waited in the queue
 
     // 1. Dedupe FIRST. A client that never saw its acknowledgement sends the op again and must get
     //    the original answer; validating first would turn an ordinary retry into "duplicate_node".
     const key = `${peer.actor.id}:${opId}`;
     const before = remembered.get(key);
     if (before) {
-      peer.send(before.op ? { type: "op", ...before.op } : { type: "ack", opId });
+      peer.send({ type: "op", ...before.op });
+      return;
+    }
+    if (rememberedNoOps.has(key)) {
+      peer.send({ type: "ack", opId });
       return;
     }
     // An op written before the oldest thing the room remembers MAY already have been applied, and the
@@ -183,7 +210,8 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     // An op that changes nothing (the value is already that) is answered and goes no further: no seq,
     // no journal row, no broadcast. Remembered like any other, so that its resend is still a no-op.
     if (!changes(doc, op)) {
-      remember(key, undefined);
+      rememberedNoOps.add(key);
+      if (rememberedNoOps.size > REMEMBERED_NO_OPS) rememberedNoOps.delete(rememberedNoOps.values().next().value ?? key);
       peer.send({ type: "ack", opId });
       return;
     }
@@ -224,6 +252,10 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
 
     /** Resolves when this op has been fully handled (accepted and broadcast, or refused). Never rejects. */
     submit(peer: Peer, clientOp: ClientOp): Promise<void> {
+      // The budget is charged HERE, as the op arrives, not when the queue reaches it: behind a slow
+      // journal the bucket would refill while ops wait, nothing would ever be refused, and a flood
+      // would simply pile up in memory. Every submission costs the same, whatever it turns out to be.
+      if (!peers.has(peer) || overBudget(peer, clientOp.opId)) return tail;
       const done = tail.then(() => handle(peer, clientOp));
       tail = done.catch(() => undefined); // one failure must not jam the queue for every later op
       return tail;
