@@ -10,7 +10,8 @@ with `--no-verify`, and never weaken, delete or skip a check to get to green.
 |---|---|---|---|
 | lint | `make lint` | ESLint 10 + typescript-eslint (strict, type-aware), zero warnings, `no-console` | unsafe `any`, floating promises, stray logging |
 | typecheck | `make typecheck` | `tsc --noEmit`, `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` | type errors across every package, app and e2e test |
-| unit | `make unit` | Vitest; fails if no tests are found | logic in `packages/*` and `apps/*` |
+| unit | `make unit` | Vitest; fails if no tests are found; excludes `*.int.test.ts` | pure logic, no I/O |
+| integration | `make integration` | Vitest over `*.int.test.ts`, one file at a time, against the real dev environment (`./init.sh` first). Database tests get a throwaway Postgres schema each | behavior across a real dependency or process |
 | deadcode | `make deadcode` | knip | unused files, exports and dependencies |
 | dup | `make dup` | jscpd, threshold 0 (8 lines / 60 tokens) | copy-pasted blocks |
 | e2e | `make e2e` | Playwright (Chromium) against the Vite dev server | real browser behavior |
@@ -52,7 +53,6 @@ breaks the lint layer. Revisit when typescript-eslint supports 7.
 
 | Not verified | Why | Arrives |
 |---|---|---|
-| Anything using Postgres from code | no code talks to it yet; `init.sh` only proves it is up | E1.2 |
 | Reconcile simulator (`make sim`, F8a) | the room and peer-client do not exist | epic 2 |
 | Screenshots on Linux | baselines are per-OS; only `darwin` exists | when CI exists |
 | Firefox and WebKit | the frontend exists to drive the backend | not planned |

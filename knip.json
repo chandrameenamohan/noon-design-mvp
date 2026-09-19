@@ -4,7 +4,13 @@
     ".": {
       "entry": [
         "e2e/**/*.ts"
-      ]
+      ],
+      "vitest": {
+        "config": [
+          "vitest.config.ts",
+          "vitest.integration.config.ts"
+        ]
+      }
     },
     "apps/web": {
       "entry": [
@@ -16,7 +22,6 @@
     "jscpd"
   ],
   "ignore": [
-    "docs/**",
     "drills/**",
     "learning-tests/**"
   ],
