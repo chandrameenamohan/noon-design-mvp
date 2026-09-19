@@ -87,14 +87,18 @@ export function buildApp({ db, identify }: { db: Db; identify: Identify }): Hono
   });
 
   // Everything under /orgs needs a caller. The probes above do not.
+  // Identity fails CLOSED: every route needs a caller unless it is listed here. A new top-level
+  // route (E1.5's POST /documents/:id/session, for one) is protected without anyone remembering to.
   // createMiddleware carries the Variables type, so `c.var.user` is typed (not `any`) downstream.
+  const PUBLIC_PATHS = new Set(["/health", "/ready"]);
   const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
+    if (PUBLIC_PATHS.has(c.req.path)) return next();
     const user = await identify(c, db);
     if (!user) return fail(c, 401, "unauthenticated");
     c.set("user", user);
     await next();
   });
-  app.use("/orgs/*", requireUser);
+  app.use("*", requireUser);
 
   app.post("/orgs", async (c) => {
     const { name } = await body(c, CreateOrgBody);
@@ -108,6 +112,8 @@ export function buildApp({ db, identify }: { db: Db; identify: Identify }): Hono
   // EVERYTHING about one org lives behind this middleware, including reading the org itself: it is
   // the one place that decides whether the caller may see this org. Not a member and no such org
   // are the same answer, 404, so a response never confirms that someone else's org exists (F2).
+  // MEMBERSHIP ONLY: the member's role is ignored here, so today a viewer may create workspaces and
+  // documents. Role enforcement arrives in E8.2, which must cover these REST writes, not only ops.
   const org = new Hono<{ Variables: { user: User; org: Org; scope: ReturnType<Db["forOrg"]> } }>();
   org.use(async (c, next) => {
     const found = await db.getOrgForMember(c.req.param("orgId") ?? "", c.var.user.id);

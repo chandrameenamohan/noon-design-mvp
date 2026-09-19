@@ -18,8 +18,8 @@ test("GET /health answers with a body that satisfies the HealthResponse contract
   expect(HealthResponse.parse(await res.json())).toEqual({ status: "ok", service: "api" });
 });
 
-test("an unknown route is a JSON 404, not an HTML page or a crash", async () => {
+test("an unknown route without a caller is a JSON 401: identity fails closed, and never as an HTML page", async () => {
   const res = await fetch(`${server.url}/nope`);
-  expect(res.status).toBe(404);
-  expect(await res.json()).toEqual({ error: "not_found" });
+  expect(res.status).toBe(401);
+  expect(await res.json()).toEqual({ error: "unauthenticated" });
 });
