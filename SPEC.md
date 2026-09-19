@@ -288,25 +288,45 @@ conditional, `.map()`, extra statement or hook, second export.
 | Postgres or MinIO down | Rooms refuse new ops with a visible read-only status; nothing is silently dropped |
 | AI token missing or rate-limited | Run fails fast with a clear reason; canvas unaffected |
 
-## 4a. Final verification on Antithesis (end of W3)
+## 4a. Final verification: a local Antithesis-style harness (end of W3)
 
-After all nine epics pass `make check` and the §8 scenario, the system is run
-once more on Antithesis (antithesis.com), a hosted deterministic-simulation
-platform that runs our containers under injected faults and replays any failure.
-- **A1. Packaged for Antithesis.** The Compose stack builds as container images
-  pushed to the Antithesis registry, with a test template (workload commands
-  that drive concurrent user, AI-stub and git edits) and JavaScript SDK
-  assertions for the invariants: peers converge, no acknowledged op lost, no op
-  applied twice, no `seq` gap or duplicate, no cycle, no cross-org read, no
-  duplicate job or PR.
-- **A2. Run and triage.** At least one full run completes; every reported
-  failure is reproduced, turned into a bead, fixed under the normal gate, and
-  covered by a regression test; a re-run shows those properties passing.
-- The AI agent is replaced by a scripted stub peer during these runs (no model
-  calls or subscription token leave the machine).
-- *Dependency:* access is by request to Antithesis (registry + credentials);
-  if access is not granted, A1's artifacts are still built and verified
-  locally, and A2 is reported as blocked, not skipped silently.
+Same method the owner used in `~/repos/ai-engine`: not the hosted platform, but
+a local harness built so it can be handed to Antithesis unchanged. Rule:
+**write properties, then attack the system while they are checked; change
+configuration, never code** (if the slice needs a code change to boot, that is
+a finding).
+- **A0. Properties first.** A property catalog (`antithesis/scratchbook/`)
+  produced with Antithesis's published `antithesis-research` skill
+  (`npx skills add antithesishq/antithesis-skills`, no account needed): each
+  property phrased on a business observable, typed `always` / `sometimes` /
+  `unreachable`, with priority, an evidence file, and the place its assertion
+  lives. Starts from the seven invariants: peers converge, no acknowledged op
+  lost, no op applied twice, no `seq` gap or duplicate, no cycle, no cross-org
+  read, no duplicate job or PR. Every `always` has a `sometimes` vacuity guard
+  proving its path really ran.
+- **A1. The harness (`deploy/antithesis/`).** A hermetic Compose slice (no
+  internet) of the unchanged app images with stores behind toxiproxy; a driver
+  image carrying the Antithesis JavaScript SDK in local-output mode
+  (`ANTITHESIS_SDK_LOCAL_OUTPUT`, one file per process) and the real test
+  template layout (`/opt/antithesis/test/v1/noon/` with `first_`,
+  `parallel_driver_`, `anytime_`, `finally_` commands); an op ledger so
+  `finally` accounts for every submitted op; the AI peer is a scripted stub (no
+  model calls, no token in any image). Faults at the trust boundaries in four
+  shapes: unavailable (toxiproxy toggle), slow (latency toxic), dies mid-step
+  (`docker kill -9`), stalls (`docker pause`). `run.sh up | baseline | <named
+  scenario> | chaos N | report | reset | down`; `report` aggregates PASS/FAIL
+  per property.
+- **A2. Run and fix.** `baseline` is all PASS; each named scenario and
+  `chaos 20` run; every FAIL is written as *sequence → false belief →
+  consequence → smallest fix*, filed as a bead, fixed under the normal gate
+  with a regression test, and its scenario flips from FAIL to PASS.
+- **Carried-over pitfalls:** open the fault before the workload or slow the
+  system (a fast pipeline outruns a late fault); trigger faults off log lines,
+  not sleeps; the runner must survive failing rounds (no `set -e` deaths);
+  one-shot passes prove nothing, so repeat; verify the harness's own properties
+  first; restart-before-check hides crashes.
+- A hosted Antithesis run is optional later and needs a tenant; the directory
+  is kept `snouty validate`-ready for it.
 
 ## 5. Non-goals
 

@@ -50,5 +50,5 @@ breaks the lint layer. Revisit when typescript-eslint supports 7.
 | Screenshots on Linux | baselines are per-OS; only `darwin` exists | when CI exists |
 | Firefox and WebKit | the frontend exists to drive the backend | not planned |
 | Crash, failover and fencing tests | need journal and multi-node | epics 6 and 7 |
-| Antithesis run (SPEC §4a) | needs the finished system and granted access | end of build |
+| Local Antithesis-style harness (SPEC §4a) | needs the finished system | end of build |
 | Test coverage thresholds | a number invites tests written for the number | not planned |

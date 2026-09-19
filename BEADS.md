@@ -125,12 +125,13 @@ N's handbook bead (never more than one chapter behind).
 | key | outcome | checks | out of scope | deps | touches | R |
 |---|---|---|---|---|---|---|
 | Z.1 | The SPEC §8 scenario runs as one script on a clean clone with two sync nodes and passes, including `make clean-clone` and `make chaos` | e2e:spec-scenario | — | E9.H, E8.H | e2e, scripts | |
-| Z.2 | Antithesis package: images, test template with a scripted AI stub peer, JS SDK assertions for the seven invariants; dry-run verified locally (A1) | integration:antithesis-local-dry-run | model calls in the run | Z.1 | antithesis/, apps/* | |
-| Z.3 | Done = every Antithesis-reported failure has a bead, a committed regression test in the gate, and a re-run showing those properties passing (A2). Alternative outcome: access not granted → A2 recorded as blocked with the reason, never silently closed | re-run report committed under antithesis/reports | — | Z.2 | — | |
+| Z.2a | Property catalog under `antithesis/scratchbook/` built with the `antithesis-research` skill: every property on a business observable, typed and prioritised, with an evidence file, its assertion site, and a `sometimes` vacuity guard per `always`; starts from the seven invariants (A0) | check:catalog-complete (every property has type, priority, site, guard) | assertions in code | Z.1 | antithesis/scratchbook | |
+| Z.2b | `deploy/antithesis/`: hermetic Compose slice of unchanged images behind toxiproxy, driver image with the Antithesis JS SDK in local-output mode, real test-template layout, op ledger, scripted AI stub; `run.sh up` then `baseline` reports every property PASS and every vacuity guard hit (A1) | harness:baseline-all-pass · harness:vacuity-guards-hit · harness:no-internet | hosted run, model calls | Z.2a | deploy/antithesis | |
+| Z.3 | Named fault scenarios (store unavailable, slow, sync killed, sync paused past lease, worker killed, Redis wiped, webhook dropped) and `chaos 20` run; every FAIL is written as sequence → false belief → consequence → smallest fix, filed as a bead, fixed under the gate with a regression test, and its scenario flips FAIL → PASS (A2) | harness:scenarios-report committed under deploy/antithesis/reports · each fix's regression test in `make check` | hosted Antithesis run (optional later; directory kept `snouty validate`-ready) | Z.2b | deploy/antithesis, whatever the fixes touch | R |
 
 ## Spec changes this graph implies
 1. F14 (manifest drift guard) moves from epic 4 to epic 2: validation needs the manifest from the first op.
 2. §4 "`api` dies" row: "creating POSTs are idempotent" narrows to "job-creating POSTs are idempotent (F27); other requests are safe to retry".
 3. Gate layers: `integration` and `sim` join `make check`; `make chaos`, `make live`, `make clean-clone`, `make drills` exist outside it.
 
-Totals: 59 beads (1 primer, 9 handbook, 3 final).
+Totals: 60 beads (1 primer, 9 handbook, 4 final).
