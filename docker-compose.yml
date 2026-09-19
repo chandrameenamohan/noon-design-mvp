@@ -13,14 +13,26 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # One-shot, as the database OWNER: applies migrations and provisions the app's limited login role.
+  migrate:
+    build: .
+    command: ["node", "packages/db/src/migrate-cli.ts"]
+    environment:
+      MIGRATE_DATABASE_URL: postgres://noon:noon-dev-only@postgres:5432/noon
+      APP_DB_ROLE: noon_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-noon-app-dev-only}
+    depends_on:
+      postgres: { condition: service_healthy }
   api:
     build: .
     command: ["node", "apps/api/src/main.ts"]
     environment:
       PORT: "3000"
+      # The app connects as noon_app: data access only, not a superuser, cannot alter the schema.
+      DATABASE_URL: postgres://noon_app:${APP_DB_PASSWORD:-noon-app-dev-only}@postgres:5432/noon
     ports: ["${API_PORT:-3000}:3000"]
     depends_on:
-      postgres: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     healthcheck:
       # node:24-slim has no curl; Node's own fetch does the job.
       test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]

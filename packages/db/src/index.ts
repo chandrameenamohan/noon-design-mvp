@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { Pool, type QueryResultRow } from "pg";
+import { Client, Pool, type QueryResultRow } from "pg";
 import { Document, Id, Name, Org, Workspace } from "@noon/contracts";
 import { z } from "zod";
 
@@ -10,6 +10,7 @@ export type Db = {
   migrate(): Promise<void>;
   appliedMigrations(): Promise<string[]>;
   createOrg(input: { name: string }): Promise<Org>;
+  getOrg(id: string): Promise<Org | undefined>;
   /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
   forOrg(orgId: string): OrgScope;
   close(): Promise<void>;
@@ -35,12 +36,13 @@ const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id:
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
 
+const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const isId = (x: string): boolean => Id.safeParse(x).success;
 
 export function createDb({ connectionString, schema }: { connectionString: string; schema?: string }): Db {
   // `schema` goes into libpq's space-separated startup options, where a space would smuggle in
   // extra `-c` settings (the review set session_replication_role this way). Plain identifiers only.
-  if (schema !== undefined && !/^[a-z_][a-z0-9_]*$/.test(schema)) {
+  if (schema !== undefined && !IDENTIFIER.test(schema)) {
     throw new Error(`invalid schema name: ${JSON.stringify(schema)}`);
   }
 
@@ -112,6 +114,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     // cannot be read back must never be stored (it would make every later list throw).
     createOrg: async ({ name }) => exactlyOne(OrgRow, "insert into orgs (name) values ($1) returning *", [Name.parse(name)]),
 
+    getOrg: async (id) => (isId(id) ? one(OrgRow, "select * from orgs where id = $1", [id]) : undefined),
+
     forOrg(orgId) {
       // An id that is not a UUID cannot name anything, so it means "not found" rather than a
       // Postgres 22P02 error (which would surface as a 500 and echo the caller's input).
@@ -147,4 +151,33 @@ export function createDb({ connectionString, schema }: { connectionString: strin
 
     close: () => pool.end(),
   };
+}
+
+/**
+ * Creates (or updates) the login role the application connects as, and grants it data access only:
+ * no schema changes, no migration history, no superuser. Run by the owner, next to migrations.
+ */
+export async function provisionAppRole({ ownerUrl, schema = "public", role, password }: {
+  ownerUrl: string;
+  schema?: string;
+  role: string;
+  password: string;
+}): Promise<void> {
+  if (!IDENTIFIER.test(role)) throw new Error(`invalid role name: ${JSON.stringify(role)}`);
+  if (!IDENTIFIER.test(schema)) throw new Error(`invalid schema name: ${JSON.stringify(schema)}`);
+  const owner = new Client({ connectionString: ownerUrl });
+  await owner.connect();
+  try {
+    // Role DDL cannot take bind parameters, so the two values are escaped by the driver.
+    const r = owner.escapeIdentifier(role);
+    const s = owner.escapeIdentifier(schema);
+    const exists = await owner.query("select 1 from pg_roles where rolname = $1", [role]);
+    await owner.query(`${exists.rowCount === 0 ? "create" : "alter"} role ${r} login nosuperuser nocreatedb nocreaterole password ${owner.escapeLiteral(password)}`);
+    await owner.query(`grant usage on schema ${s} to ${r}`);
+    await owner.query(`grant select, insert, update, delete on all tables in schema ${s} to ${r}`);
+    await owner.query(`alter default privileges in schema ${s} grant select, insert, update, delete on tables to ${r}`);
+    await owner.query(`revoke all on ${s}.schema_migrations from ${r}`);
+  } finally {
+    await owner.end();
+  }
 }

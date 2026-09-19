@@ -21,3 +21,15 @@ export type Workspace = z.infer<typeof Workspace>;
 
 export const Document = z.object({ id: Id, orgId: Id, workspaceId: Id, title: Name, createdAt: Timestamp });
 export type Document = z.infer<typeof Document>;
+
+// --- HTTP bodies -------------------------------------------------------------
+export const CreateOrgBody = z.strictObject({ name: Name });
+export const CreateWorkspaceBody = z.strictObject({ name: Name });
+export const CreateDocumentBody = z.strictObject({ title: Name });
+
+/** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
+export const ErrorBody = z.object({
+  error: z.enum(["invalid_json", "invalid_body", "not_found", "internal"]),
+  issues: z.array(z.object({ field: z.string(), message: z.string() })).optional(),
+});
+export type ErrorBody = z.infer<typeof ErrorBody>;

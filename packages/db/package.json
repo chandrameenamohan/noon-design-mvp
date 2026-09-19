@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "@types/pg": "^8.23.1"
+  },
+  "scripts": {
+    "migrate": "node src/migrate-cli.ts"
   }
 }

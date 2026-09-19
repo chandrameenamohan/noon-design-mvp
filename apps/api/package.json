@@ -9,6 +9,8 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@noon/contracts": "workspace:^",
-    "hono": "^4.13.8"
+    "@noon/db": "workspace:^",
+    "hono": "^4.13.8",
+    "zod": "^4.6.5"
   }
 }

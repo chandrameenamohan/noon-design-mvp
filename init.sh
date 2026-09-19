@@ -25,4 +25,12 @@ answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")
 # Smoke test: the api answers over real HTTP with the contract's shape.
 health=$(curl -fsS "http://localhost:${API_PORT:-3000}/health")
 [ "$health" = '{"status":"ok","service":"api"}' ] || { echo "FAIL: api /health returned '$health'"; exit 1; }
-echo "PASS: dev environment is up (postgres and api answer, hook installed)"
+# Smoke test: a real write and read through the api, which reaches Postgres as the limited role.
+api="http://localhost:${API_PORT:-3000}"
+org=$(curl -fsS -X POST "$api/orgs" -H 'content-type: application/json' -d '{"name":"init.sh smoke"}')
+org_id=$(printf '%s' "$org" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+[ -n "$org_id" ] || { echo "FAIL: POST /orgs returned '$org'"; exit 1; }
+[ "$(curl -fsS "$api/orgs/$org_id")" = "$org" ] || { echo "FAIL: GET /orgs/$org_id did not return the created org"; exit 1; }
+super=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select rolsuper from pg_roles where rolname = 'noon_app'")
+[ "$super" = "f" ] || { echo "FAIL: the app role is missing or is a superuser ('$super')"; exit 1; }
+echo "PASS: dev environment is up (api writes and reads through a non-superuser role, hook installed)"
