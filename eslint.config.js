@@ -12,7 +12,7 @@ export default tseslint.config(
   {
     // packages/db/src/testing.ts holds a raw-SQL door for proving what the DATABASE refuses.
     // package.json "exports" only guards the "@noon/db" name; a relative path would walk around it.
-    ignores: ["**/*.int.test.ts"],
+    ignores: ["**/*.int.test.ts", "**/testing.ts"], // test-only helpers may build on each other
     rules: {
       "no-restricted-imports": ["error", { patterns: [{ group: ["**/testing.ts", "**/testing"], message: "Test-only raw-SQL helper: import it from *.int.test.ts files only." }] }],
     },

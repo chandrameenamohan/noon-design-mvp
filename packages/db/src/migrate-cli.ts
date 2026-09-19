@@ -9,10 +9,12 @@ function required(name: string): string {
 }
 
 const ownerUrl = required("MIGRATE_DATABASE_URL");
-const db = createDb({ connectionString: ownerUrl });
+// One explicit schema for both steps, so they can never disagree about where the tables are.
+const schema = "public";
+const db = createDb({ connectionString: ownerUrl, schema });
 try {
   await db.migrate();
-  await provisionAppRole({ ownerUrl, role: required("APP_DB_ROLE"), password: required("APP_DB_PASSWORD") });
+  await provisionAppRole({ ownerUrl, schema, role: required("APP_DB_ROLE"), password: required("APP_DB_PASSWORD") });
   process.stdout.write(`migrated: ${(await db.appliedMigrations()).join(", ")}\n`);
 } finally {
   await db.close();

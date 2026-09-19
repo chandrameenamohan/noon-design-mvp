@@ -1,21 +1,12 @@
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { Document, ErrorBody, Org, Workspace } from "@noon/contracts";
-import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
-import { startServer, type RunningServer } from "./server.ts";
+import { startServer } from "./server.ts";
+import { useTestServer } from "./testing.ts";
 
-let t: TestDb;
-let server: RunningServer;
-beforeAll(async () => {
-  t = await createTestDb();
-  server = await startServer({ port: 0, db: t.db });
-});
-afterAll(async () => {
-  await server.close();
-  await t.drop();
-});
+const ctx = useTestServer();
 
 async function call(method: string, path: string, body?: unknown): Promise<{ status: number; json: unknown }> {
-  const res = await fetch(`${server.url}${path}`, {
+  const res = await fetch(`${ctx.server.url}${path}`, {
     method,
     ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) }),
   });
@@ -29,11 +20,11 @@ test("create an org, then a workspace and a document in it, and read each back",
   const created = await call("POST", `/orgs/${org.id}/workspaces`, { name: "Design" });
   expect(created.status).toBe(201);
   const ws = Workspace.parse(created.json);
-  expect((await call("GET", `/orgs/${org.id}/workspaces`)).json).toEqual([ws]);
+  expect((await call("GET", `/orgs/${org.id}/workspaces`)).json).toEqual({ items: [ws], nextCursor: null });
   expect((await call("GET", `/orgs/${org.id}/workspaces/${ws.id}`)).json).toEqual(ws);
 
   const doc = Document.parse((await call("POST", `/orgs/${org.id}/workspaces/${ws.id}/documents`, { title: "Checkout" })).json);
-  expect((await call("GET", `/orgs/${org.id}/workspaces/${ws.id}/documents`)).json).toEqual([doc]);
+  expect((await call("GET", `/orgs/${org.id}/workspaces/${ws.id}/documents`)).json).toEqual({ items: [doc], nextCursor: null });
   expect((await call("GET", `/orgs/${org.id}/documents/${doc.id}`)).json).toEqual(doc);
 });
 
@@ -77,11 +68,11 @@ test("things that do not exist are 404: unknown ids, malformed ids, a workspace 
   // Creating under something that does not exist in this org is also 404, and creates nothing.
   expect((await call("POST", `/orgs/${ghost}/workspaces`, { name: "w" })).status).toBe(404);
   expect((await call("POST", `/orgs/${b.id}/workspaces/${wsA.id}/documents`, { title: "sneaky" })).status).toBe(404);
-  expect((await call("GET", `/orgs/${a.id}/workspaces/${wsA.id}/documents`)).json).toEqual([]);
+  expect((await call("GET", `/orgs/${a.id}/workspaces/${wsA.id}/documents`)).json).toEqual({ items: [], nextCursor: null });
 });
 
 test("a database failure is a 500 that says nothing about the database", async () => {
-  const broken = await startServer({ port: 0, db: { ...t.db, createOrg: () => Promise.reject(new Error('relation "orgs" does not exist; password=hunter2')) } });
+  const broken = await startServer({ port: 0, db: { ...ctx.db.db, createOrg: () => Promise.reject(new Error('relation "orgs" does not exist; password=hunter2')) } });
   try {
     const res = await fetch(`${broken.url}/orgs`, { method: "POST", headers: { "content-type": "application/json" }, body: '{"name":"x"}' });
     expect(res.status).toBe(500);

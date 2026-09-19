@@ -1,12 +1,16 @@
 # ponytail: only the stores an epic already needs. Redis arrives with epic 3, MinIO with epic 6, Gitea with epic 5.
+#
+# Secrets: there are NO default passwords here. `./init.sh` generates random ones into .env (git-ignored),
+# and compose refuses to start when one is missing, instead of quietly using a password from a public repo.
+# Ports are published on 127.0.0.1 only: a laptop on a shared network must not expose its database.
 services:
   postgres:
     image: postgres:17
     environment:
       POSTGRES_USER: noon
-      POSTGRES_PASSWORD: noon-dev-only
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?run ./init.sh to generate .env}"
       POSTGRES_DB: noon
-    ports: ["${PG_PORT:-5432}:5432"]
+    ports: ["127.0.0.1:${PG_PORT:-5432}:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U noon -d noon"]
@@ -18,9 +22,9 @@ services:
     build: .
     command: ["node", "packages/db/src/migrate-cli.ts"]
     environment:
-      MIGRATE_DATABASE_URL: postgres://noon:noon-dev-only@postgres:5432/noon
+      MIGRATE_DATABASE_URL: "postgres://noon:${POSTGRES_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       APP_DB_ROLE: noon_app
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-noon-app-dev-only}
+      APP_DB_PASSWORD: "${APP_DB_PASSWORD:?run ./init.sh}"
     depends_on:
       postgres: { condition: service_healthy }
   api:
@@ -29,13 +33,15 @@ services:
     environment:
       PORT: "3000"
       # The app connects as noon_app: data access only, not a superuser, cannot alter the schema.
-      DATABASE_URL: postgres://noon_app:${APP_DB_PASSWORD:-noon-app-dev-only}@postgres:5432/noon
-    ports: ["${API_PORT:-3000}:3000"]
+      # init.sh generates hex passwords, so the value is safe inside a URL without escaping.
+      DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
+    ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
     depends_on:
       migrate: { condition: service_completed_successfully }
     healthcheck:
+      # Readiness, not liveness: "healthy" must mean the api can reach its database.
       # node:24-slim has no curl; Node's own fetch does the job.
-      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/ready').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 2s
       timeout: 2s
       retries: 30

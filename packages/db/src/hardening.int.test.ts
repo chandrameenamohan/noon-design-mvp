@@ -15,11 +15,11 @@ test.each(["   ", "", "  ", "x".repeat(201)])(
     const org = await t.db.createOrg({ name: "Poison-proof" });
     const scope = t.db.forOrg(org.id);
     await expect(scope.createWorkspace({ name })).rejects.toThrow();
-    expect(await scope.listWorkspaces()).toEqual([]); // the list still works, and nothing was stored
+    expect(await scope.listWorkspaces()).toMatchObject({ items: [] }); // the list still works, and nothing was stored
 
     const ws = await scope.createWorkspace({ name: "ok" });
     await expect(scope.createDocument({ workspaceId: ws.id, title: name })).rejects.toThrow();
-    expect(await scope.listDocuments(ws.id)).toEqual([]);
+    expect(await scope.listDocuments(ws.id)).toMatchObject({ items: [] });
     await expect(t.db.createOrg({ name })).rejects.toThrow();
   },
 );
@@ -39,11 +39,11 @@ test("an id that is not a UUID means 'not found', not a database error", async (
   const scope = t.db.forOrg(org.id);
   expect(await scope.getWorkspace("nope")).toBeUndefined();
   expect(await scope.getDocument("nope")).toBeUndefined();
-  expect(await scope.listDocuments("nope")).toEqual([]);
+  expect(await scope.listDocuments("nope")).toMatchObject({ items: [] });
   expect(await scope.createDocument({ workspaceId: "nope", title: "t" })).toBeUndefined();
 
   const nowhere = t.db.forOrg("not-an-org");
-  expect(await nowhere.listWorkspaces()).toEqual([]);
+  expect(await nowhere.listWorkspaces()).toMatchObject({ items: [] });
   expect(await nowhere.getWorkspace(org.id)).toBeUndefined();
   await expect(nowhere.createWorkspace({ name: "w" })).rejects.toThrow(/org/);
 });
@@ -75,5 +75,5 @@ test("when Postgres kills an idle connection the process survives and the next q
     "select pg_terminate_backend(pid) from pg_stat_activity where application_name = 'noon-db' and pid <> pg_backend_pid()",
   );
   await new Promise((r) => setTimeout(r, 200)); // let the pool notice; an unhandled 'error' would fail this test run
-  expect(await t.db.forOrg(org.id).listWorkspaces()).toEqual([]);
+  expect(await t.db.forOrg(org.id).listWorkspaces()).toMatchObject({ items: [] });
 });

@@ -1,4 +1,14 @@
+import { existsSync, readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 import { defineConfig } from "vitest/config";
+
+// Integration tests need the local database secret that ./init.sh wrote to .env. Only the keys the
+// tests use are copied into the environment; anything else in that file stays out of the test process.
+if (existsSync(".env")) {
+  const env = parseEnv(readFileSync(".env", "utf8"));
+  for (const key of ["POSTGRES_PASSWORD", "APP_DB_PASSWORD"]) process.env[key] ??= env[key];
+}
+
 
 // Integration layer: real dependencies and real processes. Needs `./init.sh` to have been run.
 export default defineConfig({

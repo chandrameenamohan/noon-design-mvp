@@ -28,9 +28,9 @@ test("a workspace created in org A is visible to A and invisible to B", async ()
   const b = await t.db.createOrg({ name: "Globex" });
   const ws = await t.db.forOrg(a.id).createWorkspace({ name: "Design" });
 
-  expect(await t.db.forOrg(a.id).listWorkspaces()).toEqual([ws]);
+  expect(await t.db.forOrg(a.id).listWorkspaces()).toMatchObject({ items: [ws] });
   expect(await t.db.forOrg(a.id).getWorkspace(ws.id)).toEqual(ws);
-  expect(await t.db.forOrg(b.id).listWorkspaces()).toEqual([]);
+  expect(await t.db.forOrg(b.id).listWorkspaces()).toMatchObject({ items: [] });
   expect(await t.db.forOrg(b.id).getWorkspace(ws.id)).toBeUndefined();
 });
 
@@ -41,7 +41,7 @@ test("org B cannot create a document inside org A's workspace", async () => {
 
   // Through the accessor: B's scope does not see A's workspace, so nothing is created.
   expect(await t.db.forOrg(b.id).createDocument({ workspaceId: wsA.id, title: "sneaky" })).toBeUndefined();
-  expect(await t.db.forOrg(a.id).listDocuments(wsA.id)).toEqual([]);
+  expect(await t.db.forOrg(a.id).listDocuments(wsA.id)).toMatchObject({ items: [] });
 
   // Behind the accessor: even raw SQL cannot do it, because the database itself refuses.
   await expect(
@@ -56,7 +56,7 @@ test("a document lives in its org and workspace", async () => {
   const doc = await scope.createDocument({ workspaceId: ws.id, title: "Checkout" });
   if (!doc) throw new Error("the document should have been created");
   expect(doc).toMatchObject({ orgId: a.id, workspaceId: ws.id, title: "Checkout" });
-  expect(await scope.listDocuments(ws.id)).toEqual([doc]);
+  expect(await scope.listDocuments(ws.id)).toMatchObject({ items: [doc] });
   expect(await scope.getDocument(doc.id)).toEqual(doc);
 });
 
