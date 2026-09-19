@@ -61,3 +61,29 @@ export type PageQuery = z.infer<typeof PageQuery>;
 
 /** `nextCursor` is opaque to clients: pass it back unchanged, or stop when it is null. */
 export type Page<T> = { items: T[]; nextCursor: string | null };
+
+// --- Component manifest (SPEC §2.7) ------------------------------------------------
+// What the canvas may place and which props each component takes. GENERATED from the customer's
+// TypeScript (packages/design-system), never written by hand, so it cannot drift from the code.
+const PropType = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("string") }),
+  z.object({ kind: z.literal("number") }),
+  z.object({ kind: z.literal("boolean") }),
+  z.object({ kind: z.literal("enum"), options: z.array(z.string()).min(1) }),
+]);
+
+const ManifestProp = z.object({
+  name: z.string().min(1),
+  type: PropType,
+  required: z.boolean(),
+  /** The default the component applies when the prop is absent, if it declares one. */
+  default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+});
+const ManifestComponent = z.object({
+  name: z.string().min(1),
+  /** Whether other components may be placed inside it (it declares a `children` prop). */
+  acceptsChildren: z.boolean(),
+  props: z.array(ManifestProp),
+});
+export const Manifest = z.object({ version: z.literal(1), components: z.array(ManifestComponent) });
+export type Manifest = z.infer<typeof Manifest>;

@@ -17,3 +17,7 @@ drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh
 # Outside `make check` (minutes, builds an image): F1 on a fresh clone of the committed HEAD.
 .PHONY: clean-clone
 clean-clone: ; sh scripts/clean-clone.sh
+
+# Regenerates the component manifest from the sample app's types. `make check` fails when it is stale.
+.PHONY: manifest
+manifest: ; pnpm --filter @noon/design-system generate

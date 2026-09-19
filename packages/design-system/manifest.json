@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "components": [
+    {
+      "name": "Button",
+      "acceptsChildren": false,
+      "props": [
+        {
+          "name": "disabled",
+          "type": {
+            "kind": "boolean"
+          },
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "label",
+          "type": {
+            "kind": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "variant",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "ghost",
+              "primary",
+              "secondary"
+            ]
+          },
+          "required": false,
+          "default": "primary"
+        }
+      ]
+    },
+    {
+      "name": "Card",
+      "acceptsChildren": true,
+      "props": [
+        {
+          "name": "padding",
+          "type": {
+            "kind": "number"
+          },
+          "required": false,
+          "default": 16
+        },
+        {
+          "name": "title",
+          "type": {
+            "kind": "string"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "Image",
+      "acceptsChildren": false,
+      "props": [
+        {
+          "name": "alt",
+          "type": {
+            "kind": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "height",
+          "type": {
+            "kind": "number"
+          },
+          "required": false
+        },
+        {
+          "name": "src",
+          "type": {
+            "kind": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "width",
+          "type": {
+            "kind": "number"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "Input",
+      "acceptsChildren": false,
+      "props": [
+        {
+          "name": "disabled",
+          "type": {
+            "kind": "boolean"
+          },
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "label",
+          "type": {
+            "kind": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "placeholder",
+          "type": {
+            "kind": "string"
+          },
+          "required": false
+        },
+        {
+          "name": "type",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "email",
+              "number",
+              "password",
+              "text"
+            ]
+          },
+          "required": false,
+          "default": "text"
+        }
+      ]
+    },
+    {
+      "name": "Stack",
+      "acceptsChildren": true,
+      "props": [
+        {
+          "name": "align",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "center",
+              "end",
+              "start",
+              "stretch"
+            ]
+          },
+          "required": false,
+          "default": "stretch"
+        },
+        {
+          "name": "direction",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "column",
+              "row"
+            ]
+          },
+          "required": false,
+          "default": "column"
+        },
+        {
+          "name": "gap",
+          "type": {
+            "kind": "number"
+          },
+          "required": false,
+          "default": 8
+        }
+      ]
+    },
+    {
+      "name": "Text",
+      "acceptsChildren": false,
+      "props": [
+        {
+          "name": "size",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "lg",
+              "md",
+              "sm"
+            ]
+          },
+          "required": false,
+          "default": "md"
+        },
+        {
+          "name": "tone",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "default",
+              "muted"
+            ]
+          },
+          "required": false,
+          "default": "default"
+        },
+        {
+          "name": "value",
+          "type": {
+            "kind": "string"
+          },
+          "required": true
+        },
+        {
+          "name": "weight",
+          "type": {
+            "kind": "enum",
+            "options": [
+              "bold",
+              "regular"
+            ]
+          },
+          "required": false,
+          "default": "regular"
+        }
+      ]
+    }
+  ]
+}
