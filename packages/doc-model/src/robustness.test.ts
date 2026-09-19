@@ -59,6 +59,10 @@ test("checkDoc DIAGNOSES a broken document instead of crashing on it", () => {
   expect(checkDoc({ rootId: "root", nodes: { root: node("root", null, ["ghost"]) } }).join("; ")).toMatch(/ghost/);
   expect(checkDoc({ rootId: "root", nodes: { root: node("root", null, []), lost: node("lost", "root", []) } }).join("; ")).toMatch(/lost: not reachable/);
   expect(checkDoc({ rootId: "root", nodes: { root: node("root", null, ["a"]), a: node("WRONG", "root", []) } }).join("; ")).toMatch(/wrong key/);
+  // A node loaded from outside that skipped the contract: no children, no props, not even an object.
+  const mangled = { rootId: "root", nodes: { root: { id: "root", component: "Page", props: {}, parentId: null }, junk: null, other: "text" } } as unknown as Parameters<typeof checkDoc>[0];
+  expect(() => checkDoc(mangled)).not.toThrow();
+  expect(checkDoc(mangled).join("; ")).toMatch(/root: not a well-formed node/);
 });
 
 test.each(Array.from({ length: 60 }, (_, seed) => seed + 5000))("seed %i: re-applying an op changes nothing, and the document survives a JSON + contract round trip", (seed) => {

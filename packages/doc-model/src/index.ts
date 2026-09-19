@@ -143,6 +143,13 @@ function isInSubtree(doc: Doc, candidate: string, ancestor: string): boolean {
  * worst input: cycles, dangling ids, nodes under the wrong key.
  */
 export function checkDoc(doc: Doc): string[] {
+  // First the shape of every node: a document that skipped the contract may hold anything at all,
+  // and the structural checks below assume `children` is an array of strings.
+  const malformed = Object.entries(doc.nodes as Record<string, unknown>)
+    .filter(([, n]) => typeof n !== "object" || n === null || !Array.isArray((n as { children?: unknown }).children) || typeof (n as { id?: unknown }).id !== "string")
+    .map(([id]) => `${id}: not a well-formed node`);
+  if (malformed.length > 0) return malformed;
+
   const root = nodeOf(doc, doc.rootId);
   if (!root) return [`root ${doc.rootId} is missing`];
   const problems: string[] = [];
