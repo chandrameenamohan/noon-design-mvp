@@ -269,3 +269,29 @@ test("a peer that never calls setPresence sends none: the AI worker and the git 
   expect(framesOf(net.sockets[0], "presence")).toEqual([]);
   peer.close();
 });
+
+test("presence is cosmetic: a malformed presence frame is skipped, it does not end the session", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [] }); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  peer.submit(add("unsaved"));
+  net.sockets[0]?.say({ type: "presence", ...ada, cursor: { x: "left", y: 0 } });
+  net.sockets[0]?.say({ type: "presence_left" });
+  expect(peer.status).toBe("live");
+  expect(peer.pendingCount).toBe(1);
+  peer.close();
+});
+
+test("after a reconnect we never see OURSELVES: the room may not know yet that our old connection is dead", async () => {
+  const net = fakeNet((socket, nth) => {
+    socket.say(nth === 1 ? { ...welcome, you: "old-me", peers: [] } : { ...welcome, you: "new-me", peers: [{ ...ada, peerId: "old-me", name: "Me" }, ada] });
+  });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  net.sockets[0]?.close(1006);
+  await until(() => net.sockets.length === 2 && peer.status === "live", "live again");
+  expect(peer.others.map((p) => p.name)).toEqual(["Ada"]);
+  net.sockets[1]?.say({ type: "presence", ...ada, peerId: "old-me", name: "Me" }); // and not later either
+  expect(peer.others.map((p) => p.name)).toEqual(["Ada"]);
+  peer.close();
+});

@@ -20,7 +20,7 @@ const ops = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<
 const rejects = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<ServerMessage, { type: "rejected" }> => m.type === "rejected");
 
 test("the welcome carries a COPY of the document: later ops must not change a message already handed out", async () => {
-  const room = createRoom({ doc: emptyDoc(), manifest });
+  const room = createRoom({ doc: emptyDoc(), manifest, mintPeerId: () => "p1" });
   const a = peer("a");
   room.join(a);
   const welcomed = a.inbox[0];

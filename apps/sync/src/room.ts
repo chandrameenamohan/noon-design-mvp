@@ -58,6 +58,8 @@ type Options = {
   rate?: Partial<RateLimit>;
   /** The room has no clock of its own: the caller lends it one, and a test lends it a hand-wound one. */
   now?: () => number;
+  /** How a connection gets its presence id. Injected, like the clock, so that a test can predict it. */
+  mintPeerId?: () => string;
 };
 
 /**
@@ -69,7 +71,7 @@ type Options = {
  * `persist` is awaited, and without the queue a second op would be validated against a document
  * the first has not changed yet: two peers could both "successfully" add the same node id.
  */
-export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist, rate: rateOverrides, now = Date.now }: Options) {
+export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID() }: Options) {
   const limits: RoomLimits = { ...DEFAULT_LIMITS, ...overrides };
   const rate: RateLimit = { ...DEFAULT_RATE, ...rateOverrides };
   const peers = new Set<Peer>();
@@ -175,7 +177,6 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
 
   // Presence lives HERE and nowhere else: in this process's memory, per connection, gone with it.
   const present = new Map<Peer, { entry: Presence; at: number }>();
-  let nextPeerId = 0;
   const entryOf = (peer: Peer): Presence => present.get(peer)?.entry ?? { peerId: "", actor: peer.actor, name: peer.name ?? "", cursor: null, selection: null };
 
   function remember(key: string, op: SequencedOp): void {
@@ -262,7 +263,9 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     get doc() { return doc; },
 
     join(peer: Peer): void {
-      const peerId = `p${String(++nextPeerId)}`; // unique in this room, which is all it needs to be
+      // Unique for good, not only in this room: a client remembers its own past ids to recognise its
+      // old, not-yet-reaped connection after a reconnect, and "p1" would be reused by a reloaded room.
+      const peerId = mintPeerId();
       const others = [...present.values()].map((each) => each.entry);
       peers.add(peer);
       present.set(peer, { entry: { ...entryOf(peer), peerId }, at: -Infinity });

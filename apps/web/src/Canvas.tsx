@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Doc, DocNode, Manifest, Op, Presence } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
+import { colourOf } from "./colour.ts";
 import { Inspector } from "./Inspector.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { usePeer } from "./usePeer.ts";
@@ -35,13 +36,6 @@ function labelsOf(doc: Doc): Map<string, string> {
     stack.push(...[...node.children].reverse());
   }
   return labels;
-}
-
-/** A colour per connection, from its id: the same person keeps the same colour in every window. */
-function colourOf(peerId: string): string {
-  let hash = 0;
-  for (const char of peerId) hash = (hash * 31 + char.charCodeAt(0)) % 360;
-  return `hsl(${String(hash)} 70% 35%)`; // dark enough to be read as text on white
 }
 
 /**

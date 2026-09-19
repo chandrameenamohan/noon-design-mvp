@@ -73,6 +73,9 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   // the server may not notice for a while, so silence is what removes a peer here (F7: within 5 s).
   let others = new Map<string, { entry: Presence; heardAt: number }>();
   let presenceRevision = 0;
+  // Every peerId this client has had. After a reconnect the room may still list our OLD connection
+  // (it has not noticed yet that it is dead): that one is us, not someone else in the document.
+  const mine = new Set<string>();
   let own: OwnPresence | undefined;
   let ownSentAt = 0;
   let ownTimer: ReturnType<typeof setTimeout> | undefined;
@@ -153,13 +156,16 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     let parsed = ServerMessage.safeParse(raw);
     // A refusal whose REASON is newer than this client: all we need to know is that the op was not
     // applied. "unavailable" says exactly that (keep it, come back through a fresh welcome).
+    // Presence is cosmetic: a frame of it that we cannot read is dropped like an unknown type. Ending
+    // the peer over it would throw away the user's unsent edits because of someone's pointer.
+    if (!parsed.success && (type === "presence" || type === "presence_left")) return;
     if (!parsed.success && type === "rejected") parsed = ServerMessage.safeParse({ ...(raw as object), reason: "unavailable" });
     if (!parsed.success) { finish("protocol"); return; }
 
     const message = parsed.data;
     if (message.type === "presence") {
       const entry: Presence = { peerId: message.peerId, actor: message.actor, name: message.name, cursor: message.cursor, selection: message.selection };
-      changePresence(() => others.set(entry.peerId, { entry, heardAt: Date.now() }));
+      if (!mine.has(entry.peerId)) changePresence(() => others.set(entry.peerId, { entry, heardAt: Date.now() }));
       return;
     }
     if (message.type === "presence_left") {
@@ -171,7 +177,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     const effects = replica.receive(message);
     if (effects.fatal) { finish(effects.fatal); return; }
     if (message.type === "welcome") {
-      const here = message.peers ?? [];
+      if (message.you !== undefined) mine.add(message.you);
+      const here = (message.peers ?? []).filter((entry) => !mine.has(entry.peerId));
       // The room's list replaces ours: whoever we knew on the old connection may be long gone.
       changePresence(() => { others = new Map(here.map((entry) => [entry.peerId, { entry, heardAt: Date.now() }])); });
       ownSentAt = 0; // the new room has never heard of us
