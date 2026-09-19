@@ -136,3 +136,26 @@ test("an edit to a node someone else just removed simply disappears: no error, n
   await expect(late.page.getByRole("heading", { name: "Page", exact: true })).toBeVisible(); // the selection fell back to the page
   expect(await treeOf(late.page)).toBe(await treeOf(page));
 });
+
+test("a number the browser cannot read (1e999) changes nothing; it must not be taken for 'clear this prop'", async ({ page }) => {
+  await newDocument(page);
+  await button(page, "Add Card").click();
+  await button(page, "Select Card 1").click();
+  const padding = page.getByLabel("padding", { exact: true });
+  await padding.fill("8");
+  await padding.press("Enter");
+  await expect(page.locator("[data-component=Card] > .node-props")).toHaveText("padding=8");
+
+  // <input type=number> reports "" for text it cannot parse, exactly what an emptied field reports.
+  await padding.press("ControlOrMeta+a");
+  await padding.pressSequentially("1e999");
+  await padding.blur();
+  await expect(page.locator("[data-component=Card] > .node-props")).toHaveText("padding=8");
+  await expect(padding).toHaveValue("8");
+
+  // Negative zero is zero to a person; the contract refuses it (JSON cannot carry it), so the form sends 0.
+  await padding.fill("-0");
+  await padding.press("Enter");
+  await expect(page.locator("[data-component=Card] > .node-props")).toHaveText("padding=0");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});

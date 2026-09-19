@@ -31,17 +31,21 @@ function PropField({ prop, value, onChange }: { prop: Prop; value: string | numb
     case "number":
     case "string": {
       const isNumber = prop.type.kind === "number";
-      const commit = (): void => {
+      const commit = (input: HTMLInputElement): void => {
         if (draft === undefined) return;
         setDraft(undefined);
+        // A number field reports "" BOTH when it is empty and when it holds text it cannot read
+        // ("1e999", "12abc"). Only the browser knows which: validity.badInput. Unreadable = no edit;
+        // taking it for "" would silently delete the prop.
+        if (input.validity.badInput) return;
         if (draft === "") onChange(null);
         else if (!isNumber) onChange(draft);
-        else if (Number.isFinite(Number(draft))) onChange(Number(draft));
+        else if (Number.isFinite(Number(draft))) onChange(Number(draft) + 0); // + 0 turns -0 into 0: JSON cannot carry -0, so the contract refuses it
       };
       return (
         <p>
           {label}{" "}
-          <input id={id} type={isNumber ? "number" : "text"} value={draft ?? (value === undefined ? "" : String(value))} onChange={(event) => { setDraft(event.target.value); }} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") commit(); }} />
+          <input id={id} type={isNumber ? "number" : "text"} value={draft ?? (value === undefined ? "" : String(value))} onChange={(event) => { setDraft(event.target.value); }} onBlur={(event) => { commit(event.currentTarget); }} onKeyDown={(event) => { if (event.key === "Enter") commit(event.currentTarget); }} />
         </p>
       );
     }
