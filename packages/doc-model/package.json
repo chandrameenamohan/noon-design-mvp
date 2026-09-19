@@ -1,0 +1,12 @@
+{
+  "name": "@noon/doc-model",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./random-ops": "./src/random-ops.ts"
+  },
+  "dependencies": {
+    "@noon/contracts": "workspace:^"
+  }
+}

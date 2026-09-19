@@ -26,7 +26,10 @@ Boxes". This project is also a course: see §7.
 2. **One write path.** Browser, AI agent and git peer all submit ops through
    `packages/peer-client`. No other code path mutates a document.
 3. **Four ops.** `add_node`, `move_node`, `remove_node`, `set_prop`.
-   Envelope in: `{opId, baseSeq, actor{kind: user|agent|git, id, runId?}, op}`.
+   Envelope in: `{opId, baseSeq, op}`. The actor `{kind: user|agent|git, id, runId?}` is
+   STAMPED BY THE ROOM from the peer's verified session, never sent by the peer:
+   a client-supplied actor could claim to be anyone, and attribution (audit, usage,
+   "the AI did this") would be worthless.
    Out: `{seq, opId, actor, op}` to all, or `{opId, rejected: reason}` to the sender.
 4. **Conflict rules.** Last writer wins per `(nodeId, key)` by `seq`. A remove
    beats any concurrent edit to the removed node or its descendants. `index`

@@ -67,7 +67,7 @@ test("two processes migrating a fresh database at the same moment both succeed",
       await fresh.drop();
     }
   }
-});
+}, 30_000); // five rounds of create-schema + two concurrent migrators + drop: slow, not flaky
 
 test("when Postgres kills an idle connection the process survives and the next query works", async () => {
   const org = await t.createOrg("Survivor");

@@ -116,6 +116,12 @@ importers:
         specifier: ~6.0.0
         version: 6.0.3
 
+  packages/doc-model:
+    dependencies:
+      '@noon/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+
   packages/session-token:
     dependencies:
       zod:

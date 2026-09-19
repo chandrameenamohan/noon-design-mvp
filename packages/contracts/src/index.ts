@@ -87,3 +87,55 @@ const ManifestComponent = z.object({
 });
 export const Manifest = z.object({ version: z.literal(1), components: z.array(ManifestComponent) });
 export type Manifest = z.infer<typeof Manifest>;
+
+// --- The document and its four ops (SPEC §2.3, §2.6) ----------------------------------
+const NodeId = z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, "letters, digits, _ and - only");
+/** What a prop can hold. Matches what the manifest can describe: string, number, boolean (enums are strings). */
+export const PropValue = z.union([z.string().max(10_000), z.number(), z.boolean()]); // z.number() already refuses NaN and Infinity
+export type PropValue = z.infer<typeof PropValue>;
+
+export const DocNode = z.object({
+  id: NodeId,
+  component: z.string().min(1).max(100),
+  props: z.record(z.string(), PropValue),
+  parentId: NodeId.nullable(), // null only for the root
+  children: z.array(NodeId),
+});
+export type DocNode = z.infer<typeof DocNode>;
+
+/** A page: a tree of component instances, stored flat by id so any node is one lookup away. */
+export const Doc = z.object({ rootId: NodeId, nodes: z.record(NodeId, DocNode) });
+export type Doc = z.infer<typeof Doc>;
+
+/** The whole vocabulary of change. A discriminated union: `type` tells the compiler which fields exist. */
+export const Op = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("add_node"), nodeId: NodeId, parentId: NodeId, index: z.number().int(), component: z.string().min(1).max(100), props: z.record(z.string(), PropValue) }),
+  z.strictObject({ type: z.literal("move_node"), nodeId: NodeId, newParentId: NodeId, index: z.number().int() }),
+  z.strictObject({ type: z.literal("remove_node"), nodeId: NodeId }),
+  // value null = remove the prop, so the component's own default applies again.
+  z.strictObject({ type: z.literal("set_prop"), nodeId: NodeId, key: z.string().min(1).max(100), value: PropValue.nullable() }),
+]);
+export type Op = z.infer<typeof Op>;
+
+/** Who made a change. STAMPED BY THE ROOM from the verified session, never taken from the client. */
+export const Actor = z.object({ kind: z.enum(["user", "agent", "git"]), id: z.string().min(1), runId: z.string().min(1).optional() });
+export type Actor = z.infer<typeof Actor>;
+
+/** What a peer submits. `opId` makes a resend harmless; `baseSeq` is the last seq the peer had seen. */
+export const ClientOp = z.strictObject({ opId: z.uuid(), baseSeq: z.number().int().min(0), op: Op });
+export type ClientOp = z.infer<typeof ClientOp>;
+
+/** What the room broadcasts: the op, its place in the one true order, and who made it. */
+export const SequencedOp = z.object({ seq: z.number().int().min(1), opId: z.uuid(), actor: Actor, op: Op });
+export type SequencedOp = z.infer<typeof SequencedOp>;
+
+// --- WebSocket messages (presence messages join in E2.6) -------------------------------------
+export const ClientMessage = z.discriminatedUnion("type", [ClientOp.extend({ type: z.literal("op") })]);
+export type ClientMessage = z.infer<typeof ClientMessage>;
+
+export const ServerMessage = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0) }),
+  SequencedOp.extend({ type: z.literal("op") }),
+  z.object({ type: z.literal("rejected"), opId: z.uuid(), reason: z.string().min(1) }),
+]);
+export type ServerMessage = z.infer<typeof ServerMessage>;
