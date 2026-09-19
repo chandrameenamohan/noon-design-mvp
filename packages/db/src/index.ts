@@ -77,7 +77,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
   // the whole process down. The pool has already discarded the client; only the message is logged
   // (the full error object carries the connection password).
   pool.on("error", (err) => {
-    process.stderr.write(`db: idle connection lost: ${err.message}\n`);
+    process.stderr.write(`${JSON.stringify({ level: "warn", source: "db", message: `idle connection lost: ${err.message}` })}\n`);
   });
 
   async function rows<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T[]> {
