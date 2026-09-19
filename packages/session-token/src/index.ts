@@ -51,11 +51,13 @@ export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds
  * `secrets` is a list so a secret can be ROTATED without an outage: give every verifier [new, old],
  * switch the signer to the new one, wait out the 60-second lifetime, then drop the old one.
  */
-export function verifySessionToken({ token, secrets, documentId, now = nowSeconds() }: {
+export function verifySessionToken({ token, secrets, documentId, now = nowSeconds(), leewaySeconds = 0 }: {
   token: string;
   secrets: readonly string[];
   documentId: string;
   now?: number;
+  /** How far past `exp` a token is still accepted: the signer and the verifier are different machines, and their clocks never agree exactly. */
+  leewaySeconds?: number;
 }): VerifyResult {
   if (secrets.length === 0) throw new Error("at least one session token secret is required");
   // Computing the candidates first also validates every secret, even when the token is garbage:
@@ -86,7 +88,7 @@ export function verifySessionToken({ token, secrets, documentId, now = nowSecond
   }
   const parsed = Payload.safeParse(json);
   if (!parsed.success) return { ok: false, reason: "malformed" };
-  if (now >= parsed.data.exp) return { ok: false, reason: "expired" };
+  if (now >= parsed.data.exp + leewaySeconds) return { ok: false, reason: "expired" };
   if (parsed.data.doc !== documentId) return { ok: false, reason: "wrong_document" };
   return { ok: true, claims: { userId: parsed.data.sub, orgId: parsed.data.org, documentId: parsed.data.doc, expiresAt: parsed.data.exp } };
 }

@@ -57,8 +57,11 @@ services:
     command: ["node", "apps/sync/src/main.ts"]
     environment:
       PORT: "3001"
+      DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
     ports: ["127.0.0.1:${SYNC_PORT:-3001}:3001"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 2s

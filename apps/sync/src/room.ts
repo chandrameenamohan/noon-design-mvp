@@ -32,6 +32,8 @@ export function createRoom({ doc, seq = 0, manifest, limits = DEFAULT_LIMITS }: 
   return {
     get peerCount() { return peers.size; },
     get seq() { return seq; },
+    /** The live document. The room edits it in place: treat it as read-only. */
+    get doc() { return doc; },
 
     join(peer: Peer): void {
       peers.add(peer);

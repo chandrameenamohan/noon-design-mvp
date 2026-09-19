@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@noon/contracts": "workspace:^",
+    "@noon/db": "workspace:^",
     "@noon/design-system": "workspace:^",
     "@noon/doc-model": "workspace:^",
     "@noon/process": "workspace:^",

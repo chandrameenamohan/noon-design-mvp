@@ -32,6 +32,11 @@ test("an expired token is rejected, exactly at its expiry second", () => {
   expect(check(mint(), { now: T0 + 60 })).toEqual({ ok: false, reason: "expired" });
 });
 
+test("a verifier may allow a few seconds of clock skew, and no more", () => {
+  expect(check(mint(), { now: T0 + 64, leewaySeconds: 5 })).toMatchObject({ ok: true });
+  expect(check(mint(), { now: T0 + 65, leewaySeconds: 5 })).toEqual({ ok: false, reason: "expired" });
+});
+
 test("a token for one document does not open another", () => {
   expect(check(mint(), { documentId: "44444444-4444-4444-8444-444444444444" })).toEqual({ ok: false, reason: "wrong_document" });
 });

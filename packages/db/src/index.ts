@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { Document, Id, Name, Org, User, Workspace, type Page } from "@noon/contracts";
+import { Doc, Document, Id, Name, Org, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -21,9 +21,17 @@ export type Db = {
   getDocumentForMember(documentId: string, userId: string): Promise<Document | undefined>;
   /** Resolves if the database answers a query, rejects otherwise. */
   ping(): Promise<void>;
+  /** Loading and saving a document's tree, for the sync server. Every call names the org. */
+  documentStore(): DocumentStore;
   /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
   forOrg(orgId: string): OrgScope;
   close(): Promise<void>;
+};
+
+/** `load` gives undefined when the document does not exist IN THAT ORG; `doc` is undefined when nothing was saved yet. */
+export type DocumentStore = {
+  load(orgId: string, documentId: string): Promise<{ doc: Doc | undefined; seq: number } | undefined>;
+  save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
 };
 
 type PageInput = { limit?: number; cursor?: string | undefined };
@@ -46,7 +54,7 @@ const OrgRow = z.object({ id: z.string(), name: z.string(), created_at: timestam
   .transform((r): Org => Org.parse({ id: r.id, name: r.name, createdAt: r.created_at }));
 const WorkspaceRow = z.object({ id: z.string(), org_id: z.string(), name: z.string(), created_at: timestamp })
   .transform((r): Workspace => Workspace.parse({ id: r.id, orgId: r.org_id, name: r.name, createdAt: r.created_at }));
-const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id: z.string(), title: z.string(), created_at: timestamp })
+const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id: z.string(), title: z.string(), created_at: timestamp }) // content and seq are read only by documentStore()
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
 
@@ -191,6 +199,26 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       isId(orgId) && isId(userId)
         ? one(OrgRow, "select o.* from orgs o join memberships m on m.org_id = o.id where o.id = $1 and m.user_id = $2", [orgId, userId])
         : undefined,
+
+    documentStore: () => ({
+      async load(orgId, documentId) {
+        if (!isId(orgId) || !isId(documentId)) return undefined;
+        const row = await one(
+          // seq is a bigint, which the driver hands over as a STRING (learning-tests/postgres): convert
+          // once, here. A document would need nine quadrillion ops to leave Number's safe range.
+          z.object({ content: z.unknown(), seq: z.string().regex(/^\d+$/).transform(Number) }),
+          "select content, seq from documents where org_id = $1 and id = $2",
+          [orgId, documentId],
+        );
+        if (!row) return undefined;
+        return { doc: row.content === null ? undefined : Doc.parse(row.content), seq: row.seq };
+      },
+      async save(orgId, documentId, doc, seq) {
+        if (!isId(orgId) || !isId(documentId)) return;
+        // `seq <= $4`: a late save from an older room must never overwrite a newer document.
+        await pool.query("update documents set content = $3, seq = $4 where org_id = $1 and id = $2 and seq <= $4", [orgId, documentId, JSON.stringify(doc), seq]);
+      },
+    }),
 
     getDocumentForMember: async (documentId, userId) =>
       isId(documentId) && isId(userId)

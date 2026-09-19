@@ -4,7 +4,7 @@ import type { Doc, Op } from "@noon/contracts";
 import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
 import { connect, useSyncServer } from "./testing.ts";
 
-const ctx = useSyncServer({ maxNodes: 6, maxDepth: 3 });
+const ctx = useSyncServer({ limits: { maxNodes: 6, maxDepth: 3 } });
 const add = (nodeId: string, parentId = ROOT_ID, component = "Stack"): Op => ({ type: "add_node", nodeId, parentId, index: 99, component, props: component === "Button" ? { label: "Go" } : {} });
 
 test("a joining peer is welcomed with the document and its sequence number", async () => {
