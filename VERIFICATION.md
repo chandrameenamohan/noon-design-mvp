@@ -36,6 +36,13 @@ use `exact: true`.
 `./init.sh` installs dependencies, the Playwright browser and the hook, starts
 Postgres, and prints `PASS` only after a real query is answered.
 
+## Outside the per-commit gate
+
+| Command | Proves | When |
+|---|---|---|
+| `make clean-clone` | a fresh clone of HEAD boots with `./init.sh` and passes `make check`, on its own compose project and ports | E1.1, and the final scenario |
+| `make drills` | every lesson's exercises and broken twins behave as their chapter says | each handbook bead |
+
 ## Versions pinned on purpose
 
 TypeScript is held at 6.0.x: typescript-eslint 8 supports `<6.1`, so TypeScript 7
@@ -45,7 +52,7 @@ breaks the lint layer. Revisit when typescript-eslint supports 7.
 
 | Not verified | Why | Arrives |
 |---|---|---|
-| Anything using Postgres from code | no code talks to it yet; `init.sh` only proves it is up | epic 1 |
+| Anything using Postgres from code | no code talks to it yet; `init.sh` only proves it is up | E1.2 |
 | Reconcile simulator (`make sim`, F8a) | the room and peer-client do not exist | epic 2 |
 | Screenshots on Linux | baselines are per-OS; only `darwin` exists | when CI exists |
 | Firefox and WebKit | the frontend exists to drive the backend | not planned |

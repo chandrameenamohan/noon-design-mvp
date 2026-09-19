@@ -12,3 +12,7 @@ e2e:       ; pnpm exec playwright test
 # Outside `make check`: proves every lesson's exercises and drills behave as their chapter says.
 .PHONY: drills
 drills: ; sh drills/lesson-0/check.sh
+
+# Outside `make check` (minutes, builds an image): F1 on a fresh clone of the committed HEAD.
+.PHONY: clean-clone
+clean-clone: ; sh scripts/clean-clone.sh

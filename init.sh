@@ -17,9 +17,12 @@ hook="$(git rev-parse --git-path hooks)/pre-commit"
 grep -q "make -s check" "$hook" 2>/dev/null || install -m 755 scripts/pre-commit "$hook"
 grep -q "make -s check" "$hook" || { echo "FAIL: the pre-commit gate is not installed at $hook"; exit 1; }
 
-docker compose up -d --wait postgres
+docker compose up -d --build --wait postgres api
 
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")
 [ "$answer" = "1" ] || { echo "FAIL: postgres smoke query returned '$answer'"; exit 1; }
-echo "PASS: dev environment is up (postgres answers, hook installed)"
+# Smoke test: the api answers over real HTTP with the contract's shape.
+health=$(curl -fsS "http://localhost:${API_PORT:-3000}/health")
+[ "$health" = '{"status":"ok","service":"api"}' ] || { echo "FAIL: api /health returned '$health'"; exit 1; }
+echo "PASS: dev environment is up (postgres and api answer, hook installed)"

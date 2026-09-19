@@ -6,10 +6,24 @@ services:
       POSTGRES_USER: noon
       POSTGRES_PASSWORD: noon-dev-only
       POSTGRES_DB: noon
-    ports: ["5432:5432"]
+    ports: ["${PG_PORT:-5432}:5432"]
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U noon -d noon"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  api:
+    build: .
+    command: ["node", "apps/api/src/main.ts"]
+    environment:
+      PORT: "3000"
+    ports: ["${API_PORT:-3000}:3000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # node:24-slim has no curl; Node's own fetch does the job.
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 2s
       timeout: 2s
       retries: 30
