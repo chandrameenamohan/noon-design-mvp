@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { ErrorBody, Org, Workspace } from "@noon/contracts";
 import type { Db } from "@noon/db";
+import { devHeaderIdentity } from "./identity.ts";
 import { startServer } from "./server.ts";
 import { useTestServer } from "./testing.ts";
 
@@ -8,7 +9,7 @@ import { useTestServer } from "./testing.ts";
 const ctx = useTestServer();
 
 const post = (path: string, body: string, contentType = "application/json") =>
-  fetch(`${ctx.server.url}${path}`, { method: "POST", headers: { "content-type": contentType }, body });
+  ctx.fetch(path, { method: "POST", headers: { "content-type": contentType }, body });
 
 // Built from char codes so this source file itself contains no control characters.
 const control = (code: number): string => `a${String.fromCharCode(code)}b`;
@@ -42,7 +43,7 @@ test("a body that is not declared as JSON is refused with 415", async () => {
 
 test("responses carrying tenant data are never cached and never sniffed", async () => {
   const org = Org.parse(await (await post("/orgs", '{"name":"Headers"}')).json());
-  const res = await fetch(`${ctx.server.url}/orgs/${org.id}`);
+  const res = await ctx.fetch(`/orgs/${org.id}`);
   expect(res.headers.get("cache-control")).toBe("no-store");
   expect(res.headers.get("x-content-type-options")).toBe("nosniff");
 });
@@ -52,7 +53,7 @@ test("lists are paged: limit, an opaque cursor, and null when there is no more",
   for (const name of ["w1", "w2", "w3"]) await post(`/orgs/${org.id}/workspaces`, JSON.stringify({ name }));
 
   const get = async (q: string) => {
-    const res = await fetch(`${ctx.server.url}/orgs/${org.id}/workspaces${q}`);
+    const res = await ctx.fetch(`/orgs/${org.id}/workspaces${q}`);
     return { status: res.status, json: (await res.json()) as { items: unknown[]; nextCursor: string | null } };
   };
   const first = await get("?limit=2");
@@ -70,9 +71,9 @@ test("lists are paged: limit, an opaque cursor, and null when there is no more",
 });
 
 test("/ready answers 200 only when the database answers, while /health stays a pure liveness check", async () => {
-  expect((await fetch(`${ctx.server.url}/ready`)).status).toBe(200);
+  expect((await ctx.fetch(`/ready`)).status).toBe(200);
 
-  const dead = await startServer({ port: 0, db: { ...ctx.db.db, ping: () => Promise.reject(new Error("connection refused")) } satisfies Db });
+  const dead = await startServer({ port: 0, identify: devHeaderIdentity, db: { ...ctx.db.db, ping: () => Promise.reject(new Error("connection refused")) } satisfies Db });
   try {
     expect((await fetch(`${dead.url}/health`)).status).toBe(200);
     const ready = await fetch(`${dead.url}/ready`);

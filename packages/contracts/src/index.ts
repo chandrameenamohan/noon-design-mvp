@@ -22,6 +22,9 @@ export const Name = z
   .regex(/^\P{Cc}*$/u, "must not contain control characters");
 const Timestamp = z.iso.datetime();
 
+export const User = z.object({ id: Id, email: z.email().max(320), name: Name });
+export type User = z.infer<typeof User>;
+
 export const Org = z.object({ id: Id, name: Name, createdAt: Timestamp });
 export type Org = z.infer<typeof Org>;
 
@@ -38,7 +41,7 @@ export const CreateDocumentBody = z.strictObject({ title: Name });
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "not_found", "not_ready", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "not_ready", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;

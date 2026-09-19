@@ -1,13 +1,14 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { HealthResponse } from "@noon/contracts";
 import type { Db } from "@noon/db";
+import { noIdentity } from "./identity.ts";
 import { startServer, type RunningServer } from "./server.ts";
 
 // A real listening server and a real HTTP request: this is what init.sh's smoke test does too.
 let server: RunningServer;
 beforeAll(async () => {
   // /health must answer without touching the database, so it gets one that cannot be used.
-  server = await startServer({ port: 0, db: {} as Db }); // port 0 = "any free port", so tests never collide
+  server = await startServer({ port: 0, db: {} as Db, identify: noIdentity }); // port 0 = "any free port", so tests never collide
 });
 afterAll(() => server.close());
 

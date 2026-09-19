@@ -39,7 +39,7 @@ async function asAppRaw(sql: string): Promise<unknown> {
 }
 
 test("the app role can do the product's work", async () => {
-  const org = await asApp.createOrg({ name: "Via app role" });
+  const org = await asApp.createOrg({ name: "Via app role", ownerId: (await asApp.upsertUser({ email: "app@example.com", name: "App" })).id });
   const ws = await asApp.forOrg(org.id).createWorkspace({ name: "ws" });
   expect(await asApp.forOrg(org.id).listWorkspaces()).toMatchObject({ items: [ws] });
 });
@@ -57,7 +57,7 @@ test("the app role is not a superuser and cannot change the schema or the migrat
 
 test("provisioning twice is safe and updates the password", async () => {
   await provisionAppRole({ ownerUrl: TEST_DATABASE_URL, schema: t.schema, role, password });
-  expect(await asApp.getOrg("00000000-0000-4000-8000-000000000000")).toBeUndefined();
+  await asApp.ping();
 });
 
 test("re-provisioning strips privileges and memberships a role picked up some other way", async () => {

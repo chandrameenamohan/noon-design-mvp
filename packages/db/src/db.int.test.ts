@@ -24,8 +24,8 @@ test("running migrations again changes nothing", async () => {
 });
 
 test("a workspace created in org A is visible to A and invisible to B", async () => {
-  const a = await t.db.createOrg({ name: "Acme" });
-  const b = await t.db.createOrg({ name: "Globex" });
+  const a = await t.createOrg("Acme");
+  const b = await t.createOrg("Globex");
   const ws = await t.db.forOrg(a.id).createWorkspace({ name: "Design" });
 
   expect(await t.db.forOrg(a.id).listWorkspaces()).toMatchObject({ items: [ws] });
@@ -35,8 +35,8 @@ test("a workspace created in org A is visible to A and invisible to B", async ()
 });
 
 test("org B cannot create a document inside org A's workspace", async () => {
-  const a = await t.db.createOrg({ name: "A" });
-  const b = await t.db.createOrg({ name: "B" });
+  const a = await t.createOrg("A");
+  const b = await t.createOrg("B");
   const wsA = await t.db.forOrg(a.id).createWorkspace({ name: "A-ws" });
 
   // Through the accessor: B's scope does not see A's workspace, so nothing is created.
@@ -50,7 +50,7 @@ test("org B cannot create a document inside org A's workspace", async () => {
 });
 
 test("a document lives in its org and workspace", async () => {
-  const a = await t.db.createOrg({ name: "A2" });
+  const a = await t.createOrg("A2");
   const scope = t.db.forOrg(a.id);
   const ws = await scope.createWorkspace({ name: "ws" });
   const doc = await scope.createDocument({ workspaceId: ws.id, title: "Checkout" });
@@ -61,7 +61,7 @@ test("a document lives in its org and workspace", async () => {
 });
 
 test("a membership role outside owner|editor|viewer is refused by the database", async () => {
-  const a = await t.db.createOrg({ name: "A3" });
+  const a = await t.createOrg("A3");
   await expect(
     t.rawQuery(
       "with u as (insert into users (email, name) values ('x@example.com', 'X') returning id) " +

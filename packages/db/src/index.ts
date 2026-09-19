@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { Document, Id, Name, Org, Workspace, type Page } from "@noon/contracts";
+import { Document, Id, Name, Org, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -10,8 +10,13 @@ const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
 export type Db = {
   migrate(): Promise<void>;
   appliedMigrations(): Promise<string[]>;
-  createOrg(input: { name: string }): Promise<Org>;
-  getOrg(id: string): Promise<Org | undefined>;
+  /** Finds the user with this email or creates one. Emails are compared case-insensitively. */
+  upsertUser(input: { email: string; name: string }): Promise<User>;
+  /** Creates the org and makes `ownerId` its owner, atomically: an org never exists without an owner. */
+  createOrg(input: { name: string; ownerId: string }): Promise<Org>;
+  listOrgsFor(userId: string, page?: PageInput): Promise<Page<Org> | undefined>;
+  /** The org, but only if this user is a member. "Not a member" and "no such org" look the same. */
+  getOrgForMember(orgId: string, userId: string): Promise<Org | undefined>;
   /** Resolves if the database answers a query, rejects otherwise. */
   ping(): Promise<void>;
   /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
@@ -34,6 +39,7 @@ type OrgScope = {
 
 // Rows arrive as `any` from the driver. Each is parsed once, here, at the database boundary.
 const timestamp = z.date().transform((d) => d.toISOString());
+const UserRow = z.object({ id: z.string(), email: z.string(), name: z.string() }).transform((r): User => User.parse(r));
 const OrgRow = z.object({ id: z.string(), name: z.string(), created_at: timestamp })
   .transform((r): Org => Org.parse({ id: r.id, name: r.name, createdAt: r.created_at }));
 const WorkspaceRow = z.object({ id: z.string(), org_id: z.string(), name: z.string(), created_at: timestamp })
@@ -84,16 +90,16 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     const result = await pool.query<QueryResultRow>(sql, params);
     return result.rows.map((row) => parser.parse(row));
   }
-  /** `where` must end ready for " and ..."; params are its bind values; the cursor adds two more. */
-  async function page<T>(parser: z.ZodType<T>, table: string, where: string, params: unknown[], input: PageInput = {}): Promise<Page<T> | undefined> {
+  /** `from` names the paged table as alias `t`; `where` must be ready for " and ..."; the cursor adds two params. */
+  async function page<T>(parser: z.ZodType<T>, from: string, where: string, params: unknown[], input: PageInput = {}): Promise<Page<T> | undefined> {
     const limit = input.limit ?? 50;
     const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
     if (input.cursor !== undefined && after === undefined) return undefined;
     const n = params.length;
     const result = await pool.query<QueryResultRow & { cursor_ts: string; id: string }>(
-      `select *, created_at::text as cursor_ts from ${table} where ${where}` +
-        (after ? ` and (created_at, id) > ($${String(n + 1)}::timestamptz, $${String(n + 2)}::uuid)` : "") +
-        ` order by created_at, id limit ${String(limit + 1)}`, // one extra row tells us whether another page exists
+      `select t.*, t.created_at::text as cursor_ts from ${from} where ${where}` +
+        (after ? ` and (t.created_at, t.id) > ($${String(n + 1)}::timestamptz, $${String(n + 2)}::uuid)` : "") +
+        ` order by t.created_at, t.id limit ${String(limit + 1)}`, // one extra row tells us whether another page exists
       after ? [...params, after.ts, after.id] : params,
     );
     const pageRows = result.rows.slice(0, limit);
@@ -149,15 +155,40 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       return rows(z.object({ name: z.string() }).transform((r) => r.name), "select name from schema_migrations order by name", []);
     },
 
-    // Inputs are parsed with the SAME contract the reader uses, BEFORE the write: a row that
-    // cannot be read back must never be stored (it would make every later list throw).
-    createOrg: async ({ name }) => exactlyOne(OrgRow, "insert into orgs (name) values ($1) returning *", [Name.parse(name)]),
-
     ping: async () => {
       await pool.query("select 1");
     },
 
-    getOrg: async (id) => (isId(id) ? one(OrgRow, "select * from orgs where id = $1", [id]) : undefined),
+    upsertUser: async ({ email, name }) =>
+      exactlyOne(
+        UserRow,
+        // "do update" (a no-op write) rather than "do nothing", so RETURNING yields the row either way.
+        "insert into users (email, name) values (lower($1), $2) on conflict (email) do update set email = excluded.email returning id, email, name",
+        [User.shape.email.parse(email), Name.parse(name)],
+      ),
+
+    // Inputs are parsed with the SAME contract the reader uses, BEFORE the write: a row that
+    // cannot be read back must never be stored (it would make every later list throw).
+    createOrg: async ({ name, ownerId }) => {
+      if (!isId(ownerId)) throw new Error("cannot create an org: invalid owner id");
+      return exactlyOne(
+        OrgRow,
+        // One statement, so it is atomic without an explicit transaction.
+        "with o as (insert into orgs (name) values ($1) returning *), " +
+          "m as (insert into memberships (org_id, user_id, role) select o.id, $2, 'owner' from o) select * from o",
+        [Name.parse(name), ownerId],
+      );
+    },
+
+    listOrgsFor: async (userId, input) =>
+      isId(userId)
+        ? page(OrgRow, "orgs t join memberships m on m.org_id = t.id", "m.user_id = $1", [userId], input)
+        : { items: [], nextCursor: null },
+
+    getOrgForMember: async (orgId, userId) =>
+      isId(orgId) && isId(userId)
+        ? one(OrgRow, "select o.* from orgs o join memberships m on m.org_id = o.id where o.id = $1 and m.user_id = $2", [orgId, userId])
+        : undefined,
 
     forOrg(orgId) {
       // An id that is not a UUID cannot name anything, so it means "not found" rather than a
@@ -169,7 +200,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           return exactlyOne(WorkspaceRow, "insert into workspaces (org_id, name) values ($1, $2) returning *", [orgId, Name.parse(name)]);
         },
         listWorkspaces: async (input) =>
-          orgExists ? page(WorkspaceRow, "workspaces", "org_id = $1", [orgId], input) : { items: [], nextCursor: null },
+          orgExists ? page(WorkspaceRow, "workspaces t", "t.org_id = $1", [orgId], input) : { items: [], nextCursor: null },
         getWorkspace: async (id) =>
           orgExists && isId(id) ? one(WorkspaceRow, "select * from workspaces where org_id = $1 and id = $2", [orgId, id]) : undefined,
         createDocument: async ({ workspaceId, title }) => {
@@ -185,7 +216,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         },
         listDocuments: async (workspaceId, input) =>
           orgExists && isId(workspaceId)
-            ? page(DocumentRow, "documents", "org_id = $1 and workspace_id = $2", [orgId, workspaceId], input)
+            ? page(DocumentRow, "documents t", "t.org_id = $1 and t.workspace_id = $2", [orgId, workspaceId], input)
             : { items: [], nextCursor: null },
         getDocument: async (id) =>
           orgExists && isId(id) ? one(DocumentRow, "select * from documents where org_id = $1 and id = $2", [orgId, id]) : undefined,

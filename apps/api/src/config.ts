@@ -11,6 +11,8 @@ const Env = z.object({
       const url = new URL(value);
       return (url.protocol === "postgres:" || url.protocol === "postgresql:") && url.hostname !== "";
     }, "DATABASE_URL must be a postgres:// URL with a host"),
+  // Unset means production: the safe side. Anything that relaxes security must be asked for by name.
+  NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
   // An empty variable is how a .env file says "unset". Digits only: Number("0x50") is 80.
   PORT: z
     .string()
@@ -19,7 +21,7 @@ const Env = z.object({
     .pipe(z.string().regex(/^\d+$/, "PORT must be decimal digits").transform(Number).pipe(z.number().int().min(1).max(65535))),
 });
 
-type Config = { databaseUrl: string; port: number };
+type Config = { databaseUrl: string; port: number; nodeEnv: "development" | "test" | "production" };
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const parsed = Env.safeParse(env);
@@ -27,5 +29,5 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     const problems = parsed.error.issues.map((i) => `${i.path.join(".") || "env"}: ${i.message}`).join("; ");
     throw new Error(`invalid configuration: ${problems}`);
   }
-  return { databaseUrl: parsed.data.DATABASE_URL, port: parsed.data.PORT };
+  return { databaseUrl: parsed.data.DATABASE_URL, port: parsed.data.PORT, nodeEnv: parsed.data.NODE_ENV };
 }

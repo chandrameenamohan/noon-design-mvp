@@ -12,7 +12,7 @@ afterAll(() => t.drop());
 test.each(["   ", "", "  ", "x".repeat(201)])(
   "a bad name (%j) is refused BEFORE the insert, so it can never poison later reads",
   async (name) => {
-    const org = await t.db.createOrg({ name: "Poison-proof" });
+    const org = await t.createOrg("Poison-proof");
     const scope = t.db.forOrg(org.id);
     await expect(scope.createWorkspace({ name })).rejects.toThrow();
     expect(await scope.listWorkspaces()).toMatchObject({ items: [] }); // the list still works, and nothing was stored
@@ -20,12 +20,12 @@ test.each(["   ", "", "  ", "x".repeat(201)])(
     const ws = await scope.createWorkspace({ name: "ok" });
     await expect(scope.createDocument({ workspaceId: ws.id, title: name })).rejects.toThrow();
     expect(await scope.listDocuments(ws.id)).toMatchObject({ items: [] });
-    await expect(t.db.createOrg({ name })).rejects.toThrow();
+    await expect(t.createOrg(name)).rejects.toThrow();
   },
 );
 
 test("names are stored trimmed", async () => {
-  const org = await t.db.createOrg({ name: "  Acme  " });
+  const org = await t.createOrg("  Acme  ");
   expect(org.name).toBe("Acme");
 });
 
@@ -35,7 +35,7 @@ test("the database itself refuses an untrimmed or blank name, even through raw S
 });
 
 test("an id that is not a UUID means 'not found', not a database error", async () => {
-  const org = await t.db.createOrg({ name: "Ids" });
+  const org = await t.createOrg("Ids");
   const scope = t.db.forOrg(org.id);
   expect(await scope.getWorkspace("nope")).toBeUndefined();
   expect(await scope.getDocument("nope")).toBeUndefined();
@@ -70,7 +70,7 @@ test("two processes migrating a fresh database at the same moment both succeed",
 });
 
 test("when Postgres kills an idle connection the process survives and the next query works", async () => {
-  const org = await t.db.createOrg({ name: "Survivor" });
+  const org = await t.createOrg("Survivor");
   await t.rawQuery(
     "select pg_terminate_backend(pid) from pg_stat_activity where application_name = 'noon-db' and pid <> pg_backend_pid()",
   );

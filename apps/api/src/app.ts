@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import type { z } from "zod";
 import {
@@ -10,13 +11,15 @@ import {
   type ErrorBody,
   type HealthResponse,
   type Org,
+  type User,
 } from "@noon/contracts";
 import type { Db } from "@noon/db";
+import type { Identify } from "./identity.ts";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
 type ErrorCode = ErrorBody["error"];
-const fail = (c: Context, status: 400 | 404 | 413 | 415 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
+const fail = (c: Context, status: 400 | 401 | 404 | 413 | 415 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
 
@@ -59,8 +62,8 @@ function pageQuery(c: Context): PageQuery {
 const badCursor = (c: Context) => fail(c, 400, "invalid_query", [{ field: "cursor", message: "not a cursor issued by this server" }]);
 
 /** Builds the HTTP app. Pure: no port is opened here, and the database arrives as an argument. */
-export function buildApp({ db }: { db: Db }): Hono {
-  const app = new Hono();
+export function buildApp({ db, identify }: { db: Db; identify: Identify }): Hono<{ Variables: { user: User } }> {
+  const app = new Hono<{ Variables: { user: User } }>();
 
   app.use(async (c, next) => {
     await next();
@@ -83,14 +86,31 @@ export function buildApp({ db }: { db: Db }): Hono {
     }
   });
 
-  app.post("/orgs", async (c) => c.json(await db.createOrg(await body(c, CreateOrgBody)), 201));
+  // Everything under /orgs needs a caller. The probes above do not.
+  // createMiddleware carries the Variables type, so `c.var.user` is typed (not `any`) downstream.
+  const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
+    const user = await identify(c, db);
+    if (!user) return fail(c, 401, "unauthenticated");
+    c.set("user", user);
+    await next();
+  });
+  app.use("/orgs/*", requireUser);
 
-  // EVERYTHING about one org lives behind this middleware, including reading the org itself.
-  // It is the single seam where E1.4 adds "is the caller a member?"; a route outside it would be
-  // the one that leaks. Until E1.4 there is no identity at all: any caller may read any org by id.
-  const org = new Hono<{ Variables: { org: Org; scope: ReturnType<Db["forOrg"]> } }>();
+  app.post("/orgs", async (c) => {
+    const { name } = await body(c, CreateOrgBody);
+    return c.json(await db.createOrg({ name, ownerId: c.var.user.id }), 201);
+  });
+  app.get("/orgs", async (c) => {
+    const page = await db.listOrgsFor(c.var.user.id, pageQuery(c));
+    return page ? c.json(page) : badCursor(c);
+  });
+
+  // EVERYTHING about one org lives behind this middleware, including reading the org itself: it is
+  // the one place that decides whether the caller may see this org. Not a member and no such org
+  // are the same answer, 404, so a response never confirms that someone else's org exists (F2).
+  const org = new Hono<{ Variables: { user: User; org: Org; scope: ReturnType<Db["forOrg"]> } }>();
   org.use(async (c, next) => {
-    const found = await db.getOrg(c.req.param("orgId") ?? "");
+    const found = await db.getOrgForMember(c.req.param("orgId") ?? "", c.var.user.id);
     if (!found) return notFound(c);
     c.set("org", found);
     c.set("scope", db.forOrg(found.id));
