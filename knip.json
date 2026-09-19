@@ -16,6 +16,8 @@
     "jscpd"
   ],
   "ignore": [
+    "docs/**",
+    "drills/**",
     "learning-tests/**"
   ],
   "includeEntryExports": true

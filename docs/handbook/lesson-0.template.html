@@ -1,0 +1,179 @@
+<title>TypeScript Lesson Zero</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.prose { max-width: 36rem; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h2 code { font-size: 0.92em; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+pre.out { background: var(--surface); color: var(--slate); border-style: dashed; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 9rem; }
+.break { border: 1px solid var(--bad); background: var(--bad-wash); padding: 4px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.break .label { color: var(--bad); } .break pre { background: var(--surface); }
+.break p { font-size: 0.95rem; margin: 10px 0 0; }
+.recall { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; max-width: 36rem; }
+summary { cursor: pointer; font: 500 15px var(--sans); color: var(--accent); }
+.recall p { margin: 12px 0 0; font-size: 0.95rem; }
+#score { font: 500 13px var(--mono); color: var(--slate); min-height: 1.4em; margin: 0 0 4px; }
+.quiz { border-top: 1px solid var(--rule); padding: 22px 0 8px; display: grid; gap: 8px; max-width: 36rem; }
+.quiz .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.quiz button { text-align: left; padding: 11px 14px; font: 400 16px/1.35 var(--serif); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; cursor: pointer; }
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; color: var(--slate); }
+.quiz button.right { border-color: var(--good); color: var(--good); font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.quiz .why { font-size: 0.92rem; color: var(--slate); margin: 4px 0 0; }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media (max-width: 480px) { body { font-size: 17.5px; padding-block: 36px 72px; } pre { font-size: 12.5px; } }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 0 · Primer</p>
+  <h1>TypeScript for a Java and Python engineer</h1>
+  <p class="lede">The win: read every line of epic 1 as it lands. Eight ideas, each one a file you run, then break on purpose.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Everything here lives in <span class="mono">drills/lesson-0/</span> of the repo. Node 24 runs TypeScript directly, so there is nothing to build:</p>
+    <p class="mono">cd drills/lesson-0<br>node 01-values.ts &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# run an exercise<br>sh check.sh &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# prove all 17 files behave as this page says</p>
+    <p>For each section: predict the output, run it, then open the <span class="mono">.broken.ts</span> twin and predict <em>how</em> it fails before you look.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#repo">9 · Reading this repo's config</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="repo">
+    <h2>9 · Reading this repo's config</h2>
+    <p>Three files do the job of <span class="mono">pom.xml</span> / <span class="mono">pyproject.toml</span>. Open each one; they are short.</p>
+    <div class="scroll"><table>
+      <tr><th>File</th><th>Job</th><th>Closest thing you know</th></tr>
+      <tr><td><span class="mono">package.json</span></td><td>name, dependencies, <code>"type": "module"</code>, and <code>"exports"</code>: the one door into a package</td><td><span class="mono">pom.xml</span> · <span class="mono">pyproject.toml</span></td></tr>
+      <tr><td><span class="mono">pnpm-workspace.yaml</span></td><td>says <span class="mono">apps/*</span> and <span class="mono">packages/*</span> are one repo of many packages, linked by symlink</td><td>Maven multi-module · uv workspace</td></tr>
+      <tr><td><span class="mono">pnpm-lock.yaml</span></td><td>exact resolved versions; committed</td><td><span class="mono">poetry.lock</span></td></tr>
+      <tr><td><span class="mono">tsconfig.json</span></td><td>how strict the <em>checker</em> is. It has no effect on how code <em>runs</em></td><td>javac <code>-Xlint</code> · mypy config</td></tr>
+    </table></div>
+    <p>The <span class="mono">tsconfig.json</span> flags you met above, all on in this repo:</p>
+    <div class="scroll"><table>
+      <tr><th>Flag</th><th>What it bought you</th><th>Section</th></tr>
+      <tr><td><code>strict</code></td><td><code>null</code>/<code>undefined</code> are not in every type; no implicit <code>any</code></td><td>6</td></tr>
+      <tr><td><code>noUncheckedIndexedAccess</code></td><td><code>xs[0]</code> may be <code>undefined</code></td><td>4</td></tr>
+      <tr><td><code>exactOptionalPropertyTypes</code></td><td>absent is not the same as <code>undefined</code></td><td>6</td></tr>
+      <tr><td><code>verbatimModuleSyntax</code></td><td>forces <code>import type</code> for types</td><td>7</td></tr>
+      <tr><td><code>erasableSyntaxOnly</code></td><td>bans <code>enum</code> and friends, which Node cannot strip</td><td>5</td></tr>
+      <tr><td><code>noEmit</code></td><td>the compiler only checks; Node runs the source</td><td>5</td></tr>
+    </table></div>
+    <p class="note"><strong>One real story from setting up this repo.</strong> The newest TypeScript (7) crashed our lint layer, because the lint plugin only supports versions below 6.1. We pinned 6.0. In this ecosystem the compiler, the linter and the runtime are three separate projects on three release schedules; in Java they ship together. Expect version pinning to be part of the job.</p>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Say the eight ideas out loud, and for each one the thing Java or Python does differently. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Values and inference (one <code>number</code>) · structural typing · unions and narrowing · functions and inferred generics · types vanish at runtime, so validate at boundaries · <code>null</code> vs <code>undefined</code>, <code>?.</code> and <code>??</code> · modules, <code>.ts</code> extension, <code>import type</code> · promises on a single thread.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Seven questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. A request body is cast with <code>as CreateOrg</code>, but the client sent <code>{"name": 42}</code>. What happens?</p>
+      <button id="q1a" data-correct>Nothing; it fails later, somewhere else</button><button id="q1b">The cast throws a TypeError</button>
+      <button id="q1c">Node rejects the request with 400</button><button id="q1d">The compiler reports an error</button>
+      <p class="why" hidden>Types are erased; <code>as</code> checks nothing. Only runtime code (our Zod contracts) can reject it, which is why every boundary parses.</p></div>
+    <div class="quiz"><p class="q">2. <code>class Dog { name = "" }</code> and <code>function greet(x: { name: string })</code>. Does <code>greet({ name: "Rex" })</code> compile?</p>
+      <button id="q2a" data-correct>Yes: the shape matches</button><button id="q2b">No: the object is not a Dog</button>
+      <button id="q2c">Only with an <code>implements</code> clause</button><button id="q2d">Only after a cast</button>
+      <p class="why" hidden>Structural typing. Names and declarations do not matter; shapes do.</p></div>
+    <div class="quiz"><p class="q">3. Why does this repo use <code>"queued" | "running"</code> instead of an <code>enum</code>?</p>
+      <button id="q3a" data-correct>Node strips types; enums need generated code</button><button id="q3b">Enums are slower at runtime</button>
+      <button id="q3c">Enums cannot be used in a switch</button><button id="q3d">Unions allow more than two values</button>
+      <p class="why" hidden>We run source directly. Anything that is not pure type syntax cannot be erased, so Node refuses it.</p></div>
+    <div class="quiz"><p class="q">4. <code>const gap = props.gap || 16</code> and the designer set gap to 0. What is <code>gap</code>?</p>
+      <button id="q4a" data-correct>16</button><button id="q4b">0</button>
+      <button id="q4c">undefined</button><button id="q4d">A compile error</button>
+      <p class="why" hidden><code>||</code> falls through on every falsy value, including 0 and "". <code>??</code> falls through only on null and undefined.</p></div>
+    <div class="quiz"><p class="q">5. Two independent 50 ms database calls, each awaited on its own line. Total wait?</p>
+      <button id="q5a" data-correct>About 100 ms</button><button id="q5b">About 50 ms</button>
+      <button id="q5c">About 0 ms; await does not block</button><button id="q5d">It depends on the thread pool size</button>
+      <p class="why" hidden>Each <code>await</code> finishes before the next line starts. <code>Promise.all</code> overlaps the waits.</p></div>
+    <div class="quiz"><p class="q">6. A handler runs a 3-second synchronous loop. What do other connected clients experience?</p>
+      <button id="q6a" data-correct>Everything stalls for 3 seconds</button><button id="q6b">Nothing; other requests use other threads</button>
+      <button id="q6c">Only that client's socket stalls</button><button id="q6d">Node kills the handler after a timeout</button>
+      <p class="why" hidden>One thread runs all your JavaScript. While it is busy, no timer fires, no socket is read, no heartbeat is answered.</p></div>
+    <div class="quiz"><p class="q">7. You add a fifth op type to the union and forget one <code>switch</code>. When do you find out?</p>
+      <button id="q7a" data-correct>At compile time, on the <code>never</code> line</button><button id="q7b">At runtime, with an exception</button>
+      <button id="q7c">Never; the default case hides it</button><button id="q7d">Only if a test covers it</button>
+      <p class="why" hidden>The exhaustiveness check turns "I forgot a case" into a type error in every switch that matters.</p></div>
+  </section>
+
+  <footer>Next: Lesson 1, written after epic 1 is built. How the typed API, the Postgres layer and tenant isolation were written, line by line, and drills where you fix a planted bug.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>

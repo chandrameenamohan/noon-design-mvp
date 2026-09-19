@@ -8,3 +8,7 @@ unit:      ; pnpm exec vitest run
 deadcode:  ; pnpm exec knip
 dup:       ; pnpm exec jscpd .
 e2e:       ; pnpm exec playwright test
+
+# Outside `make check`: proves every lesson's exercises and drills behave as their chapter says.
+.PHONY: drills
+drills: ; sh drills/lesson-0/check.sh

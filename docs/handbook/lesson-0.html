@@ -1,0 +1,466 @@
+<title>TypeScript Lesson Zero</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.prose { max-width: 36rem; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h2 code { font-size: 0.92em; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+pre.out { background: var(--surface); color: var(--slate); border-style: dashed; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 9rem; }
+.break { border: 1px solid var(--bad); background: var(--bad-wash); padding: 4px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.break .label { color: var(--bad); } .break pre { background: var(--surface); }
+.break p { font-size: 0.95rem; margin: 10px 0 0; }
+.recall { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; max-width: 36rem; }
+summary { cursor: pointer; font: 500 15px var(--sans); color: var(--accent); }
+.recall p { margin: 12px 0 0; font-size: 0.95rem; }
+#score { font: 500 13px var(--mono); color: var(--slate); min-height: 1.4em; margin: 0 0 4px; }
+.quiz { border-top: 1px solid var(--rule); padding: 22px 0 8px; display: grid; gap: 8px; max-width: 36rem; }
+.quiz .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.quiz button { text-align: left; padding: 11px 14px; font: 400 16px/1.35 var(--serif); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; cursor: pointer; }
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; color: var(--slate); }
+.quiz button.right { border-color: var(--good); color: var(--good); font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.quiz .why { font-size: 0.92rem; color: var(--slate); margin: 4px 0 0; }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media (max-width: 480px) { body { font-size: 17.5px; padding-block: 36px 72px; } pre { font-size: 12.5px; } }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 0 · Primer</p>
+  <h1>TypeScript for a Java and Python engineer</h1>
+  <p class="lede">The win: read every line of epic 1 as it lands. Eight ideas, each one a file you run, then break on purpose.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Everything here lives in <span class="mono">drills/lesson-0/</span> of the repo. Node 24 runs TypeScript directly, so there is nothing to build:</p>
+    <p class="mono">cd drills/lesson-0<br>node 01-values.ts &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# run an exercise<br>sh check.sh &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# prove all 17 files behave as this page says</p>
+    <p>For each section: predict the output, run it, then open the <span class="mono">.broken.ts</span> twin and predict <em>how</em> it fails before you look.</p>
+  </div>
+
+  <ol class="toc"><li><a href="#values">1 · Values, inference, one number type</a></li><li><a href="#objects">2 · Object types and structural typing</a></li><li><a href="#unions">3 · Unions, literals, narrowing</a></li><li><a href="#functions">4 · Functions and generics</a></li><li><a href="#erased">5 · Types vanish at runtime</a></li><li><a href="#nothing">6 · Two kinds of nothing</a></li><li><a href="#modules">7 · Modules and the <code>.ts</code> rule</a></li><li><a href="#async">8 · Promises and the single thread</a></li><li><a href="#repo">9 · Reading this repo's config</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  <section id="values"><h2>1 · Values, inference, one number type</h2><p><code>const</code> is a binding that never changes; <code>let</code> may. You rarely write a type on a local variable: the compiler infers it. Notice that a <code>const</code> string gets the <em>literal</em> type <code>"api"</code>, not <code>string</code>. That tiny fact powers section 3.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td><code>const</code> / <code>let</code></td><td><code>final var</code> / <code>var</code></td><td>no equivalent; everything rebinds</td></tr><tr><td>one <code>number</code> (64-bit float) + <code>bigint</code></td><td><code>int long float double BigInteger</code></td><td><code>int</code> (unbounded) + <code>float</code></td></tr><tr><td><code>1 / 2 === 0.5</code></td><td><code>1 / 2 == 0</code></td><td><code>1 / 2 == 0.5</code></td></tr></table></div><p class="label">Run it · <span class="mono">node 01-values.ts</span></p><div class="scroll"><pre><code>const service = &quot;api&quot;; // inferred as the literal type &quot;api&quot;, not string: const can never change
+let attempts = 0; //      inferred as number: let can change, so TS widens to the general type
+attempts += 1;
+
+// There is no int/long/float/double. One `number` (a 64-bit float), plus `bigint` for big integers.
+const half = 1 / 2; //           0.5, not 0 (Java&#x27;s int division would give 0)
+const big = 2n ** 64n; //        bigint literal: note the n
+const unsafe = 2 ** 53 + 1; //   numbers lose integer precision above 2^53
+
+console.log({ service, attempts, half, big, unsafe, safe: Number.isSafeInteger(unsafe) });
+
+// Template strings replace String.format / f-strings.
+console.log(`${service} took ${attempts} attempt(s)`);
+
+// Annotations are optional. Write them on function boundaries, let inference do the rest.
+const port: number = 8080;
+console.log(typeof port); // &quot;number&quot; — typeof is a RUNTIME operator and only knows 8 JavaScript types</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>{
+  service: &#x27;api&#x27;,
+  attempts: 1,
+  half: 0.5,
+  big: 18446744073709551616n,
+  unsafe: 9007199254740992,
+  safe: false
+}
+api took 1 attempt(s)
+number</code></pre></div><p class="note"><strong>Why it matters here:</strong> document sequence numbers come back from Postgres as <code>bigint</code>, and the driver hands them to us as <em>strings</em>. Adding 1 to that string gives <code>"101"</code>… then <code>"1011"</code>. We convert once, at the database boundary.</p><div class="break"><p class="label">Break it · <span class="mono">01-values.broken.ts</span></p><div class="scroll"><pre><code>// A const&#x27;s literal type, and a let&#x27;s widened type, are both enforced.
+let attempts = 0;
+attempts = &quot;three&quot;; // Type &#x27;string&#x27; is not assignable to type &#x27;number&#x27;.
+console.log(attempts);</code></pre></div><p><strong>Fails with <span class="mono">TS2322</span>.</strong> Inference is not "dynamic typing". Once <code>attempts</code> is inferred as <code>number</code> it stays one.</p></div></section><section id="objects"><h2>2 · Object types and structural typing</h2><p>This is the biggest mental shift from Java. Java is <em>nominal</em>: a class is a <code>HasName</code> only if it says <code>implements HasName</code>. TypeScript is <em>structural</em>: anything with a <code>name: string</code> <em>is</em> a <code>HasName</code>. Python calls this duck typing; TypeScript checks the duck at compile time.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td><code>type Org = { id: string }</code></td><td><code>record Org(String id)</code></td><td><code>@dataclass</code> / <code>TypedDict</code></td></tr><tr><td>fits if the shape fits</td><td>fits if it declares <code>implements</code></td><td>fits if it quacks (checked at runtime, or by mypy <code>Protocol</code>)</td></tr><tr><td><code>plan?: "free"</code> optional field</td><td><code>Optional&lt;Plan&gt;</code> or nullable</td><td><code>plan: str | None = None</code></td></tr></table></div><p class="label">Run it · <span class="mono">node 02-objects.ts</span></p><div class="scroll"><pre><code>// Two ways to name an object shape. Rule of thumb in this repo: `type` by default,
+// `interface` when something is meant to be extended or implemented.
+type Org = { readonly id: string; name: string; plan?: &quot;free&quot; | &quot;team&quot; };
+interface HasName { name: string }
+
+const acme: Org = { id: &quot;org_1&quot;, name: &quot;Acme&quot; }; // plan is optional, so it may be absent
+
+// Structural typing: a value fits a type if it has the right SHAPE.
+// Org never declares &quot;implements HasName&quot; (Java would require that). It just has a name.
+function greet(x: HasName): string {
+  return `hello ${x.name}`;
+}
+console.log(greet(acme));
+console.log(greet({ name: &quot;anything with a name&quot; }));
+
+// A class is not special either: this object literal is a valid Point.
+class Point {
+  x: number;
+  y: number;
+  constructor(x: number, y: number) {
+    this.x = x;
+    this.y = y;
+  }
+}
+const p: Point = { x: 1, y: 2 }; // no `new`, no inheritance, still a Point: only the shape matters
+console.log(p, p instanceof Point); // instanceof is a RUNTIME check and says false
+
+// readonly is compile-time only; it is erased like every other type.
+console.log(Object.isFrozen(acme)); // false</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>hello Acme
+hello anything with a name
+{ x: 1, y: 2 } false
+false</code></pre></div><p class="note"><strong>Read the last two outputs again.</strong> A plain object passed as a <code>Point</code>, yet <code>instanceof Point</code> is <code>false</code>, and <code>readonly</code> froze nothing. The type checker and the running program are two separate worlds. Section 5 is about the gap between them.</p><div class="break"><p class="label">Break it · <span class="mono">02-objects.broken.ts</span></p><div class="scroll"><pre><code>// Structural typing is strict about object LITERALS: an unknown extra key is almost always a typo.
+type Org = { id: string; name: string };
+const acme: Org = { id: &quot;org_1&quot;, name: &quot;Acme&quot;, nmae: &quot;typo&quot; };
+console.log(acme);</code></pre></div><p><strong>Fails with <span class="mono">TS2353</span>.</strong> Structural does not mean sloppy: on a fresh object literal, an unknown key is treated as a typo.</p></div></section><section id="unions"><h2>3 · Unions, literals, narrowing</h2><p>A value can be <em>one of several</em> types, and a type can be a single literal like <code>"running"</code>. Put a literal tag on each member and you get a <strong>discriminated union</strong>: the compiler follows your <code>switch</code> and knows, inside each case, exactly which fields exist. Our whole document protocol (four ops) is one of these.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td><code>"queued" | "running"</code></td><td><code>enum RunStatus</code></td><td><code>Literal["queued", "running"]</code></td></tr><tr><td>discriminated union + <code>never</code> check</td><td>sealed interface + pattern <code>switch</code> (Java 21)</td><td><code>match</code> + <code>assert_never</code></td></tr><tr><td><code>unknown</code> (must narrow) vs <code>any</code> (checker off)</td><td><code>Object</code></td><td><code>object</code> vs <code>Any</code></td></tr></table></div><p class="label">Run it · <span class="mono">node 03-unions.ts</span></p><div class="scroll"><pre><code>// This is the feature Java and Python do not have, and the one this codebase leans on most.
+
+// A literal union replaces most enums: no runtime object, just checked strings.
+type RunStatus = &quot;queued&quot; | &quot;running&quot; | &quot;succeeded&quot; | &quot;failed&quot;;
+
+// A DISCRIMINATED union: every member carries a literal tag (`type`). Our four document ops look like this.
+type Op =
+  | { type: &quot;add_node&quot;; nodeId: string; parentId: string }
+  | { type: &quot;remove_node&quot;; nodeId: string }
+  | { type: &quot;set_prop&quot;; nodeId: string; key: string; value: unknown };
+
+function describe(op: Op): string {
+  // Narrowing: inside each case the compiler KNOWS which member it is.
+  switch (op.type) {
+    case &quot;add_node&quot;:
+      return `add ${op.nodeId} under ${op.parentId}`; // parentId exists only on this member
+    case &quot;remove_node&quot;:
+      return `remove ${op.nodeId}`;
+    case &quot;set_prop&quot;:
+      return `set ${op.key} on ${op.nodeId}`;
+    default: {
+      // Exhaustiveness: if someone adds a 5th op and forgets a case, `op` is no longer `never`
+      // here and this line stops compiling. (Java 21 sealed interfaces + switch do the same.)
+      const unreachable: never = op;
+      return unreachable;
+    }
+  }
+}
+
+const status: RunStatus = &quot;running&quot;;
+console.log(status, &quot;|&quot;, describe({ type: &quot;set_prop&quot;, nodeId: &quot;n1&quot;, key: &quot;label&quot;, value: &quot;Pay&quot; }));
+
+// `unknown` is the safe &quot;anything&quot;: you must narrow before using it. `any` switches the checker off.
+function lengthOf(x: unknown): number {
+  if (typeof x === &quot;string&quot;) return x.length; // narrowed to string
+  if (Array.isArray(x)) return x.length; //      narrowed to any[]
+  return 0;
+}
+console.log(lengthOf(&quot;four&quot;), lengthOf([1, 2]), lengthOf(42));</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>running | set label on n1
+4 2 0</code></pre></div><p class="note"><strong>Why no <code>enum</code>?</strong> A TypeScript <code>enum</code> generates real JavaScript, and Node runs our files by <em>deleting</em> types, not compiling them. Literal unions cost nothing at runtime. Section 5's broken file proves it.</p><div class="break"><p class="label">Break it · <span class="mono">03-unions.broken.ts</span></p><div class="scroll"><pre><code>// Add a member to the union, forget the case: the `never` line stops compiling.
+type Op = { type: &quot;add_node&quot; } | { type: &quot;remove_node&quot; } | { type: &quot;move_node&quot; };
+function describe(op: Op): string {
+  switch (op.type) {
+    case &quot;add_node&quot;:
+      return &quot;add&quot;;
+    case &quot;remove_node&quot;:
+      return &quot;remove&quot;;
+    default: {
+      const unreachable: never = op; // Type &#x27;{ type: &quot;move_node&quot;; }&#x27; is not assignable to type &#x27;never&#x27;.
+      return unreachable;
+    }
+  }
+}
+console.log(describe({ type: &quot;move_node&quot; }));</code></pre></div><p><strong>Fails with <span class="mono">TS2322</span>.</strong> Add a fifth op and forget a case: the <code>never</code> line refuses to compile. The compiler finds every place you must update.</p></div></section><section id="functions"><h2>4 · Functions and generics</h2><p>Functions are ordinary values. Generics look like Java's and are erased like Java's, but you almost never write the type argument: it is inferred from the call. There is no overloading by signature; use optional parameters, defaults, or an object parameter (which doubles as named arguments).</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td><code>(n: number) =&gt; n * 2</code></td><td><code>n -&gt; n * 2</code></td><td><code>lambda n: n * 2</code></td></tr><tr><td><code>&lt;T extends { id: string }&gt;</code></td><td><code>&lt;T extends HasId&gt;</code></td><td><code>TypeVar("T", bound=HasId)</code></td></tr><tr><td><code>f({ title, orgId })</code></td><td>builder / many overloads</td><td>keyword arguments</td></tr></table></div><p class="label">Run it · <span class="mono">node 04-functions.ts</span></p><div class="scroll"><pre><code>// Functions are values. Both forms are everywhere; arrows are the norm for callbacks.
+function add(a: number, b: number): number {
+  return a + b;
+}
+const double = (n: number): number =&gt; n * 2;
+
+// Optional and default parameters (no overloading by signature like Java).
+function page(items: string[], size = 2, from?: number): string[] {
+  const start = from ?? 0;
+  return items.slice(start, start + size);
+}
+
+// Generics: like Java&#x27;s, erased at runtime like Java&#x27;s, but inferred at the call site far more often.
+function first&lt;T&gt;(xs: readonly T[]): T | undefined {
+  return xs[0]; // T | undefined: an empty array has no first element, and TS makes you say so
+}
+
+// A generic constraint (`extends`) = Java&#x27;s bounded type parameter.
+function byId&lt;T extends { id: string }&gt;(rows: T[]): Map&lt;string, T&gt; {
+  return new Map(rows.map((r) =&gt; [r.id, r]));
+}
+
+console.log(add(2, 3), double(4), page([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;]), page([&quot;a&quot;, &quot;b&quot;, &quot;c&quot;], 1, 2));
+console.log(first([10, 20]), first([]));
+console.log(byId([{ id: &quot;o1&quot;, name: &quot;Acme&quot; }]).get(&quot;o1&quot;));
+
+// Object parameter + destructuring is how &quot;named arguments&quot; are done.
+function createDoc({ title, orgId }: { title: string; orgId: string }): string {
+  return `${orgId}/${title}`;
+}
+console.log(createDoc({ orgId: &quot;org_1&quot;, title: &quot;Checkout&quot; }));</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>5 8 [ &#x27;a&#x27;, &#x27;b&#x27; ] [ &#x27;c&#x27; ]
+10 undefined
+{ id: &#x27;o1&#x27;, name: &#x27;Acme&#x27; }
+org_1/Checkout</code></pre></div><div class="break"><p class="label">Break it · <span class="mono">04-functions.broken.ts</span></p><div class="scroll"><pre><code>// noUncheckedIndexedAccess: xs[0] is `number | undefined`, so arithmetic on it is an error until you check.
+function firstPlusOne(xs: number[]): number {
+  return xs[0] + 1; // Object is possibly &#x27;undefined&#x27;.
+}
+console.log(firstPlusOne([]));</code></pre></div><p><strong>Fails with <span class="mono">TS2532</span>.</strong> With <code>noUncheckedIndexedAccess</code> on (it is, repo-wide), <code>xs[0]</code> is <code>number | undefined</code>. Java would throw <code>IndexOutOfBounds</code> at runtime; here you handle the empty case before the code compiles.</p></div></section><section id="erased"><h2>5 · Types vanish at runtime</h2><p><strong>If you keep one idea from this lesson, keep this one.</strong> Node 24 runs a <code>.ts</code> file by replacing every type annotation with spaces and executing what is left. Nothing checks types while the program runs. An <code>as</code> cast is a promise you make to the compiler, not a check. So a JSON body, a WebSocket message, a database row, an environment variable: each is <code>unknown</code> until <em>runtime code</em> proves otherwise.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td>types erased; <code>as</code> never checks</td><td>generics erased, but casts are checked (<code>ClassCastException</code>)</td><td>hints ignored at runtime unless a library reads them</td></tr><tr><td>Zod schema → inferred type</td><td>Jackson + Bean Validation</td><td>pydantic model</td></tr></table></div><p class="label">Run it · <span class="mono">node 05-erased.ts</span></p><div class="scroll"><pre><code>// Node runs this .ts file by deleting the type syntax. Nothing checks types while it runs.
+
+type Health = { status: &quot;ok&quot;; service: string };
+
+// 1. A cast (`as`) is a promise to the compiler, not a check. This &quot;Health&quot; is a lie, and it runs fine.
+const fromTheWire = JSON.parse(&#x27;{&quot;status&quot;:&quot;down&quot;,&quot;service&quot;:42}&#x27;) as Health;
+console.log(&quot;the compiler believes this is Health:&quot;, fromTheWire);
+
+// Java&#x27;s Jackson would throw here; Python + pydantic would raise. Plain TypeScript does nothing.
+// So at every trust boundary (HTTP body, WebSocket message, DB row, env var) we must check at RUNTIME.
+
+// 2. A hand-written runtime check. `x is Health` is a TYPE PREDICATE: it tells the compiler
+//    &quot;if this returns true, treat x as Health from here on&quot;.
+function isHealth(x: unknown): x is Health {
+  return (
+    typeof x === &quot;object&quot; &amp;&amp; x !== null &amp;&amp;
+    &quot;status&quot; in x &amp;&amp; x.status === &quot;ok&quot; &amp;&amp;
+    &quot;service&quot; in x &amp;&amp; typeof x.service === &quot;string&quot; &amp;&amp; x.service.length &gt; 0
+  );
+}
+
+const candidate: unknown = JSON.parse(&#x27;{&quot;status&quot;:&quot;ok&quot;,&quot;service&quot;:&quot;api&quot;}&#x27;);
+if (isHealth(candidate)) console.log(&quot;checked for real:&quot;, candidate.service); // narrowed to Health
+console.log(&quot;the liar passes the check?&quot;, isHealth(fromTheWire)); // false
+
+// 3. Writing these by hand does not scale, and the type and the check can drift apart.
+//    Zod (packages/contracts) writes ONE schema and DERIVES the type from it:
+//      const Health = z.object({ status: z.literal(&quot;ok&quot;), service: z.string().min(1) });
+//      type Health = z.infer&lt;typeof Health&gt;;   // the type comes from the runtime check, so they cannot drift
+//      Health.parse(json)                      // throws with the failing field&#x27;s name</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>the compiler believes this is Health: { status: &#x27;down&#x27;, service: 42 }
+checked for real: api
+the liar passes the check? false</code></pre></div><p class="note"><strong>This is why <code>packages/contracts</code> exists.</strong> Every HTTP body and WebSocket message is defined once as a Zod schema; the TypeScript type is <em>derived</em> from the schema with <code>z.infer</code>, so the check and the type cannot drift apart. It is already in the repo: open <span class="mono">packages/contracts/src/index.ts</span>.</p><div class="break"><p class="label">Break it · <span class="mono">05-erased.broken.ts</span></p><div class="scroll"><pre><code>// Node can only DELETE type syntax. `enum` generates real code, so Node refuses to run it.
+// (That is why this repo uses literal unions and sets `erasableSyntaxOnly`.)
+enum RunStatus { Queued, Running }
+console.log(RunStatus.Queued);</code></pre></div><p><strong>Fails with <span class="mono">ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX</span>.</strong> This one fails when you <em>run</em> it, not when you compile it. Node can only delete syntax; an <code>enum</code> needs code generated, so Node refuses. The same goes for <code>namespace</code>, constructor parameter properties and decorators. Our <code>tsconfig</code> sets <code>erasableSyntaxOnly</code> so the compiler rejects them first.</p></div></section><section id="nothing"><h2>6 · Two kinds of nothing</h2><p>JavaScript has <code>undefined</code> ("never set") and <code>null</code> ("deliberately empty"). With <code>strict</code> on, neither is a member of any type unless you say so: a <code>string</code> can never be null, unlike every Java reference. Two operators do most of the work: <code>?.</code> and <code>??</code>.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td><code>null</code> and <code>undefined</code></td><td><code>null</code></td><td><code>None</code></td></tr><tr><td><code>a?.b</code></td><td><code>Optional.map</code></td><td>no operator</td></tr><tr><td><code>a ?? d</code> (only null/undefined)</td><td><code>Optional.orElse</code></td><td><code>a if a is not None else d</code> (not <code>a or d</code>)</td></tr></table></div><p class="label">Run it · <span class="mono">node 06-nothing.ts</span></p><div class="scroll"><pre><code>// Java has null. Python has None. JavaScript has BOTH null and undefined.
+//   undefined = &quot;was never set&quot; (missing property, missing argument, array hole)
+//   null      = &quot;deliberately empty&quot; (SQL NULL arrives as null; JSON has null but no undefined)
+
+type Doc = { title: string; description?: string; archivedAt: Date | null };
+const doc: Doc = { title: &quot;Checkout&quot;, archivedAt: null };
+
+console.log(doc.description, doc.archivedAt); // undefined null
+
+// ?.  optional chaining: stop and give undefined instead of throwing (Java: Optional.map, Python: nothing built in)
+console.log(doc.description?.toUpperCase());
+
+// ??  nullish coalescing: default ONLY for null/undefined. `||` also replaces 0, &quot;&quot; and false: a classic bug.
+const gap = 0;
+console.log(gap || 16, gap ?? 16); // 16 (wrong), 0 (right)
+
+// strictNullChecks (part of `strict`): null/undefined are NOT members of every type, unlike Java references.
+function titleLength(d: Doc | undefined): number {
+  if (!d) return 0; // narrowing removes undefined
+  return d.title.length;
+}
+console.log(titleLength(doc), titleLength(undefined));
+
+// JSON drops undefined but keeps null: this matters for every HTTP body we send.
+console.log(JSON.stringify({ a: undefined, b: null })); // {&quot;b&quot;:null}</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>undefined null
+undefined
+16 0
+8 0
+{&quot;b&quot;:null}</code></pre></div><p class="note"><strong>The <code>||</code> trap</strong> is the third output line: <code>0 || 16</code> is <code>16</code> because <code>0</code> is falsy. A layout gap of zero silently becomes sixteen. Use <code>??</code>.</p><div class="break"><p class="label">Break it · <span class="mono">06-nothing.broken.ts</span></p><div class="scroll"><pre><code>// exactOptionalPropertyTypes: `description?: string` means &quot;absent or a string&quot;, NOT &quot;may be set to undefined&quot;.
+type Doc = { title: string; description?: string };
+const d: Doc = { title: &quot;Checkout&quot;, description: undefined };
+console.log(d);</code></pre></div><p><strong>Fails with <span class="mono">TS2375</span>.</strong> <code>exactOptionalPropertyTypes</code>: an optional field may be <em>absent</em>; it may not be <em>present and undefined</em>. The difference is real: <code>JSON.stringify</code> drops one and a database <code>UPDATE</code> built from object keys would overwrite with the other.</p></div></section><section id="modules"><h2>7 · Modules and the <code>.ts</code> rule</h2><p>A file is a module; <code>export</code> is its public surface. Because we run TypeScript straight on Node with no build step, two rules apply that you will not see in older tutorials: spell the real file name in relative imports, extension included, and import types with <code>import type</code> so nothing is left dangling after erasure.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td>file = module, explicit <code>export</code></td><td>class = file, <code>public</code>, packages</td><td>file = module, everything importable</td></tr><tr><td><code>node_modules</code> + package <code>exports</code></td><td>classpath / module path</td><td><code>sys.path</code> / site-packages</td></tr><tr><td>pnpm workspace</td><td>Maven/Gradle multi-module</td><td>uv/poetry workspace</td></tr></table></div><p class="label">Run it · <span class="mono">node 07-modules.ts</span></p><div class="scroll"><pre><code>// One file = one module (like Python; unlike Java&#x27;s one-class-per-file + package).
+
+import { makeOrg } from &quot;./07-lib.ts&quot;; //      a VALUE import: exists at runtime
+import type { Org } from &quot;./07-lib.ts&quot;; //     a TYPE import: deleted before the code runs
+
+// Two repo rules that come from running TypeScript directly on Node (no build step):
+//  1. relative imports spell the real file name, extension included: &quot;./07-lib.ts&quot;
+//  2. types are imported with `import type`, because after erasure there is no `Org` to import
+
+const org: Org = makeOrg(&quot;Acme&quot;);
+console.log(org);
+
+// Packages are imported by NAME, resolved through node_modules and the package&#x27;s &quot;exports&quot; field:
+//   import { HealthResponse } from &quot;@noon/contracts&quot;;   -&gt; packages/contracts/package.json &quot;exports&quot;
+// There is no classpath and no PYTHONPATH. tsconfig &quot;paths&quot; aliases do NOT work at runtime.
+
+// Top-level await works in modules, and import.meta replaces __file__-style tricks.
+console.log(import.meta.filename.endsWith(&quot;07-modules.ts&quot;));</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>{ id: &#x27;org_acme&#x27;, name: &#x27;Acme&#x27; }
+true</code></pre></div><div class="break"><p class="label">Break it · <span class="mono">07-modules.broken.ts</span></p><div class="scroll"><pre><code>// Java/Python habit: leave the extension off. Node looks for a file literally named &quot;./07-lib&quot;.
+// @ts-expect-error — the compiler objects too; silenced here so you can see the RUNTIME failure
+import { makeOrg } from &quot;./07-lib&quot;;
+console.log(makeOrg(&quot;Acme&quot;));</code></pre></div><p><strong>Fails with <span class="mono">ERR_MODULE_NOT_FOUND</span>.</strong> Leaving the extension off is the Java/Python reflex. Node looks for a file literally named <code>./07-lib</code> and finds none.</p></div></section><section id="async"><h2>8 · Promises and the single thread</h2><p>Node runs your JavaScript on <strong>one thread</strong>. I/O is non-blocking: <code>await</code> hands the thread back to the event loop until the result arrives. Consequences you will feel in this project: no data races on in-memory state (the sync room's document needs no lock), and one slow synchronous function freezes every request and every socket at once. A blocked event loop is also how a server loses a lease without noticing; epic 7 is built around that.</p><div class="scroll"><table><tr><th>TypeScript</th><th>Java</th><th>Python</th></tr><tr><td><code>Promise&lt;T&gt;</code>, <code>async/await</code></td><td><code>CompletableFuture&lt;T&gt;</code>, virtual threads</td><td>awaitables, <code>asyncio</code></td></tr><tr><td><code>Promise.all([a, b])</code></td><td><code>allOf</code> / structured concurrency</td><td><code>asyncio.gather</code></td></tr><tr><td>one thread + event loop</td><td>many threads, locks</td><td>one thread + event loop (GIL aside)</td></tr></table></div><p class="label">Run it · <span class="mono">node 08-async.ts</span></p><div class="scroll"><pre><code>// Java: threads + blocking calls. Python: asyncio. Node: ONE thread running your code, an event loop,
+// and non-blocking I/O. Nothing runs in parallel with your JavaScript, so there are no data races on
+// in-memory state, and one slow synchronous function freezes EVERYTHING (every request, every socket).
+
+const sleep = (ms: number): Promise&lt;void&gt; =&gt; new Promise((resolve) =&gt; setTimeout(resolve, ms));
+
+// A Promise&lt;T&gt; = Java&#x27;s CompletableFuture&lt;T&gt; = Python&#x27;s awaitable. `async` makes a function return one.
+async function fetchOrg(id: string): Promise&lt;{ id: string }&gt; {
+  await sleep(50); // gives the thread back to the event loop while &quot;waiting&quot;
+  return { id };
+}
+
+// Sequential vs concurrent: the most common performance mistake.
+let t = Date.now();
+await fetchOrg(&quot;a&quot;);
+await fetchOrg(&quot;b&quot;);
+console.log(&quot;one after another:&quot;, Date.now() - t, &quot;ms&quot;); // ~100
+
+t = Date.now();
+await Promise.all([fetchOrg(&quot;a&quot;), fetchOrg(&quot;b&quot;)]); // both waits overlap
+console.log(&quot;concurrently:     &quot;, Date.now() - t, &quot;ms&quot;); // ~50
+
+// Errors: a rejected promise is an exception at the `await`.
+async function mayFail(): Promise&lt;never&gt; {
+  throw new Error(&quot;db is down&quot;);
+}
+try {
+  await mayFail();
+} catch (e) {
+  console.log(&quot;caught:&quot;, e instanceof Error ? e.message : e); // `e` is unknown: narrow before use
+}
+
+// Ordering: sync code first, then microtasks (promise callbacks), then timers.
+setTimeout(() =&gt; console.log(&quot;3 timer&quot;), 0);
+void Promise.resolve().then(() =&gt; console.log(&quot;2 microtask&quot;));
+console.log(&quot;1 sync&quot;);
+
+// The classic bug: forgetting `await`. The call starts, nobody waits, errors vanish.
+// Our ESLint rule `no-floating-promises` turns that into a lint error; `void` above says &quot;on purpose&quot;.
+await sleep(10);</code></pre></div><p class="label">What it printed</p><div class="scroll"><pre class="out"><code>one after another: 103 ms
+concurrently:      51 ms
+caught: db is down
+1 sync
+2 microtask
+3 timer</code></pre></div><div class="break"><p class="label">Break it · <span class="mono">08-async.broken.ts</span></p><div class="scroll"><pre><code>// Forgetting `await` gives you the Promise, not the value. The type system catches it.
+async function fetchOrg(): Promise&lt;{ id: string }&gt; {
+  return { id: &quot;org_1&quot; };
+}
+const org = fetchOrg(); // missing await
+console.log(org.id); // Property &#x27;id&#x27; does not exist on type &#x27;Promise&lt;{ id: string; }&gt;&#x27;.</code></pre></div><p><strong>Fails with <span class="mono">TS2339</span>.</strong> Forget <code>await</code> and you hold the promise, not the value. The compiler catches the property access; our lint rule <code>no-floating-promises</code> catches the case where you ignore the result entirely.</p></div></section>
+
+  <section id="repo">
+    <h2>9 · Reading this repo's config</h2>
+    <p>Three files do the job of <span class="mono">pom.xml</span> / <span class="mono">pyproject.toml</span>. Open each one; they are short.</p>
+    <div class="scroll"><table>
+      <tr><th>File</th><th>Job</th><th>Closest thing you know</th></tr>
+      <tr><td><span class="mono">package.json</span></td><td>name, dependencies, <code>"type": "module"</code>, and <code>"exports"</code>: the one door into a package</td><td><span class="mono">pom.xml</span> · <span class="mono">pyproject.toml</span></td></tr>
+      <tr><td><span class="mono">pnpm-workspace.yaml</span></td><td>says <span class="mono">apps/*</span> and <span class="mono">packages/*</span> are one repo of many packages, linked by symlink</td><td>Maven multi-module · uv workspace</td></tr>
+      <tr><td><span class="mono">pnpm-lock.yaml</span></td><td>exact resolved versions; committed</td><td><span class="mono">poetry.lock</span></td></tr>
+      <tr><td><span class="mono">tsconfig.json</span></td><td>how strict the <em>checker</em> is. It has no effect on how code <em>runs</em></td><td>javac <code>-Xlint</code> · mypy config</td></tr>
+    </table></div>
+    <p>The <span class="mono">tsconfig.json</span> flags you met above, all on in this repo:</p>
+    <div class="scroll"><table>
+      <tr><th>Flag</th><th>What it bought you</th><th>Section</th></tr>
+      <tr><td><code>strict</code></td><td><code>null</code>/<code>undefined</code> are not in every type; no implicit <code>any</code></td><td>6</td></tr>
+      <tr><td><code>noUncheckedIndexedAccess</code></td><td><code>xs[0]</code> may be <code>undefined</code></td><td>4</td></tr>
+      <tr><td><code>exactOptionalPropertyTypes</code></td><td>absent is not the same as <code>undefined</code></td><td>6</td></tr>
+      <tr><td><code>verbatimModuleSyntax</code></td><td>forces <code>import type</code> for types</td><td>7</td></tr>
+      <tr><td><code>erasableSyntaxOnly</code></td><td>bans <code>enum</code> and friends, which Node cannot strip</td><td>5</td></tr>
+      <tr><td><code>noEmit</code></td><td>the compiler only checks; Node runs the source</td><td>5</td></tr>
+    </table></div>
+    <p class="note"><strong>One real story from setting up this repo.</strong> The newest TypeScript (7) crashed our lint layer, because the lint plugin only supports versions below 6.1. We pinned 6.0. In this ecosystem the compiler, the linter and the runtime are three separate projects on three release schedules; in Java they ship together. Expect version pinning to be part of the job.</p>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Say the eight ideas out loud, and for each one the thing Java or Python does differently. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Values and inference (one <code>number</code>) · structural typing · unions and narrowing · functions and inferred generics · types vanish at runtime, so validate at boundaries · <code>null</code> vs <code>undefined</code>, <code>?.</code> and <code>??</code> · modules, <code>.ts</code> extension, <code>import type</code> · promises on a single thread.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Seven questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. A request body is cast with <code>as CreateOrg</code>, but the client sent <code>{"name": 42}</code>. What happens?</p>
+      <button id="q1a" data-correct>Nothing; it fails later, somewhere else</button><button id="q1b">The cast throws a TypeError</button>
+      <button id="q1c">Node rejects the request with 400</button><button id="q1d">The compiler reports an error</button>
+      <p class="why" hidden>Types are erased; <code>as</code> checks nothing. Only runtime code (our Zod contracts) can reject it, which is why every boundary parses.</p></div>
+    <div class="quiz"><p class="q">2. <code>class Dog { name = "" }</code> and <code>function greet(x: { name: string })</code>. Does <code>greet({ name: "Rex" })</code> compile?</p>
+      <button id="q2a" data-correct>Yes: the shape matches</button><button id="q2b">No: the object is not a Dog</button>
+      <button id="q2c">Only with an <code>implements</code> clause</button><button id="q2d">Only after a cast</button>
+      <p class="why" hidden>Structural typing. Names and declarations do not matter; shapes do.</p></div>
+    <div class="quiz"><p class="q">3. Why does this repo use <code>"queued" | "running"</code> instead of an <code>enum</code>?</p>
+      <button id="q3a" data-correct>Node strips types; enums need generated code</button><button id="q3b">Enums are slower at runtime</button>
+      <button id="q3c">Enums cannot be used in a switch</button><button id="q3d">Unions allow more than two values</button>
+      <p class="why" hidden>We run source directly. Anything that is not pure type syntax cannot be erased, so Node refuses it.</p></div>
+    <div class="quiz"><p class="q">4. <code>const gap = props.gap || 16</code> and the designer set gap to 0. What is <code>gap</code>?</p>
+      <button id="q4a" data-correct>16</button><button id="q4b">0</button>
+      <button id="q4c">undefined</button><button id="q4d">A compile error</button>
+      <p class="why" hidden><code>||</code> falls through on every falsy value, including 0 and "". <code>??</code> falls through only on null and undefined.</p></div>
+    <div class="quiz"><p class="q">5. Two independent 50 ms database calls, each awaited on its own line. Total wait?</p>
+      <button id="q5a" data-correct>About 100 ms</button><button id="q5b">About 50 ms</button>
+      <button id="q5c">About 0 ms; await does not block</button><button id="q5d">It depends on the thread pool size</button>
+      <p class="why" hidden>Each <code>await</code> finishes before the next line starts. <code>Promise.all</code> overlaps the waits.</p></div>
+    <div class="quiz"><p class="q">6. A handler runs a 3-second synchronous loop. What do other connected clients experience?</p>
+      <button id="q6a" data-correct>Everything stalls for 3 seconds</button><button id="q6b">Nothing; other requests use other threads</button>
+      <button id="q6c">Only that client's socket stalls</button><button id="q6d">Node kills the handler after a timeout</button>
+      <p class="why" hidden>One thread runs all your JavaScript. While it is busy, no timer fires, no socket is read, no heartbeat is answered.</p></div>
+    <div class="quiz"><p class="q">7. You add a fifth op type to the union and forget one <code>switch</code>. When do you find out?</p>
+      <button id="q7a" data-correct>At compile time, on the <code>never</code> line</button><button id="q7b">At runtime, with an exception</button>
+      <button id="q7c">Never; the default case hides it</button><button id="q7d">Only if a test covers it</button>
+      <p class="why" hidden>The exhaustiveness check turns "I forgot a case" into a type error in every switch that matters.</p></div>
+  </section>
+
+  <footer>Next: Lesson 1, written after epic 1 is built. How the typed API, the Postgres layer and tenant isolation were written, line by line, and drills where you fix a planted bug.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
