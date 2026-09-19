@@ -16,7 +16,12 @@ const Env = z.object({
   // The address BROWSERS use to reach the sync server (not the address inside the Docker network).
   SYNC_PUBLIC_URL: z
     .string({ error: "SYNC_PUBLIC_URL is required" })
-    .refine((value) => URL.canParse(value) && ["ws:", "wss:"].includes(new URL(value).protocol), "SYNC_PUBLIC_URL must be a ws:// or wss:// URL")
+    .refine((value) => {
+      if (!URL.canParse(value)) return false;
+      const url = new URL(value);
+      // A query or fragment would swallow the "/documents/<id>" that gets appended to this address.
+      return ["ws:", "wss:"].includes(url.protocol) && url.search === "" && url.hash === "";
+    }, "SYNC_PUBLIC_URL must be a ws:// or wss:// URL without a query or fragment")
     .transform((value) => value.replace(/\/+$/, "")),
   // Unset means production: the safe side. Anything that relaxes security must be asked for by name.
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),

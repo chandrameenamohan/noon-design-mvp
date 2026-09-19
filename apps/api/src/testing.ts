@@ -5,7 +5,7 @@ import { startServer, type RunningServer } from "./server.ts";
 
 /** A real api on a free port over a throwaway database schema, for one test file. */
 /** Session settings for tests; the sync server's tests will share the secret to verify tokens. */
-export const TEST_SESSIONS = { secret: "test-only-session-secret-0123456789abcdef", syncUrl: "ws://sync.test:3001", ttlSeconds: 60 };
+export const TEST_SESSIONS = { secret: "test-only-session-secret-0123456789abcdef", syncUrl: "ws://sync.test:3001", ttlSeconds: 90 }; // not the production 60: a handler that hardcodes 60 fails
 
 type Ctx = {
   readonly db: TestDb;

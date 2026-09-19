@@ -8,12 +8,17 @@ import { z } from "zod";
 // read one. Two things are deliberately NOT standard-library-of-the-internet behaviour:
 //   - the algorithm is PINNED. The token's own "alg" header is never used to choose how to verify,
 //     which is what makes the "alg: none" and algorithm-swap attacks impossible here;
-//   - verification returns a reason instead of throwing, because a bad token is an expected input.
+//   - verification returns a reason instead of throwing, because a bad token is an expected input;
+//   - exactly ONE string verifies per token (see the canonical-encoding check below).
+// The header is compared byte for byte, so any other signer of ours must emit exactly these bytes.
+// The role is deliberately NOT a claim: a token is checked once, at connect, and the socket then
+// lives for hours, so a role in it would be stale. The sync server reads the role itself (E8.2).
 
 const HEADER = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
 const MIN_SECRET_LENGTH = 32;
 
-const Payload = z.object({ sub: z.uuid(), org: z.uuid(), doc: z.uuid(), iat: z.number().int(), exp: z.number().int() });
+// `aud` says what the token is FOR. Epic 8 will mint other tokens; none of them may open a document.
+const Payload = z.object({ sub: z.uuid(), org: z.uuid(), doc: z.uuid(), aud: z.literal("sync"), iat: z.number().int(), exp: z.number().int() });
 
 type SessionClaims = { userId: string; orgId: string; documentId: string; expiresAt: number };
 type VerifyResult =
@@ -35,33 +40,43 @@ export function signSessionToken({ userId, orgId, documentId, secret, ttlSeconds
   ttlSeconds: number;
   now?: number;
 }): string {
-  const payload = Payload.parse({ sub: userId, org: orgId, doc: documentId, iat: now, exp: now + ttlSeconds });
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 1) throw new Error("session token ttl must be a whole number of seconds, at least 1");
+  const payload = Payload.parse({ sub: userId, org: orgId, doc: documentId, aud: "sync", iat: now, exp: now + ttlSeconds });
   const body = `${HEADER}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
   return `${body}.${sign(body, secret).toString("base64url")}`;
 }
 
-/** `documentId` is the document the caller is trying to open: a token for another document is refused. */
-export function verifySessionToken({ token, secret, documentId, now = nowSeconds() }: {
+/**
+ * `documentId` is the document the caller is trying to open: a token for another document is refused.
+ * `secrets` is a list so a secret can be ROTATED without an outage: give every verifier [new, old],
+ * switch the signer to the new one, wait out the 60-second lifetime, then drop the old one.
+ */
+export function verifySessionToken({ token, secrets, documentId, now = nowSeconds() }: {
   token: string;
-  secret: string;
+  secrets: readonly string[];
   documentId: string;
   now?: number;
 }): VerifyResult {
-  const expected = (body: string): Buffer => sign(body, secret); // also validates the secret, before anything else
+  if (secrets.length === 0) throw new Error("at least one session token secret is required");
+  // Computing the candidates first also validates every secret, even when the token is garbage:
+  // a short secret is a configuration error and must surface, not hide behind "malformed".
   const parts = token.split(".");
   const [header, payload, signature] = parts;
+  const body = `${header ?? ""}.${payload ?? ""}`;
+  const candidates = secrets.map((secret) => sign(body, secret));
   if (parts.length !== 3 || header === undefined || payload === undefined || signature === undefined) {
-    expected(""); // a short secret is a configuration error and must surface even for a garbage token
     return { ok: false, reason: "malformed" };
   }
 
   // Signature first, over the exact bytes received, in constant time: nothing in the token is
   // trusted (or even parsed) until this passes. The header must be OUR header, byte for byte.
   const given = Buffer.from(signature, "base64url");
-  const wanted = expected(`${header}.${payload}`);
-  if (header !== HEADER || given.length !== wanted.length || !timingSafeEqual(given, wanted)) {
-    return { ok: false, reason: "bad_signature" };
-  }
+  // Node decodes base64url leniently (padding, "+" and "/", stray characters, the unused bits of
+  // the last character), so several strings decode to one signature. Only the canonical one may
+  // pass, or anything later keyed on the token string (a replay cache, a revocation list) breaks.
+  const canonical = given.toString("base64url") === signature;
+  const matches = candidates.some((wanted) => given.length === wanted.length && timingSafeEqual(given, wanted));
+  if (header !== HEADER || !canonical || !matches) return { ok: false, reason: "bad_signature" };
 
   let json: unknown;
   try {

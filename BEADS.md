@@ -119,7 +119,8 @@ N's handbook bead (never more than one chapter behind).
 | E9.2b | After a Redis wipe, queues are rebuilt from the Postgres `jobs` rows and pending jobs complete (F28, §4) | chaos:redis-wipe-rebuild | — | E9.2a | apps/worker, packages/db, scripts/chaos | |
 | E9.4 | Run progress (tool calls, status) streams to the browser and survives a reload mid-run (F30) | e2e:progress-survives-reload | persisted full transcript, dedicated log store, replay scrubber (§6) | E9.2a | apps/api, apps/web, apps/worker | |
 | E9.5 | Per-org AI rate limit returns `429` with a retry time; an org usage view shows tokens and estimated cost per run, user and day (F31) | integration:rate-limit-429-retry-after · e2e:usage-view | billing | E9.4 | apps/api, apps/web, packages/db | R |
-| E9.H | Chapter 9 + drills | check:drills-red · check:chapter-recorded | — | E9.2b, E9.5 | docs/handbook, drills/ | |
+| E9.6 | Every authenticated HTTP route has a per-user rate limit and unauthenticated routes a per-address one; over the limit is `429` with a retry time; minting session tokens (`POST /documents/:id/session`) has its own tighter limit, so a revoked collaborator cannot hammer it (found by the E1.5 review: no bead owned generic HTTP limits; F31 covers AI runs only) | integration:http-rate-limit-429-retry-after · integration:session-mint-limit | a WAF, IP reputation | E9.5 | apps/api | R |
+| E9.H | Chapter 9 + drills | check:drills-red · check:chapter-recorded | — | E9.2b, E9.6 | docs/handbook, drills/ | |
 
 ## Z — Final verification
 | key | outcome | checks | out of scope | deps | touches | R |
@@ -134,4 +135,5 @@ N's handbook bead (never more than one chapter behind).
 2. §4 "`api` dies" row: "creating POSTs are idempotent" narrows to "job-creating POSTs are idempotent (F27); other requests are safe to retry".
 3. Gate layers: `integration` and `sim` join `make check`; `make chaos`, `make live`, `make clean-clone`, `make drills` exist outside it.
 
-Totals: 60 beads (1 primer, 9 handbook, 4 final).
+Totals: 61 beads (1 primer, 9 handbook, 4 final).
+4. E9.6 added after the E1.5 review: generic per-user HTTP rate limiting had no owner.

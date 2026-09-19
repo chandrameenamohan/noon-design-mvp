@@ -26,7 +26,7 @@ test("reads the port: decimal digits only, empty means unset, default 3000", () 
 test("the session secret and the public sync address are required, with no defaults", () => {
   expect(() => loadConfig({ ...rest, DATABASE_URL: url, SESSION_TOKEN_SECRET: undefined })).toThrow(/SESSION_TOKEN_SECRET/);
   expect(() => loadConfig({ ...rest, DATABASE_URL: url, SESSION_TOKEN_SECRET: "too-short" })).toThrow(/SESSION_TOKEN_SECRET/);
-  for (const bad of [undefined, "", "http://localhost:3001", "localhost:3001"]) {
+  for (const bad of [undefined, "", "http://localhost:3001", "localhost:3001", "wss://sync.example.com/?x=1", "wss://sync.example.com#frag"]) {
     expect(() => loadConfig({ ...rest, DATABASE_URL: url, SYNC_PUBLIC_URL: bad }), String(bad)).toThrow(/SYNC_PUBLIC_URL/);
   }
   expect(loadConfig({ ...rest, DATABASE_URL: url, SYNC_PUBLIC_URL: "wss://sync.example.com/" }).sessions).toEqual({

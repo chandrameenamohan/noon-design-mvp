@@ -22,10 +22,11 @@ test("a member gets a sync address and a short-lived token that names the docume
   const before = Math.floor(Date.now() / 1000);
   const res = await as("ann@example.com", "POST", `/documents/${doc.id}/session`);
   expect(res.status).toBe(200);
+  expect(res.headers.get("cache-control")).toBe("no-store"); // a credential must never be cached
   const session = SessionResponse.parse(await res.json());
 
   expect(session.wsUrl).toBe(`${TEST_SESSIONS.syncUrl}/documents/${doc.id}`);
-  const verified = verifySessionToken({ token: session.token, secret: TEST_SESSIONS.secret, documentId: doc.id });
+  const verified = verifySessionToken({ token: session.token, secrets: [TEST_SESSIONS.secret], documentId: doc.id });
   expect(verified).toMatchObject({ ok: true, claims: { documentId: doc.id, orgId: doc.orgId } });
   if (!verified.ok) throw new Error("unreachable");
   expect(verified.claims.expiresAt - before).toBeGreaterThanOrEqual(TEST_SESSIONS.ttlSeconds);
