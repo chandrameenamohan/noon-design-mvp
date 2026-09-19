@@ -71,7 +71,9 @@ test.each(Array.from({ length: 100 }, (_, seed) => seed + 1000))("seed %i: valid
     if (!verdict.ok && ["gone", "cycle", "duplicate_node", "root_is_fixed"].includes(verdict.reason)) {
       expect(next, `${verdict.reason}: ${JSON.stringify(op)}`).toBe(doc);
     }
-    if (verdict.ok && op.type !== "set_prop") expect(next, `accepted but not applied: ${JSON.stringify(op)}`).not.toBe(doc);
+    // An accepted add or remove always changes the tree. (A move to where the node already is, and a
+    // set_prop to the value it already has, are accepted AND change nothing: both are fine.)
+    if (verdict.ok && (op.type === "add_node" || op.type === "remove_node")) expect(next, `accepted but not applied: ${JSON.stringify(op)}`).not.toBe(doc);
     doc = next;
   }
 });

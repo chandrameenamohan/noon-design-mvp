@@ -15,6 +15,10 @@ export default defineConfig({
   test: {
     include: ["packages/**/*.int.test.ts", "apps/**/*.int.test.ts"],
     passWithNoTests: false,
+    // Real Postgres, real HTTP, real child processes: the 5 s default is a unit-test budget. Twice a test
+    // that takes 0.4 s alone timed out inside a full `make check`; cause unproven (machine load suspected).
+    testTimeout: 20_000,
+    hookTimeout: 30_000,
     fileParallelism: false, // ponytail: one file at a time keeps shared stores simple; parallelize per-schema if this gets slow
   },
 });

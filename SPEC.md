@@ -36,6 +36,16 @@ Boxes". This project is also a course: see §7.
    clamps to the valid range. Moves that would create a cycle are rejected.
    An add or move whose target parent was concurrently removed is dropped the
    same way: silently for the sender, never seen by other peers.
+   "Descendant" is judged at SEQUENCING time: if B moves a child out of P and A
+   removes P, the child survives only if the move was sequenced first. Both
+   orders converge; the UI may tell B when a rescued node was lost.
+   `index` on add and move is the node's FINAL position among the parent's
+   children. Node ids are minted by peers as random ids and never re-used:
+   an id that was removed must not be added again, or an edit meant for the dead
+   node would land on the new one.
+   Ids and prop names may not be names on `Object.prototype` (`constructor`,
+   `__proto__`...): they become object keys. Prop text may not contain control
+   characters other than tab and newline; `-0` is refused.
 5. **Idempotency by `opId`.** Resending an op never applies it twice; the room
    answers with the original `seq`.
 6. **Canvas model.** A document is one page: a tree of instances of the sample

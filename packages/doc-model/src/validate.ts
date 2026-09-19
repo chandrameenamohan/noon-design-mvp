@@ -1,20 +1,5 @@
-import type { Doc, Manifest, Op, PropValue } from "@noon/contracts";
-
-/**
- * Why an op is refused. One reason is special: "gone" means the node (or the parent it targets) no
- * longer exists, which is what a concurrent remove looks like. The user did nothing wrong, so a
- * client drops such an op quietly; every other reason is shown to the sender (SPEC F5, F6).
- */
-type RejectReason =
-  | "gone"
-  | "cycle"
-  | "duplicate_node"
-  | "root_is_fixed"
-  | "unknown_component"
-  | "parent_takes_no_children"
-  | "unknown_prop"
-  | "wrong_prop_type"
-  | "missing_required_prop";
+import type { Doc, Manifest, Op, PropValue, RejectReason } from "@noon/contracts";
+import { nodeOf } from "./index.ts";
 
 type Verdict = { ok: true } | { ok: false; reason: RejectReason };
 
@@ -32,40 +17,43 @@ const ROOT_COMPONENT = "Page"; // the root is implicit: never placed, moved, rem
 export function validate(doc: Doc, op: Op, manifest: Manifest): Verdict {
   const component = (name: string) => manifest.components.find((c) => c.name === name);
   const acceptsChildren = (nodeId: string): boolean => {
-    const node = doc.nodes[nodeId];
+    const node = nodeOf(doc, nodeId);
     return node !== undefined && (node.component === ROOT_COMPONENT || component(node.component)?.acceptsChildren === true);
   };
 
   switch (op.type) {
     case "add_node": {
-      if (doc.nodes[op.nodeId]) return no("duplicate_node");
-      if (!doc.nodes[op.parentId]) return no("gone");
+      if (nodeOf(doc, op.nodeId)) return no("duplicate_node");
+      const parent = nodeOf(doc, op.parentId);
+      if (!parent) return no("gone");
       const spec = component(op.component);
       if (!spec) return no("unknown_component"); // also covers the reserved "Page"
+      // A parent whose component has since left the design system is not "takes no children".
+      if (parent.component !== ROOT_COMPONENT && !component(parent.component)) return no("unknown_component");
       if (!acceptsChildren(op.parentId)) return no("parent_takes_no_children");
       for (const [key, value] of Object.entries(op.props)) {
         const problem = checkProp(spec, key, value);
         if (problem) return no(problem);
       }
-      const missing = spec.props.some((p) => p.required && !(p.name in op.props));
+      const missing = spec.props.some((p) => p.required && !Object.hasOwn(op.props, p.name));
       return missing ? no("missing_required_prop") : OK;
     }
     case "move_node": {
-      const node = doc.nodes[op.nodeId];
-      if (!node || !doc.nodes[op.newParentId]) return no("gone");
+      const node = nodeOf(doc, op.nodeId);
+      if (!node || !nodeOf(doc, op.newParentId)) return no("gone");
       if (node.parentId === null) return no("root_is_fixed");
-      for (let at: string | null | undefined = op.newParentId; at != null; at = doc.nodes[at]?.parentId) {
+      for (let at: string | null | undefined = op.newParentId; at != null; at = nodeOf(doc, at)?.parentId) {
         if (at === op.nodeId) return no("cycle");
       }
       return acceptsChildren(op.newParentId) ? OK : no("parent_takes_no_children");
     }
     case "remove_node": {
-      const node = doc.nodes[op.nodeId];
+      const node = nodeOf(doc, op.nodeId);
       if (!node) return no("gone");
       return node.parentId === null ? no("root_is_fixed") : OK;
     }
     case "set_prop": {
-      const node = doc.nodes[op.nodeId];
+      const node = nodeOf(doc, op.nodeId);
       if (!node) return no("gone");
       if (node.parentId === null) return no("root_is_fixed");
       const spec = component(node.component);

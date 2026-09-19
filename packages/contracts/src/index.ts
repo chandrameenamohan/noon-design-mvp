@@ -89,33 +89,90 @@ export const Manifest = z.object({ version: z.literal(1), components: z.array(Ma
 export type Manifest = z.infer<typeof Manifest>;
 
 // --- The document and its four ops (SPEC §2.3, §2.6) ----------------------------------
-const NodeId = z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/, "letters, digits, _ and - only");
-/** What a prop can hold. Matches what the manifest can describe: string, number, boolean (enums are strings). */
-export const PropValue = z.union([z.string().max(10_000), z.number(), z.boolean()]); // z.number() already refuses NaN and Infinity
+// Ids and prop names become KEYS of plain objects. A key like "constructor" or "__proto__" would
+// resolve through Object.prototype and look like a node that exists, so such names are refused here.
+const notOnObjectPrototype = (key: string): boolean => !(key in Object.prototype);
+const NodeId = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, "letters, digits, _ and - only")
+  .refine(notOnObjectPrototype, "reserved name");
+const PropKey = z.string().min(1).max(100).refine(notOnObjectPrototype, "reserved name");
+
+/**
+ * What a prop can hold. Matches what the manifest can describe: string, number, boolean (enums are
+ * strings). Text may contain tabs and newlines but no other control characters: ops are stored as
+ * jsonb, and Postgres cannot store NUL. Negative zero is refused because JSON writes it as 0, so
+ * the sender (who keeps -0) and every other peer (who receives 0) would hold different documents.
+ */
+export const PropValue = z.union([
+  z.string().max(10_000).regex(/^[^\p{Cc}]*$|^[\P{Cc}\t\n\r]*$/u, "must not contain control characters"),
+  z.number().refine((n) => !Object.is(n, -0), "negative zero is not allowed"), // z.number() already refuses NaN and Infinity
+  z.boolean(),
+]);
 export type PropValue = z.infer<typeof PropValue>;
+
+const MAX_PROPS = 50;
+/**
+ * A bag of props. NOT z.record(): the Agent SDK cannot convert z.record(k, v) and silently drops
+ * every tool of the MCP server that uses it (SPEC §2a); this shape parses the same and converts.
+ */
+const Props = z
+  // Zod quietly DROPS an own "__proto__" key while parsing. The sender would keep the prop and every
+  // other peer would not, so the raw input is checked first and such a bag is refused outright.
+  .unknown()
+  .refine((raw) => !(typeof raw === "object" && raw !== null && Object.hasOwn(raw, "__proto__")), "reserved prop name")
+  .pipe(z.object({}).catchall(PropValue))
+  .refine((props) => Object.keys(props).length <= MAX_PROPS, `at most ${String(MAX_PROPS)} props`)
+  .refine((props) => Object.keys(props).every((key) => PropKey.safeParse(key).success), "invalid prop name");
 
 export const DocNode = z.object({
   id: NodeId,
   component: z.string().min(1).max(100),
-  props: z.record(z.string(), PropValue),
+  props: Props,
   parentId: NodeId.nullable(), // null only for the root
   children: z.array(NodeId),
 });
 export type DocNode = z.infer<typeof DocNode>;
 
-/** A page: a tree of component instances, stored flat by id so any node is one lookup away. */
+/**
+ * A page: a tree of component instances, stored flat by id so any node is one lookup away.
+ * This schema checks each node's SHAPE only. Whether the nodes form a well-formed tree is
+ * doc-model's checkDoc(), which whoever loads a document from outside must call (E2.3a, E6.2).
+ */
 export const Doc = z.object({ rootId: NodeId, nodes: z.record(NodeId, DocNode) });
 export type Doc = z.infer<typeof Doc>;
 
 /** The whole vocabulary of change. A discriminated union: `type` tells the compiler which fields exist. */
 export const Op = z.discriminatedUnion("type", [
-  z.strictObject({ type: z.literal("add_node"), nodeId: NodeId, parentId: NodeId, index: z.number().int(), component: z.string().min(1).max(100), props: z.record(z.string(), PropValue) }),
+  z.strictObject({ type: z.literal("add_node"), nodeId: NodeId, parentId: NodeId, index: z.number().int(), component: z.string().min(1).max(100), props: Props }),
+  // `index` is the node's FINAL position among the new parent's children (SPEC §2.4).
   z.strictObject({ type: z.literal("move_node"), nodeId: NodeId, newParentId: NodeId, index: z.number().int() }),
   z.strictObject({ type: z.literal("remove_node"), nodeId: NodeId }),
   // value null = remove the prop, so the component's own default applies again.
-  z.strictObject({ type: z.literal("set_prop"), nodeId: NodeId, key: z.string().min(1).max(100), value: PropValue.nullable() }),
+  z.strictObject({ type: z.literal("set_prop"), nodeId: NodeId, key: PropKey, value: PropValue.nullable() }),
 ]);
 export type Op = z.infer<typeof Op>;
+
+/**
+ * Why the room refuses an op. It is wire vocabulary, not an implementation detail: the CLIENT
+ * decides what to show from it. "gone" is the one silent reason: the node (or the parent an add or
+ * move targets) no longer exists, which is what a concurrent remove looks like. The user did nothing
+ * wrong, so the op is dropped quietly; every other reason is shown to the sender (F5, F6).
+ */
+export const RejectReason = z.enum([
+  "gone",
+  "cycle",
+  "duplicate_node",
+  "root_is_fixed",
+  "unknown_component",
+  "parent_takes_no_children",
+  "unknown_prop",
+  "wrong_prop_type",
+  "missing_required_prop",
+]);
+export type RejectReason = z.infer<typeof RejectReason>;
 
 /** Who made a change. STAMPED BY THE ROOM from the verified session, never taken from the client. */
 export const Actor = z.object({ kind: z.enum(["user", "agent", "git"]), id: z.string().min(1), runId: z.string().min(1).optional() });
@@ -136,6 +193,6 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export const ServerMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0) }),
   SequencedOp.extend({ type: z.literal("op") }),
-  z.object({ type: z.literal("rejected"), opId: z.uuid(), reason: z.string().min(1) }),
+  z.object({ type: z.literal("rejected"), opId: z.uuid(), reason: RejectReason }),
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
