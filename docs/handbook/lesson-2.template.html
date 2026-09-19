@@ -1,0 +1,104 @@
+<title>TypeScript Lesson Two</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 and 2 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 2 · Epic 2</p>
+  <h1>One room, many peers</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, how several people edit one document at once and all end up with the same one, and you can point at the line of code for every claim.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 3, 5 and 9 are the ones an architect interview will dig into.</p>
+    <p class="mono">./init.sh &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + api + sync<br>pnpm --filter @noon/web dev &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the canvas, http://localhost:5173<br>make sim &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the reconcile simulator, every committed seed<br>node apps/sync/src/sim-cli.ts --seed 7 --trace | head -40</p>
+    <p>Try it: open <span class="mono">http://localhost:5173</span> in two windows, press <em>New document</em> in one, paste its address into the other, and edit in both.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-2/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-2/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend the protocol, end to end.</strong> Presence should also say whether a peer is <em>typing</em> in a prop field: add <code>typing: boolean</code>. You will touch the contract (both directions: the client message is strict, the server message is loose), the room (relay it, and remember it for newcomers) and, if you like, the client and the canvas. The drill's test checks the contract and the room. <span class="mono">make check</span> must stay green: the gate applies to you too.</p>
+      <p>Predict first: which existing test will fail the moment you add a required field to <code>Presence</code>, and what does that tell you about required versus optional fields on a wire that old clients share? (Section 1's case study.)</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-2/d2-replica/replica.ts</span> is a 60-line replica with one bug from this chapter planted in it. Its test plays a history in which two people set the same property around a reconnect, and expects the replica to end with the server's value. Form a theory from the failing assertion before you read the code.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. Why is the server the only thing that orders ops, instead of a CRDT that lets every peer merge on its own?</summary>
+        <p>A design tree has invariants a merge function cannot see locally: no cycles, a parent must accept children, props must match the component. A single sequencer makes every peer apply the same ops in the same order through the same validator, so the invariants hold by construction, and "who won" is one integer comparison. The price is that editing needs the server: offline edits are optimistic guesses that may be refused. For a team tool with a server anyway (auth, AI, git), that is the cheap side of the trade. A CRDT earns its complexity when peers must merge with no server at all.</p></details>
+      <details class="recall"><summary>2. The replica is pure (no socket, no timer) and the transport is separate. What did that buy, concretely?</summary>
+        <p>Seventy-odd rules tested in under a second with no network; a property test over random histories; a simulator that drives the real code deterministically; and one client for the browser, the AI worker and the git peer, because only the thin shell knows what a WebSocket is. The same split on the server (room versus server) bought the same things.</p></details>
+      <details class="recall"><summary>3. Presence is relayed by the same room. Why does it not go through the op pipeline?</summary>
+        <p>It has none of an op's needs and all of its costs. Nobody needs cursors in order, durable, deduplicated or replayable; they need the latest one, now. Through the pipeline every pointer move would take a sequence number, a journal row and a slot in the dedupe memory, and a fast pointer would starve real edits of their budget. So: no queue, no seq, no persist, latest wins, and silence removes a peer.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the room's checks in order, from a frame arriving to a broadcast, and for two of them say which bug put them where they are. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Budget, on arrival (floods piled up behind a slow journal) → seen this (sender, opId)? answer as before (honest resends were refused as duplicates) → older than anything remembered? <code>stale</code> (a resend was applied twice) → the document's rules, precise reason → the room's limits (a move escaped the depth cap) → persist, and only then take the seq (no gaps, nobody hears of an op that could be lost) → apply → remember → broadcast, serialised once; the sender's copy is its acknowledgement.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. In the <code>default</code> branch of a switch over all four op types, what is the type of <code>op</code>, and why assign it to a <code>never</code> variable?</p>
+      <button id="q1a" data-correct><code>never</code>; a fifth op type then stops the build</button><button id="q1b"><code>Op</code>; it documents the fallback</button><button id="q1c"><code>unknown</code>; it forces a cast</button><button id="q1d"><code>any</code>; it silences the linter</button>
+      <p class="why" hidden>After every member is handled nothing is left: the empty type. The assignment only compiles while that stays true.</p></div>
+    <div class="quiz"><p class="q">2. The room has no lock. Why can two ops still interleave wrongly without the promise queue?</p>
+      <button id="q2a" data-correct><code>await persist()</code> is a point where other code runs</button><button id="q2b">Node runs handlers on a thread pool</button><button id="q2c">WebSocket frames are parsed in parallel</button><button id="q2d">Garbage collection can pause a handler</button>
+      <p class="why" hidden>Single-threaded means interleaving only at an <code>await</code>. The queue makes each op wait for the one before it.</p></div>
+    <div class="quiz"><p class="q">3. Why does the room check "have I seen this opId?" BEFORE validating the op?</p>
+      <button id="q3a" data-correct>An honest resend of <code>add_node</code> would be refused as <code>duplicate_node</code></button><button id="q3b">Validation is slower than a map lookup</button><button id="q3c">To save a sequence number</button><button id="q3d">Because the contract requires it</button>
+      <p class="why" hidden>A client that lost its acknowledgement sends again and must get the ORIGINAL answer.</p></div>
+    <div class="quiz"><p class="q">4. An op comes back <code>stale</code> after a server restart. It was already on the wire of an earlier connection. What does the replica do, and why?</p>
+      <button id="q4a" data-correct>Gives it up and tells the user: it may have been applied and then overwritten</button><button id="q4b">Resends it with a fresh <code>baseSeq</code></button><button id="q4c">Resends it only if it would still change the document</button><button id="q4d">Reloads the page</button>
+      <p class="why" hidden>"Would change the document" is not "was not applied". Resending could put an old write over a newer one, or re-add a deleted node.</p></div>
+    <div class="quiz"><p class="q">5. <code>rebuild()</code> copies only the node MAP and shares the node objects with the confirmed document. What makes that safe?</p>
+      <button id="q5a" data-correct>Appliers never edit a node; they put a new node object in the map</button><button id="q5b"><code>Object.freeze</code> is called on every node in production</button><button id="q5c">JavaScript objects are copied on assignment</button><button id="q5d">The confirmed document is never read again</button>
+      <p class="why" hidden>Immutability by discipline, enforced by a property test that freezes the nodes and runs sixty random histories.</p></div>
+    <div class="quiz"><p class="q">6. Where is the rate-limit token spent, and what went wrong when it was spent elsewhere?</p>
+      <button id="q6a" data-correct>On arrival, in <code>submit()</code>; inside the queue a slow journal let the bucket refill, so floods were never refused</button><button id="q6b">In <code>handle()</code>, after validation, to avoid charging for bad ops</button><button id="q6c">In the WebSocket server, per frame, to save the room's time</button><button id="q6d">In the client, to avoid a round trip</button>
+      <p class="why" hidden>Limit where work ARRIVES, not where it is processed.</p></div>
+    <div class="quiz"><p class="q">7. Why is <code>peer.doc</code> useless as a <code>useSyncExternalStore</code> snapshot?</p>
+      <button id="q7a" data-correct>It is edited in place, so its identity never changes and React sees no difference</button><button id="q7b">It is too large to compare</button><button id="q7c">React cannot hold objects in a snapshot</button><button id="q7d">It changes on every render and causes a loop</button>
+      <p class="why" hidden>React compares snapshots with <code>Object.is</code>. The snapshot is built from <code>revision</code>, <code>pendingCount</code>, <code>status</code> and <code>presenceRevision</code>.</p></div>
+    <div class="quiz"><p class="q">8. The simulator's replay check passed even when last-writer-wins was broken inside doc-model. Why?</p>
+      <button id="q8a" data-correct>The check used doc-model's own applier, so the wrong rule agreed with itself</button><button id="q8b">The seeds were too few</button><button id="q8c">Set-prop ops were never generated</button><button id="q8d">The room caught it first</button>
+      <p class="why" hidden>An oracle must not share code with what it judges. The fix computes "the latest write per prop" from first principles.</p></div>
+  </section>
+
+  <footer>Next: Lesson 3, after epic 3. An AI agent joins the document as one more peer: the Claude Agent SDK, tools that emit ops, streaming, cancellation, and what "the AI did this" must mean in an audit log.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>

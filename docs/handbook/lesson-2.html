@@ -1,0 +1,442 @@
+<title>TypeScript Lesson Two</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.prose { max-width: 36rem; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h2 code { font-size: 0.92em; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+pre.out { background: var(--surface); color: var(--slate); border-style: dashed; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 9rem; }
+.break { border: 1px solid var(--bad); background: var(--bad-wash); padding: 4px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.break .label { color: var(--bad); } .break pre { background: var(--surface); }
+.break p { font-size: 0.95rem; margin: 10px 0 0; }
+.recall { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; max-width: 36rem; }
+summary { cursor: pointer; font: 500 15px var(--sans); color: var(--accent); }
+.recall p { margin: 12px 0 0; font-size: 0.95rem; }
+#score { font: 500 13px var(--mono); color: var(--slate); min-height: 1.4em; margin: 0 0 4px; }
+.quiz { border-top: 1px solid var(--rule); padding: 22px 0 8px; display: grid; gap: 8px; max-width: 36rem; }
+.quiz .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.quiz button { text-align: left; padding: 11px 14px; font: 400 16px/1.35 var(--serif); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; cursor: pointer; }
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; color: var(--slate); }
+.quiz button.right { border-color: var(--good); color: var(--good); font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.quiz .why { font-size: 0.92rem; color: var(--slate); margin: 4px 0 0; }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media print {
+  body { font-size: 11.5pt; padding: 0; background: #fff; }
+  main { max-width: none; } p, ul, ol, .lede, .prose, .recall, .quiz, footer { max-width: none; }
+  /* Paper cannot scroll sideways: wrap long code lines instead of clipping them. */
+  .scroll { overflow: visible; } pre { white-space: pre-wrap; overflow-wrap: anywhere; width: auto; min-width: 0; font-size: 8.6pt; }
+  h2 { break-after: avoid; margin-top: 28pt; } .label { break-after: avoid; }
+  table, .break, .aside, .quiz, .note { break-inside: avoid; }
+  .toc a, a { color: inherit; text-decoration: none; } #score { display: none; }
+}
+@media (max-width: 480px) { body { font-size: 17.5px; padding-block: 36px 72px; } pre { font-size: 12.5px; } }
+</style>
+<style>
+/* Lesson 1 and 2 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 2 · Epic 2</p>
+  <h1>One room, many peers</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, how several people edit one document at once and all end up with the same one, and you can point at the line of code for every claim.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">0fa8009</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 3, 5 and 9 are the ones an architect interview will dig into.</p>
+    <p class="mono">./init.sh &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + api + sync<br>pnpm --filter @noon/web dev &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the canvas, http://localhost:5173<br>make sim &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the reconcile simulator, every committed seed<br>node apps/sync/src/sim-cli.ts --seed 7 --trace | head -40</p>
+    <p>Try it: open <span class="mono">http://localhost:5173</span> in two windows, press <em>New document</em> in one, paste its address into the other, and edit in both.</p>
+  </div>
+
+  <ol class="toc"><li><a href="#map">The map: one edit, from a click to everyone's screen</a></li><li><a href="#unions">1 · A closed set of messages: the discriminated union</a></li><li><a href="#model">2 · One planner, two appliers</a></li><li><a href="#loop">3 · The event loop is your lock, until you write <code>await</code></a></li><li><a href="#pipeline">4 · The room: eight checks, in an order that matters</a></li><li><a href="#idempotency">5 · Exactly once, over a connection that lies</a></li><li><a href="#shell">6 · A pure core in a thin shell, and dependencies as parameters</a></li><li><a href="#ws">7 · WebSockets: what HTTP did for you, and now you do</a></li><li><a href="#optimistic">8 · Optimistic editing: two documents and one invariant</a></li><li><a href="#rate">9 · Rate limiting: where you charge matters more than how</a></li><li><a href="#presence">10 · Presence: the message that is not an op</a></li><li><a href="#react">11 · React meets a store that is not React's</a></li><li><a href="#manifest">12 · Types as data: reading TypeScript with TypeScript</a></li><li><a href="#testing">13 · How you test concurrency without sleeping</a></li><li><a href="#limits">14 · What the type system could not see, epic 2 edition</a></li><li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  <section id="map"><h2>The map: one edit, from a click to everyone's screen</h2><p>Epic 2 is the heart of the product: several people (and later an AI and a git peer) edit one document at once, and everyone ends up with the same document. The design is the one Figma uses: <strong>the server decides the order</strong>. There is no CRDT and no merge function; there is one room per document, and the room hands out sequence numbers.</p><div class="scroll"><table><tr><th>Step</th><th>Where</th><th>What happens</th></tr><tr><td>1</td><td><span class='mono'>apps/web/src/Canvas.tsx</span></td><td>a click builds an <strong>op</strong> (one of four) and calls <code>peer.submit(op)</code></td></tr><tr><td>2</td><td><span class='mono'>packages/peer-client/src/replica.ts</span></td><td><code>local()</code>: checked against what the user SEES, applied at once (optimistic), queued as pending</td></tr><tr><td>3</td><td><span class='mono'>packages/peer-client/src/peer.ts</span></td><td><code>flush()</code>: written to the WebSocket, at most 50 unanswered at a time</td></tr><tr><td>4</td><td><span class='mono'>apps/sync/src/server.ts</span></td><td>frame size cap, JSON, contract check; presence goes one way, ops the other</td></tr><tr><td>5</td><td><span class='mono'>apps/sync/src/room.ts</span></td><td>budget, dedupe, stale?, validate, limits, persist, apply, take the seq, remember, broadcast</td></tr><tr><td>6</td><td><span class='mono'>packages/peer-client/src/replica.ts</span></td><td><code>receive()</code>: the sender's copy is its acknowledgement; everyone else's is a remote edit</td></tr><tr><td>7</td><td><span class='mono'>apps/web/src/usePeer.ts</span></td><td><code>revision</code> moved, so React renders</td></tr></table></div><p>Two ideas carry the whole epic. <strong>First: a pure core in a thin shell.</strong> <span class='mono'>room.ts</span> has no socket in it and <span class='mono'>replica.ts</span> has no socket in it; <span class='mono'>server.ts</span> and <span class='mono'>peer.ts</span> are only wires. That is why the rules can be tested in microseconds, and why a simulator can drive the real code. <strong>Second: every message is a value of a closed set of shapes</strong>, checked at both ends by the same schema.</p><div class="scroll"><table><tr><th>This repo</th><th>Java world</th><th>Python world</th></tr><tr><td>one room per document, in memory, single-threaded</td><td>an actor (Akka), or a <code>synchronized</code> aggregate</td><td>an asyncio task owning its state</td></tr><tr><td>ops + sequence numbers; last writer wins per property</td><td>event sourcing with a single writer</td><td>the same</td></tr><tr><td>optimistic client + rollback</td><td>rare on the JVM server side; common in Android/iOS clients</td><td>rare</td></tr></table></div></section><section id="unions"><h2>1 · A closed set of messages: the discriminated union</h2><p>An op is <em>one of four things</em>. In Java you would write a <code>sealed interface Op permits AddNode, MoveNode, ...</code> with four records. TypeScript has no classes here at all: an op is a plain object, and the field <code>type</code> tells the compiler which of the four shapes it is.</p><p class="label">From <span class="mono">packages/contracts/src/index.ts</span></p><div class="scroll"><pre><code>export const Op = z.discriminatedUnion(&quot;type&quot;, [
+  z.strictObject({ type: z.literal(&quot;add_node&quot;), nodeId: NodeId, parentId: NodeId, index: z.number().int(), component: z.string().min(1).max(100), props: Props }),
+  // `index` is the node&#x27;s FINAL position among the new parent&#x27;s children (SPEC §2.4).
+  z.strictObject({ type: z.literal(&quot;move_node&quot;), nodeId: NodeId, newParentId: NodeId, index: z.number().int() }),
+  z.strictObject({ type: z.literal(&quot;remove_node&quot;), nodeId: NodeId }),
+  // value null = remove the prop, so the component&#x27;s own default applies again.
+  z.strictObject({ type: z.literal(&quot;set_prop&quot;), nodeId: NodeId, key: PropKey, value: PropValue.nullable() }),
+]);
+export type Op = z.infer&lt;typeof Op&gt;;</code></pre></div><p>Now watch what the compiler does with it. Inside <code>case "move_node":</code> the variable <code>op</code> <em>has</em> a <code>newParentId</code>; inside <code>case "set_prop":</code> it does not, and using it is a compile error. This is called <strong>narrowing</strong>: a runtime check on the discriminant changes the static type in that branch.</p><p class="label">From <span class="mono">packages/doc-model/src/index.ts</span></p><div class="scroll"><pre><code>    case &quot;remove_node&quot;: {
+      const node = nodeOf(doc, op.nodeId);
+      if (!node || node.parentId === null) return undefined; // unknown node, or the root
+      const parent = nodeOf(doc, node.parentId);
+      if (!parent) return undefined;
+      return { set: [{ ...parent, children: parent.children.filter((id) =&gt; id !== node.id) }], remove: subtree(doc, node.id) };
+    }
+    case &quot;set_prop&quot;: {
+      const node = nodeOf(doc, op.nodeId);
+      if (!node || node.parentId === null) return undefined; // unknown node, or the root (which has no props)
+      const current = Object.hasOwn(node.props, op.key) ? node.props[op.key] : undefined;
+      if (op.value === null ? current === undefined : Object.is(current, op.value)) return undefined;
+      const props = Object.fromEntries(Object.entries(node.props).filter(([key]) =&gt; key !== op.key));
+      if (op.value !== null) props[op.key] = op.value;
+      return { set: [{ ...node, props }], remove: [] };
+    }</code></pre></div><p class="label">From <span class="mono">packages/doc-model/src/index.ts</span></p><div class="scroll"><pre><code>    default: {
+      const unreachable: never = op; // a fifth op type stops compiling here (Lesson 0, section 3)
+      return unreachable;
+    }
+  }
+}</code></pre></div><p><strong>The <code>never</code> trick.</strong> After four <code>case</code>s, nothing is left, so in <code>default</code> the type of <code>op</code> is <code>never</code> (the empty type). Assigning it to a <code>never</code> variable compiles <em>only while the switch is complete</em>. Add a fifth op to the contract and this line stops the build, in every switch that uses the trick. Java 21 gives you the same through pattern-matching <code>switch</code> over a sealed type; Python's <code>match</code> does not check exhaustiveness at all (mypy can, with <code>assert_never</code>).</p><p>Three tools for working with unions that you will see all over this epic:</p><ul><li><code>Extract&lt;ServerMessage, { type: "op" }&gt;</code>: "the member of the union whose <code>type</code> is <code>"op"</code>". A type-level filter. <code>Exclude</code> is its opposite (<span class='mono'>replica.ts</span> uses it to say "every server message except the presence ones").</li><li><code>{ ... } satisfies ClientMessage</code>: checks a literal against a type <em>without widening it</em>. <span class='mono'>peer.ts</span> uses it on the frame it is about to send: a typo in a field name is a compile error, right where the frame is built.</li><li><code>z.strictObject</code> versus <code>z.object</code>: a <em>client</em> message is strict (an unknown key is an error: a client must not be able to slip in a <code>name</code>); a <em>server</em> message is loose (unknown keys are dropped: an old tab must survive a newer server).</li></ul><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>union of object types + a literal discriminant</td><td><code>sealed interface</code> + records</td><td><code>Union[...]</code> + <code>Literal</code> discriminator (pydantic)</td></tr><tr><td>narrowing by <code>switch (op.type)</code></td><td>pattern-matching <code>switch</code></td><td><code>match</code> / <code>isinstance</code></td></tr><tr><td>exhaustiveness: <code>never</code></td><td>compiler error on a missing case (sealed)</td><td><code>assert_never</code> + mypy only</td></tr><tr><td>no classes, no <code>instanceof</code>: data crosses the wire as JSON and comes back as the same type</td><td>needs Jackson polymorphic config</td><td>pydantic discriminated unions</td></tr></table></div><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>The forward-compatibility rule had a hole: new VALUES inside a known message type.</strong></p><p><span class='mono'>peer.ts</span> skips a message whose <code>type</code> it does not know, so an old tab survives a server that learned a new message. Then the rate limit added a new <em>reject reason</em>, <code>rate_limited</code>. An old tab knows the type <code>"rejected"</code>, parses it, fails on the unknown reason, and that was fatal: the session ended and every unsent edit was dropped. The fix: a refusal with an unknown reason means "not applied", which is all a client needs to know. <em>A closed union is a promise to the compiler, not to last year's client.</em></p></div></section><section id="model"><h2>2 · One planner, two appliers</h2><p>What does an op <em>do</em>? That decision is made in exactly one function, <code>plan()</code>, which reads the document and returns a patch (or <code>undefined</code> for "changes nothing"). Two tiny appliers turn the patch into a result:</p><p class="label">From <span class="mono">packages/doc-model/src/index.ts</span></p><div class="scroll"><pre><code>export function applyOp(doc: Doc, op: Op): Doc {
+  const patch = plan(doc, op);
+  if (!patch) return doc;
+  const doomed = new Set(patch.remove);
+  const nodes: Doc[&quot;nodes&quot;] = {};
+  for (const [id, node] of Object.entries(doc.nodes)) if (!doomed.has(id)) nodes[id] = node;
+  for (const node of patch.set) nodes[node.id] = node;
+  return { ...doc, nodes };
+}
+
+/**
+ * IN PLACE: edits `doc` and says whether anything changed. Same decisions as applyOp (both ask
+ * plan()), but O(what changed) instead of O(nodes). The room and journal replay use this one:
+ * replaying 10,000 ops through the copying applier took 13-26 s, against a 2 s budget (F19).
+ */
+export function applyOpInto(doc: Doc, op: Op): boolean {
+  const patch = plan(doc, op);
+  if (!patch) return false;
+  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- ids are data; they are hasOwn-checked and never reserved names
+  for (const id of patch.remove) delete doc.nodes[id];
+  for (const node of patch.set) doc.nodes[node.id] = node;
+  return true;
+}</code></pre></div><p><strong>Why two?</strong> The browser needs a <em>pure</em> function: it must be able to throw a guess away. The server needs speed: replaying 10,000 ops through the copying version took 13 to 26 seconds (it copies the node map every time, so replay is O(n²)); the in-place version does it in a fraction of a second. Writing the rules twice would have been the classic bug farm, so both ask the same planner. A property test runs them side by side on random ops and demands identical documents.</p><p><strong>Structural sharing.</strong> <code>applyOp</code> builds a new node map but reuses every node object it did not touch. "Immutable" in JavaScript never means deep copies; it means <em>new containers, shared contents, and a promise not to edit the contents</em>. The replica leans on that promise in section 8.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>{ ...parent, children: [...] }</code> spread = shallow copy</td><td>records + <code>withX()</code> / builders</td><td><code>dataclasses.replace</code></td></tr><tr><td>nothing stops mutation; the discipline is tested (frozen nodes in a property test)</td><td><code>final</code> fields, immutable collections</td><td><code>frozen=True</code></td></tr><tr><td>plain objects as maps: <code>doc.nodes[id]</code></td><td><code>HashMap</code></td><td><code>dict</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>A node named <code>__proto__</code> crashed the server; one named <code>constructor</code> corrupted the document.</strong></p><p>This one is pure JavaScript, and nothing in Java or Python prepares you for it. A plain object used as a map <em>inherits</em> from <code>Object.prototype</code>. So <code>doc.nodes["constructor"]</code> is not <code>undefined</code>: it is the <code>Object</code> function. And assigning to <code>doc.nodes["__proto__"]</code> does not store a key, it calls a setter. Two defences, both needed: the contract refuses such names (<code>notOnObjectPrototype</code>), and every lookup goes through <code>Object.hasOwn</code>:</p><p class="label">From <span class="mono">packages/doc-model/src/index.ts</span></p><div class="scroll"><pre><code>export const nodeOf = (doc: Doc, id: string): DocNode | undefined =&gt; (Object.hasOwn(doc.nodes, id) ? doc.nodes[id] : undefined);</code></pre></div><p>A <code>Map</code> has none of these problems, but a <code>Map</code> does not survive <code>JSON.stringify</code>, and this document lives on the wire and in a jsonb column. That is the trade.</p></div></section><section id="loop"><h2>3 · The event loop is your lock, until you write <code>await</code></h2><p>The room has no mutex, no <code>synchronized</code>, no atomic counter, and it is correct. Node runs your JavaScript on <strong>one thread</strong>, and a function, once started, runs to its end (or to its next <code>await</code>) before anything else runs. Two WebSocket frames cannot be "in the room at the same time".</p><p>The catch is in the parentheses. An <code>await</code> <em>is</em> a point where other code runs. The room awaits exactly one thing, <code>persist</code> (the journal, from epic 6). Without care, op B would be validated against a document that op A has not changed yet. So ops go through a queue made of one promise:</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>    /** Resolves when this op has been fully handled (accepted and broadcast, or refused). Never rejects. */
+    submit(peer: Peer, clientOp: ClientOp): Promise&lt;void&gt; {
+      // The budget is charged HERE, as the op arrives, not when the queue reaches it: behind a slow
+      // journal the bucket would refill while ops wait, nothing would ever be refused, and a flood
+      // would simply pile up in memory. Every submission costs the same, whatever it turns out to be.
+      if (!peers.has(peer) || overBudget(peer, clientOp.opId)) return tail;
+      const done = tail.then(() =&gt; handle(peer, clientOp));
+      tail = done.catch(() =&gt; undefined); // one failure must not jam the queue for every later op
+      return tail;
+    },</code></pre></div><p><code>tail</code> is "the promise of everything submitted so far". Each new op chains onto it and becomes the new tail. That is a complete, fair, in-order work queue in three lines, with no library. The <code>.catch</code> matters: a rejected promise would otherwise poison every later <code>.then</code>.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>single thread; interleaving only at <code>await</code></td><td>real threads; interleaving anywhere</td><td>asyncio: same as Node; threads: GIL, interleaving anywhere</td></tr><tr><td>queue = a promise chain</td><td><code>ExecutorService</code> with one thread, or an actor mailbox</td><td><code>asyncio.Queue</code> + one worker task</td></tr><tr><td>CPU-bound work blocks everyone</td><td>use more threads</td><td>same problem as Node</td></tr></table></div><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>A test that failed one run in six was a real lost edit.</strong></p><p>The server attached its <code>message</code> listener <em>after</em> <code>await</code>ing the document load. A frame that arrived during the load was emitted to nobody and lost. In Java the socket would have been read by your own loop, so nothing could arrive "early". In Node, events fire whenever the loop is free: <strong>attach listeners before the first await</strong>, and buffer. The fix queues early frames and replays them after the welcome. The lesson beyond Node: a flaky test is a bug report with a bad title.</p></div><p class="note"><strong>Principal-level point:</strong> single-threaded does not mean free of races. It means races can only happen <em>across</em> awaits, which makes them fewer and findable. Read every <code>await</code> in shared-state code as "anything can have changed when I come back".</p></section><section id="pipeline"><h2>4 · The room: eight checks, in an order that matters</h2><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  async function handle(peer: Peer, { opId, baseSeq, op }: ClientOp): Promise&lt;void&gt; {
+    const refuse = (reason: Extract&lt;ServerMessage, { type: &quot;rejected&quot; }&gt;[&quot;reason&quot;]): void =&gt; {
+      peer.send({ type: &quot;rejected&quot;, opId, reason });
+    };
+
+    if (!peers.has(peer)) return; // dropped while this op waited in the queue
+
+    // 1. Dedupe FIRST. A client that never saw its acknowledgement sends the op again and must get
+    //    the original answer; validating first would turn an ordinary retry into &quot;duplicate_node&quot;.
+    const key = `${peer.actor.id}:${opId}`;
+    const before = remembered.get(key);
+    if (before) {
+      peer.send({ type: &quot;op&quot;, ...before.op });
+      return;
+    }
+    if (rememberedNoOps.has(key)) {
+      peer.send({ type: &quot;ack&quot;, opId });
+      return;
+    }
+    // An op written before the oldest thing the room remembers MAY already have been applied, and the
+    // room can no longer tell. Applying it again would move a node twice; so the client must resync.
+    if (baseSeq &lt; forgottenUpTo) {
+      refuse(&quot;stale&quot;);
+      return;
+    }
+
+    // 2. The document&#x27;s rules first (they give the precise reason: a move into its own subtree is a
+    //    &quot;cycle&quot;, not a depth problem), then the room&#x27;s limits. A refusal goes to the sender only.
+    const verdict = validate(doc, op, manifest);
+    if (!verdict.ok) {
+      refuse(verdict.reason);
+      return;
+    }
+    if (overLimit(op)) {
+      refuse(&quot;document_limit&quot;);
+      return;
+    }
+
+    // An op that changes nothing (the value is already that) is answered and goes no further: no seq,
+    // no journal row, no broadcast. Remembered like any other, so that its resend is still a no-op.
+    if (!changes(doc, op)) {
+      rememberedNoOps.add(key);
+      if (rememberedNoOps.size &gt; REMEMBERED_NO_OPS) rememberedNoOps.delete(rememberedNoOps.values().next().value ?? key);
+      peer.send({ type: &quot;ack&quot;, opId });
+      return;
+    }
+
+    // 3. Durable first, then applied, then announced. The number is only TAKEN once the op is durable,
+    //    so a failed write leaves no gap. The ACTOR comes from the verified session (SPEC §2.3).
+    const sequenced: SequencedOp = { seq: seq + 1, opId, actor: peer.actor, op };
+    try {
+      await persist?.(sequenced);
+    } catch {
+      refuse(&quot;unavailable&quot;);
+      return;
+    }
+    applyOpInto(doc, op);
+    seq = sequenced.seq;
+    nodeCount = op.type === &quot;add_node&quot; ? nodeCount + 1 : op.type === &quot;remove_node&quot; ? Object.keys(doc.nodes).length : nodeCount;
+    remember(key, sequenced);
+    broadcast({ type: &quot;op&quot;, ...sequenced }); // the sender&#x27;s copy is its acknowledgement
+  }</code></pre></div><p>Each step's position was earned by a bug:</p><ul><li><strong>Dedupe before validate.</strong> A client that never saw its acknowledgement sends the op again. Validate first, and an honest retry of <code>add_node</code> is answered <code>duplicate_node</code>.</li><li><strong>Stale before validate.</strong> If the op is older than anything the room remembers, the room cannot know whether it applied it. It says so (<code>stale</code>) instead of guessing.</li><li><strong>The document's rules before the room's limits</strong>, because they give the precise reason (a move into your own subtree is a <em>cycle</em>, not a depth problem).</li><li><strong>Durable, then applied, then announced.</strong> The sequence number is only <em>taken</em> once the op is durable, so a failed write leaves no gap, and nobody ever hears of an op that could be lost.</li><li><strong>The actor is stamped here</strong>, from the verified session. A client cannot claim "the AI did this".</li></ul><p>And the budget is not in this function at all: it is charged in <code>submit()</code>, as the op <em>arrives</em>. Section 9 says why.</p><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>A graceful shutdown lost every unsaved edit.</strong></p><p><code>close()</code> terminated the sockets and then awaited the pending saves. There were none: the <code>close</code> handlers that <em>start</em> the saves run on a later tick of the event loop. The function returned, the process exited. The fix is to save every room first, then close. In Node, "I called it" and "it has happened" are different moments; when order matters, <code>await</code> the thing itself.</p></div></section><section id="idempotency"><h2>5 · Exactly once, over a connection that lies</h2><p>A network gives you two honest choices: at most once, or at least once. "Exactly once" is built on top: <strong>send at least once, and make the receiver recognise repeats</strong>. Every op carries a random <code>opId</code>; the room remembers what each <code>(sender, opId)</code> became and answers a repeat with the original answer.</p><p>The memory is bounded (20,000 ops), so there must be a rule for what falls outside it. That is <code>baseSeq</code>: the last sequence number the client had seen when it <em>wrote</em> the op. Older than anything remembered? <code>stale</code>.</p><p class="label">From <span class="mono">packages/peer-client/src/replica.ts</span></p><div class="scroll"><pre><code>    if (reason === RejectReason.enum.stale) {
+      // The room no longer remembers whether it applied this op. If the op would change nothing, it
+      // is already there (or no longer makes sense): drop it quietly. If it WOULD change something,
+      // that proves nothing: it may have been applied and then overwritten, and sending it again would
+      // put an old write on top of a newer one, or bring back a node someone removed. So only an op
+      // that no EARLIER connection ever carried is sent again; any other is given up and the user is told.
+      // E6.1a&#x27;s journal remembers every opId for good; from then on a resend is always safe.
+      const alreadyThere = applyOp(confirmed, mine.op) === confirmed;
+      if (!alreadyThere &amp;&amp; !mine.maybeApplied &amp;&amp; mine.staleCount &lt; MAX_STALE_RETRIES) {
+        mine.staleCount++;
+        mine.baseSeq = seq; // honest again: it is now written against what we have seen
+        // It goes out again, and so does everything after it: our own edits must reach the room in the
+        // order we made them (red, then blue). The room answers the repeats from its memory.
+        for (const each of pending.slice(pending.indexOf(mine))) each.inFlight = false;
+        return effects;
+      }
+      pending = pending.filter((each) =&gt; each !== mine);
+      rebuild();
+      return alreadyThere ? effects : { ...effects, rejected: [{ opId, op: mine.op, reason, quiet: false }] };
+    }</code></pre></div><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>"Would this op change the document?" is not "was this op applied?"</strong></p><p>My first rule for <code>stale</code>: if the op would still change the document, send it again. A reviewer broke it in six steps: my <code>gap=1</code> lands at seq 11 (I never hear); someone sets <code>gap=2</code> at seq 12; the server restarts; I resend; <code>stale</code>; the document says 2, so my op "would change it"; I resend with a fresh <code>baseSeq</code>; it lands at seq 13. An old write is now on top of a newer one, and with <code>add_node</code> the same path resurrects a node someone deleted. The rule now: only an op that <em>no earlier connection ever carried</em> is sent again. The others are given up, and the user is told. A lost edit you know about beats a corrupted document you do not. (The journal in epic 6 remembers every opId for good, and the rule goes away.)</p></div><p class="note">Two smaller lessons from the same code: the dedupe key includes the <em>sender</em> (a broadcast shows every opId to every peer), and an acknowledgement is matched by id <strong>and</strong> content: <em>an id is a claim, the content is the fact</em>.</p></section><section id="shell"><h2>6 · A pure core in a thin shell, and dependencies as parameters</h2><p>Look at what the room asks of the outside world:</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>export type Peer = {
+  actor: Actor;
+  /** The session this connection was opened with: what presence, role checks and revocation look up. */
+  session: { userId: string; orgId: string; expiresAt: number };
+  send(message: ServerMessage): void;
+  /** The same, already serialised. A broadcast is turned into JSON ONCE, not once per recipient. */
+  sendText?(text: string): void;
+  /** What presence shows for this connection; from the verified session. */
+  name?: string;
+  /** Ends this peer&#x27;s connection. Called for a peer that keeps sending while it is being refused. */
+  kick?(): void;
+};</code></pre></div><p>A peer is "who it is" plus "a way to send to it". No socket. The server builds one from a WebSocket; a unit test builds one from an array; the simulator builds one from a queue. The same goes for time and randomness:</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  rate?: Partial&lt;RateLimit&gt;;
+  /** The room has no clock of its own: the caller lends it one, and a test lends it a hand-wound one. */
+  now?: () =&gt; number;
+  /** How a connection gets its presence id. Injected, like the clock, so that a test can predict it. */
+  mintPeerId?: () =&gt; string;
+};</code></pre></div><p><code>now</code> and <code>mintPeerId</code> are <em>functions passed in</em>, with real defaults. That is the entire dependency-injection mechanism: a parameter with a default value. No container, no interface, no mock library. A test hands in <code>() =&gt; clock.now</code> and winds the clock by hand.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>now = Date.now</code> as a default parameter</td><td><code>java.time.Clock</code> injected by Spring</td><td><code>freezegun</code> / a clock argument</td></tr><tr><td><code>type Peer = { send(m): void }</code>: any object with that shape fits</td><td><code>interface Peer</code>, and classes must declare <code>implements</code></td><td><code>Protocol</code> (structural), or duck typing</td></tr><tr><td>a fake = an object literal</td><td>Mockito</td><td><code>unittest.mock</code></td></tr></table></div><p class="note"><strong>Structural typing</strong> is what makes this cheap. TypeScript never asks "is this an instance of Peer?"; it asks "does it have <code>actor</code>, <code>session</code> and <code>send</code> of the right types?". In Java terms, every type is an interface and every object implements all the interfaces it happens to fit.</p></section><section id="ws"><h2>7 · WebSockets: what HTTP did for you, and now you do</h2><ul><li><strong>Authentication happens once</strong>, at the upgrade. A browser cannot set headers on a WebSocket, except one: <code>Sec-WebSocket-Protocol</code>. The token rides there (a query string would land in proxy logs). A bad token is an HTTP 401 before any socket exists.</li><li><strong>There are no status codes</strong> after that, so the server defines close codes that mirror HTTP: 4400, 4404, 4429, 4500, 4503. The client sorts them into "retry" and "never retry".</li><li><strong>A dead peer says nothing.</strong> The server pings; a peer that has not answered by the next tick is terminated. The browser cannot see pings, so the client has its own watchdog: "I am waiting for something and have heard nothing for 10 s".</li><li><strong>Backpressure is your job.</strong> <code>ws.send()</code> never blocks and never fails: what cannot be written is queued <em>in your memory</em>. One stalled reader could grow that without end, so past 1 MB the peer is dropped.</li><li><strong>Node 24 has the browser's <code>WebSocket</code> built in.</strong> That is why one client library serves the browser tab, the AI worker and the git peer.</li></ul><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>      send: (message) =&gt; {
+        if (ws.readyState !== ws.OPEN) return;
+        // send() never throws and never blocks: what cannot be written yet is queued IN OUR MEMORY.
+        // A peer that stops reading would grow that queue without end, so past the limit it goes.
+        if (ws.bufferedAmount &gt; maxBufferedBytes) ws.terminate();
+        else ws.send(JSON.stringify(message));
+      },
+      sendText: (text) =&gt; { if (ws.readyState === ws.OPEN &amp;&amp; ws.bufferedAmount &lt;= maxBufferedBytes) ws.send(text); else if (ws.readyState === ws.OPEN) ws.terminate(); },
+      ...(claims.name === undefined ? {} : { name: claims.name }),</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>  function retryLater(): void {
+    if (status === &quot;closed&quot;) return;
+    setStatus(&quot;offline&quot;);
+    // The pause starts over only after a connection that LASTED. Resetting it on every welcome made
+    // &quot;welcome, then drop&quot; (a crash-looping server, a failing database) a reconnect every 250 ms, for ever,
+    // each one costing the api a session token and the room a copy of the document.
+    if (liveSince &gt; 0 &amp;&amp; Date.now() - liveSince &gt; retryMs.max) attempt = 0;
+    liveSince = 0;
+    // Exponential, capped, with jitter: after a server restart a thousand tabs must not all return in the same millisecond.
+    const delay = Math.min(retryMs.max, retryMs.min * 2 ** attempt++) * (0.5 + Math.random() / 2);
+    retryTimer = setTimeout(() =&gt; void open(), delay);
+  }</code></pre></div><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>Resetting the backoff on every welcome made a reconnect storm.</strong></p><p>"Connected again, so start the backoff over" sounds right. But a server that welcomes and then drops you (a crash loop, a failing database) is then retried every 250 ms for ever, by every open tab, and each retry costs the API a session token and the room a copy of the document. The backoff now restarts only after a connection that <em>lasted</em>. Jitter is there for the same reason: after a restart, a thousand tabs must not come back in the same millisecond.</p></div></section><section id="optimistic"><h2>8 · Optimistic editing: two documents and one invariant</h2><p class="label">From <span class="mono">packages/peer-client/src/replica.ts</span></p><div class="scroll"><pre><code>/**
+ * One peer&#x27;s copy of a document. Pure logic: no socket, no timer, no clock, so the reconcile
+ * simulator and the unit tests drive this very code (the same split as the room on the server).
+ *
+ * It holds TWO documents:
+ *   confirmed   what the server has said, in the server&#x27;s order. Never guessed at.
+ *   optimistic  confirmed + every op of ours the server has not answered yet. What the user sees.
+ * The invariant (tested as a property): optimistic == confirmed, then each pending op, in order.
+ */</code></pre></div><p>The user must see their edit <em>now</em>, not after a round trip. So the replica keeps the server's truth and its own guess apart, and the guess is always <em>recomputable</em>: confirmed, then every pending op, in order. When the server says something that changes history (someone else's op landed before mine), the guess is thrown away and made again:</p><p class="label">From <span class="mono">packages/peer-client/src/replica.ts</span></p><div class="scroll"><pre><code>  /**
+   * Throw the guess away and make it again. Only the node MAP is copied; the nodes are shared.
+   * That is safe because applyOpInto never edits a node: it puts a NEW node object in the map.
+   * Measured on 5,000 nodes with 20 pending: about 1 ms per remote op, against 6.5 ms with structuredClone.
+   */
+  function rebuild(): void {
+    revision++;
+    optimistic = { ...confirmed, nodes: { ...confirmed.nodes } };
+    for (const each of pending) applyOpInto(optimistic, each.op);
+  }</code></pre></div><p>That shallow copy is 6x faster than <code>structuredClone</code> (about 1 ms against 6.5 ms on 5,000 nodes), and it is only safe because of section 2's promise: appliers replace nodes, they never edit one. The promise is enforced by a test that <em>freezes</em> every node the replica holds and then runs sixty random histories; an in-place edit would throw.</p><p><strong>The property, stated as a test:</strong> after any mix of local edits, remote edits, acknowledgements, refusals and reconnects, <code>optimistic == confirmed + pending</code>, the document is well formed, and once nothing is pending the replica's document <em>is</em> the server's. Rollback is not a feature that was written; it is what "recompute the guess without the refused op" does.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>structuredClone(x)</code>: deep copy, built in</td><td>serialization or copy constructors</td><td><code>copy.deepcopy</code></td></tr><tr><td><code>{ ...doc, nodes: { ...doc.nodes } }</code>: one level</td><td><code>new HashMap&lt;&gt;(map)</code></td><td><code>dict(d)</code></td></tr><tr><td>getters on a returned object (<code>get doc()</code>) expose live state read-only</td><td>getter methods</td><td><code>@property</code></td></tr></table></div></section><section id="rate"><h2>9 · Rate limiting: where you charge matters more than how</h2><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  /** Takes one token (unless `take` is false), or says how many ms until there is one. 0 = taken. */
+  function spend(actor: Actor, take = true): number {
+    const key = bucketKey(actor);
+    const bucket = buckets.get(key) ?? { tokens: rate.burst, at: now() };
+    // max(0): a clock that was corrected BACKWARDS must not turn into a debt of that many milliseconds.
+    bucket.tokens = Math.min(rate.burst, bucket.tokens + (Math.max(0, now() - bucket.at) / 1000) * rate.perSecond);
+    bucket.at = now();
+    buckets.set(key, bucket);
+    if (bucket.tokens &gt;= 1) {
+      if (take) bucket.tokens -= 1;
+      return 0;
+    }
+    // &quot;Come back when it is worth it&quot;: when a few tokens have gathered, not the first one. A client told
+    // to return for ONE token sends one op, is refused on the next, and pays a refusal for every op.
+    // Capped: a budget of 0 per second would make this Infinity, which JSON writes as null.
+    const worthIt = Math.min(rate.burst, WORTH_RETURNING_FOR);
+    return Math.min(MAX_RETRY_AFTER_MS, Math.ceil(((worthIt - bucket.tokens) / rate.perSecond) * 1000));
+  }</code></pre></div><p>A token bucket is ten lines. The decisions around it are the design:</p><ul><li><strong>Charge on arrival.</strong> The first version charged when the queue reached the op. Behind a slow journal the bucket refills while ops wait: a flood of 3,000 frames got <em>zero</em> refusals and sat in memory. <em>Limit where work arrives, not where it is processed.</em></li><li><strong>Per actor, not per connection</strong>: otherwise reconnecting is a free refill. And an AI run has its own bucket, so it cannot starve the person who started it.</li><li><strong>Keep the order.</strong> After op K is refused, the bucket refills, and op K+1 (K's child) would get in and be lost as <code>gone</code>. So the room refuses that peer's later ops until K comes back.</li><li><strong>A strike is coming back too soon</strong>, not being refused. A second tab that waits as told and loses the race for the token is unlucky, not abusive, and must never be dropped.</li><li><strong>Cheap requests must not share a pool with expensive ones.</strong> Ops that change nothing cost almost nothing; remembered in the same memory as real ops, 20,000 of them pushed out every real entry and turned honest resends into <code>stale</code>.</li></ul><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>My own honest client cost 18,524 refusals for 600 ops.</strong></p><p>Told "come back in 10 ms", it came back with its whole window of 50 ops. One token had refilled. One op in, 49 refused, repeat. The test was named "an honest client is never dropped" and it passed, because it never <em>counted</em> refusals. Now the window restarts at one op and grows by one per answer (the shape of TCP's congestion control), the server's hint means "when a few tokens are back", and the test counts. <em>Assert the thing you claim, in numbers.</em></p></div></section><section id="presence"><h2>10 · Presence: the message that is not an op</h2><p>Cursors and selections are not part of the document: never ordered, never stored, gone with the process. So presence takes none of the op pipeline: no queue, no seq, no persist, no budget. What it needs instead:</p><ul><li><strong>Identity from the token</strong>, never from the message. The client message is a <code>strictObject</code>: an extra <code>name</code> field closes the connection.</li><li><strong>Latest wins, nothing queues.</strong> The client sends at most every 50 ms and always the newest state; the room drops anything faster than 25 ms apart. 10,000 frames in one tick relay 2.</li><li><strong>A dead connection says no goodbye</strong>, and the server may not notice for 15 s. So every client refreshes every 2 s, and <em>viewers</em> forget anyone silent for 5 s.</li><li><strong>A cursor is a fraction of the canvas</strong>, not pixels: two windows are never the same size.</li><li><strong>Serialise once.</strong> N peers at 20 messages a second is N²·20 <code>JSON.stringify</code> calls if you do it per recipient.</li></ul><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  /** To everyone (but `except`). Serialised once: with N peers at 20 presence messages a second each, once per recipient is N x N x 20 stringifies. */
+  function broadcast(message: ServerMessage, except?: Peer): void {
+    let text: string | undefined;
+    for (const each of peers) {
+      if (each === except) continue;
+      if (each.sendText) each.sendText((text ??= JSON.stringify(message)));
+      else each.send(message);
+    }
+  }</code></pre></div></section><section id="react"><h2>11 · React meets a store that is not React's</h2><p>You know servers; here is the smallest honest account of the browser side. React re-renders a component when <em>its</em> state changes. The peer is not React state: it changes when a WebSocket frame arrives. <code>useSyncExternalStore</code> is the bridge: "here is how to subscribe, here is how to read a snapshot". React re-renders when the snapshot is a <em>different value</em> (<code>Object.is</code>).</p><p class="label">From <span class="mono">apps/web/src/usePeer.ts</span></p><div class="scroll"><pre><code>function openStore(documentId: string, onRejected: (rejection: Rejection) =&gt; void) {
+  const listeners = new Set&lt;() =&gt; void&gt;();
+  const tell = (): void =&gt; { for (const listener of listeners) listener(); };
+  const peer = connectPeer({ manifest, session: () =&gt; openSession(documentId), onChange: tell, onStatus: tell, onRejected });
+  return {
+    peer,
+    subscribe: (listener: () =&gt; void) =&gt; { listeners.add(listener); return () =&gt; { listeners.delete(listener); }; },
+    // peer.doc is edited IN PLACE and never changes identity, so the snapshot is built from what does move.
+    snapshot: () =&gt; `${String(peer.revision)}:${String(peer.pendingCount)}:${peer.status}:${String(peer.presenceRevision)}`,
+  };
+}</code></pre></div><p>The document is edited in place, so its identity never changes and would make a useless snapshot. The snapshot is a string of the numbers that do move.</p><p class="label">From <span class="mono">apps/web/src/usePeer.ts</span></p><div class="scroll"><pre><code>export function usePeer(documentId: string) {
+  const [refusals, setRefusals] = useState&lt;Refusal[]&gt;([]);
+  const [store, setStore] = useState&lt;ReturnType&lt;typeof openStore&gt;&gt;();
+  const refuse = (reason: Reason): void =&gt; { setRefusals((before) =&gt; [...before, { id: crypto.randomUUID(), reason }]); };
+  useEffect(() =&gt; {
+    // `quiet` (someone else removed the node first) is not news: the canvas already shows it (F5).
+    const opened = openStore(documentId, (rejection) =&gt; { if (!rejection.quiet) refuse(rejection.reason); });
+    setStore(opened);
+    return () =&gt; { opened.peer.close(); };
+  }, [documentId]);
+  useSyncExternalStore((store ?? NOTHING).subscribe, (store ?? NOTHING).snapshot);
+  return { peer: store?.peer, refusals, refuse, dismiss: (id: string): void =&gt; { setRefusals((before) =&gt; before.filter((each) =&gt; each.id !== id)); } };
+}</code></pre></div><ul><li><strong>Side effects live in effects.</strong> A render must be pure: React may run it twice and discard one (StrictMode does so on purpose in development). An effect comes with a cleanup; a render does not.</li><li><strong>Derived, not stored.</strong> The selection is <code>doc.nodes[wanted] ?? root</code>. When someone else deletes the selected node there is no state to repair.</li><li><strong>A ref for what the screen does not depend on.</strong> The pointer position changes sixty times a second and nothing on <em>our</em> screen shows it: <code>useRef</code>, not <code>useState</code>.</li><li><strong><code>key</code> resets a component.</strong> The inspector is keyed by node id: select another node and the old form unmounts (its field blurs, its draft is committed to the <em>right</em> node) and a fresh one mounts.</li></ul><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>StrictMode left two live connections per page.</strong></p><p>Mount, cleanup, mount again, all in one tick. My library <em>scheduled</em> its connection (<code>queueMicrotask</code>), so the cleanup's <code>close()</code> ran before the connection had started, and the start then undid the close. A library that defers its start must ask "was I closed meanwhile?" when it finally runs.</p></div><div class="scroll"><table><tr><th>React</th><th>Closest Java idea</th><th>Closest Python idea</th></tr><tr><td><code>useState</code>: state owned by the component</td><td>a field + <code>repaint()</code></td><td>n/a</td></tr><tr><td><code>useEffect(() =&gt; { open(); return close; }, [id])</code></td><td><code>@PostConstruct</code> / <code>@PreDestroy</code></td><td>a context manager</td></tr><tr><td>the prop form is generated from the manifest at runtime</td><td>reflection over a DTO</td><td>pydantic model fields</td></tr></table></div></section><section id="manifest"><h2>12 · Types as data: reading TypeScript with TypeScript</h2><p>The canvas must know which components exist and which props they take. Nobody wrote that list: it is <em>extracted</em> from the sample app's own TypeScript types with the compiler API, and committed. Change a prop in the design system and <code>make check</code> fails until the manifest is regenerated.</p><p>The compiler is a library: <code>ts.createProgram</code> gives you a type checker you can ask "what are the properties of this type, and is this one optional?". Java's equivalent is an annotation processor or reflection; the difference is that TypeScript's types do not exist at runtime, so the only way to get them into data is to run the compiler.</p><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>Arrow-function components were silently skipped.</strong></p><p>The extractor looked for <code>function Button(props: ...)</code> declarations. <code>export const Button = (props: ...) =&gt; ...</code> is a <em>variable</em> whose initialiser is a function: a different syntax node. Half of all React code is written that way. Code that walks a syntax tree needs a test per way of writing the same thing.</p></div></section><section id="testing"><h2>13 · How you test concurrency without sleeping</h2><ul><li><strong>Property tests</strong>: not "this input gives that output" but "for every history, this stays true". Seeded, so a failure replays.</li><li><strong>A simulator</strong> (<span class='mono'>apps/sync/src/sim.ts</span>, <code>make sim</code>): the real room and real replicas, a network that delays, reorders and drops, a server that restarts, one seeded generator deciding everything. Same seed, same run, byte for byte, in separate processes.</li><li><strong>Mutation</strong>: break a rule on purpose and demand a red test. The simulator's first version passed when a replica re-applied a late acknowledgement, because random ops almost never made two peers write the same property. It now generates <em>collisions</em> on purpose and checks every caught-up replica at every step, not only at the end (later edits hide a wrong value).</li><li><strong>Held frames</strong>: in the browser tests, Playwright sits between the page and the server and holds one browser's outgoing frames. "Two people did this at the same moment" becomes a deterministic test.</li><li><strong>Injected time</strong>: a hand-wound clock instead of <code>sleep</code>.</li></ul><p class="label">From <span class="mono">apps/sync/src/sim.ts</span></p><div class="scroll"><pre><code>  function check(): void {
+    for (const problem of checkDoc(room.doc)) fail(`the room&#x27;s document is malformed: ${problem}`);
+    for (const client of clients) for (const problem of checkDoc(client.replica.doc)) fail(`${client.name}&#x27;s document is malformed: ${problem}`);
+    // A replica that has heard everything and waits for nothing must hold the room&#x27;s document NOW, not
+    // only at the end: later edits overwrite a wrong value and would hide the divergence by then.
+    const roomNow = canon(room.doc);
+    for (const client of clients) {
+      const caughtUp = client.peer !== undefined &amp;&amp; client.toClient.length === 0 &amp;&amp; client.replica.pendingCount === 0 &amp;&amp; client.replica.seq === room.seq;
+      if (caughtUp &amp;&amp; canon(client.replica.doc) !== roomNow) fail(`${client.name} has heard everything up to seq ${String(room.seq)} and still holds a different document`);
+    }
+    for (const node of Object.values(room.doc.nodes)) {
+      const expected = canon(Object.fromEntries(lastWritten.get(node.id) ?? []));
+      if (node.parentId !== null &amp;&amp; canon(node.props) !== expected) fail(`last writer did not win on ${node.id}: the room holds ${canon(node.props)}, the latest writes say ${expected}`);
+    }
+    // The rest of the rules (a remove beats an edit, index = final position) in one check: the room&#x27;s
+    // document is exactly what applying the sequenced ops in seq order produces, recomputed with the
+    // PURE applier (the room uses the in-place one): it catches a room that skips, repeats or reorders.
+    const model = [...log].sort((a, b) =&gt; a.seq - b.seq).reduce&lt;Doc&gt;((doc, each) =&gt; applyOp(doc, each.op), emptyDoc());
+    if (canon(model) !== canon(room.doc)) fail(&quot;the room&#x27;s document is not what its own sequence of ops produces&quot;);
+  }</code></pre></div><div class="break"><p class="label">Case study · found by review or by a test that flaked</p><p><strong>The simulator's best find was a bug in code that every committed seed passed.</strong></p><p>Two features, each correct alone. The room remembers "this op changed nothing" and answers a resend with the same <code>ack</code> (re-judging it later could put an old value over a newer one). The replica, told never to trust blindly, refused to believe an <code>ack</code> for an op that <em>would</em> change the document it holds now. Put together: I set <code>gap=2</code> when it is already 2; the ack is lost; someone sets <code>gap=1</code>; I reconnect and resend; the room says <code>ack</code>; I do not believe it, reconnect, resend; for ever, silently. It happens in about one seed in 700, and seeds 1 to 40 never hit it. A verifier swept 3,000 seeds and seed 761 printed the loop. The fix is one deleted condition: the room's verdict is about <em>then</em>, not now, so the ack is believed and the newer value stands.</p><p>Three habits came out of it: after building a simulator, <strong>sweep thousands of seeds once</strong> and commit the ones that fail; make the final drain <strong>bounded</strong>, so a livelock is a failure with a trace and not a hang; and when a client double-checks a server, it needs the server's real semantics, or the check itself becomes the bug.</p></div><p class="note">The independent last-writer-wins check exists because the "replay the log" check uses doc-model's own applier: a wrong rule inside it would agree with itself. <strong>An oracle must not share code with what it judges.</strong></p></section><section id="limits"><h2>14 · What the type system could not see, epic 2 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests.</p><div class="scroll"><table><tr><th>What went wrong</th><th>Why</th><th>Fix</th></tr><tr><td>frame lost while the room was loading</td><td>listener attached after an <code>await</code></td><td>attach first, buffer, replay</td></tr><tr><td>shutdown lost unsaved edits</td><td>close handlers run on a later tick</td><td>save first, then close</td></tr><tr><td>resend applied twice outside the dedupe window</td><td>bounded memory with no rule for the outside</td><td><code>baseSeq</code> + <code>stale</code></td></tr><tr><td>old write over a newer one after a restart</td><td>"would change" mistaken for "was not applied"</td><td>only never-sent ops are rebased</td></tr><tr><td>a co-editor could diverge your canvas for good</td><td>ack matched by id alone</td><td>id AND content</td></tr><tr><td>a cyclic welcome froze the tab</td><td>contract checks nodes, not the tree</td><td><code>checkDoc</code> on arrival; seen-set in the walk</td></tr><tr><td>~6 reconnects a second, for ever</td><td>backoff reset on every welcome</td><td>reset after a connection that lasted</td></tr><tr><td>an honest second tab was kicked</td><td>a strike per refusal</td><td>a strike per EARLY return</td></tr><tr><td>floods never refused behind a slow journal</td><td>budget charged inside the queue</td><td>charge on arrival</td></tr><tr><td>honest resends turned <code>stale</code></td><td>no-ops shared the dedupe memory</td><td>their own small memory</td></tr><tr><td>18,524 refusals for 600 ops</td><td>whole window resent into one token</td><td>restart at 1, +1 per answer</td></tr><tr><td>two live connections per page in dev</td><td>close() before a deferred start was undone</td><td>check "closed?" at the start</td></tr><tr><td>a stale link retried for ever</td><td>404 mapped to "retry later"</td><td>throw = retry, null = give up</td></tr><tr><td><code>1e999</code> silently deleted a prop</td><td>a number input reports "" for unreadable text</td><td><code>validity.badInput</code></td></tr><tr><td>a third of presence colours unreadable</td><td>a colour formula cannot promise contrast</td><td>a checked list + a test that recomputes WCAG</td></tr><tr><td>an endless, silent resync loop</td><td>the replica disbelieved a REMEMBERED ack</td><td>the ack is about then, not now: believe it</td></tr><tr><td><code>__proto__</code> as a node id</td><td>plain objects inherit</td><td>refuse in the contract; <code>Object.hasOwn</code> everywhere</td></tr></table></div><p class="note"><strong>The pattern:</strong> types prove shapes. They say nothing about <em>order</em>, <em>time</em>, <em>repetition</em>, <em>memory</em> or <em>who is speaking</em>, and a distributed system is made of exactly those. That is what the verifier pass, the property tests, the simulator and mutation-checking are for.</p></section>
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-2/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-2/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend the protocol, end to end.</strong> Presence should also say whether a peer is <em>typing</em> in a prop field: add <code>typing: boolean</code>. You will touch the contract (both directions: the client message is strict, the server message is loose), the room (relay it, and remember it for newcomers) and, if you like, the client and the canvas. The drill's test checks the contract and the room. <span class="mono">make check</span> must stay green: the gate applies to you too.</p>
+      <p>Predict first: which existing test will fail the moment you add a required field to <code>Presence</code>, and what does that tell you about required versus optional fields on a wire that old clients share? (Section 1's case study.)</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-2/d2-replica/replica.ts</span> is a 60-line replica with one bug from this chapter planted in it. Its test plays a history in which two people set the same property around a reconnect, and expects the replica to end with the server's value. Form a theory from the failing assertion before you read the code.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. Why is the server the only thing that orders ops, instead of a CRDT that lets every peer merge on its own?</summary>
+        <p>A design tree has invariants a merge function cannot see locally: no cycles, a parent must accept children, props must match the component. A single sequencer makes every peer apply the same ops in the same order through the same validator, so the invariants hold by construction, and "who won" is one integer comparison. The price is that editing needs the server: offline edits are optimistic guesses that may be refused. For a team tool with a server anyway (auth, AI, git), that is the cheap side of the trade. A CRDT earns its complexity when peers must merge with no server at all.</p></details>
+      <details class="recall"><summary>2. The replica is pure (no socket, no timer) and the transport is separate. What did that buy, concretely?</summary>
+        <p>Seventy-odd rules tested in under a second with no network; a property test over random histories; a simulator that drives the real code deterministically; and one client for the browser, the AI worker and the git peer, because only the thin shell knows what a WebSocket is. The same split on the server (room versus server) bought the same things.</p></details>
+      <details class="recall"><summary>3. Presence is relayed by the same room. Why does it not go through the op pipeline?</summary>
+        <p>It has none of an op's needs and all of its costs. Nobody needs cursors in order, durable, deduplicated or replayable; they need the latest one, now. Through the pipeline every pointer move would take a sequence number, a journal row and a slot in the dedupe memory, and a fast pointer would starve real edits of their budget. So: no queue, no seq, no persist, latest wins, and silence removes a peer.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the room's checks in order, from a frame arriving to a broadcast, and for two of them say which bug put them where they are. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Budget, on arrival (floods piled up behind a slow journal) → seen this (sender, opId)? answer as before (honest resends were refused as duplicates) → older than anything remembered? <code>stale</code> (a resend was applied twice) → the document's rules, precise reason → the room's limits (a move escaped the depth cap) → persist, and only then take the seq (no gaps, nobody hears of an op that could be lost) → apply → remember → broadcast, serialised once; the sender's copy is its acknowledgement.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. In the <code>default</code> branch of a switch over all four op types, what is the type of <code>op</code>, and why assign it to a <code>never</code> variable?</p>
+      <button id="q1a" data-correct><code>never</code>; a fifth op type then stops the build</button><button id="q1b"><code>Op</code>; it documents the fallback</button><button id="q1c"><code>unknown</code>; it forces a cast</button><button id="q1d"><code>any</code>; it silences the linter</button>
+      <p class="why" hidden>After every member is handled nothing is left: the empty type. The assignment only compiles while that stays true.</p></div>
+    <div class="quiz"><p class="q">2. The room has no lock. Why can two ops still interleave wrongly without the promise queue?</p>
+      <button id="q2a" data-correct><code>await persist()</code> is a point where other code runs</button><button id="q2b">Node runs handlers on a thread pool</button><button id="q2c">WebSocket frames are parsed in parallel</button><button id="q2d">Garbage collection can pause a handler</button>
+      <p class="why" hidden>Single-threaded means interleaving only at an <code>await</code>. The queue makes each op wait for the one before it.</p></div>
+    <div class="quiz"><p class="q">3. Why does the room check "have I seen this opId?" BEFORE validating the op?</p>
+      <button id="q3a" data-correct>An honest resend of <code>add_node</code> would be refused as <code>duplicate_node</code></button><button id="q3b">Validation is slower than a map lookup</button><button id="q3c">To save a sequence number</button><button id="q3d">Because the contract requires it</button>
+      <p class="why" hidden>A client that lost its acknowledgement sends again and must get the ORIGINAL answer.</p></div>
+    <div class="quiz"><p class="q">4. An op comes back <code>stale</code> after a server restart. It was already on the wire of an earlier connection. What does the replica do, and why?</p>
+      <button id="q4a" data-correct>Gives it up and tells the user: it may have been applied and then overwritten</button><button id="q4b">Resends it with a fresh <code>baseSeq</code></button><button id="q4c">Resends it only if it would still change the document</button><button id="q4d">Reloads the page</button>
+      <p class="why" hidden>"Would change the document" is not "was not applied". Resending could put an old write over a newer one, or re-add a deleted node.</p></div>
+    <div class="quiz"><p class="q">5. <code>rebuild()</code> copies only the node MAP and shares the node objects with the confirmed document. What makes that safe?</p>
+      <button id="q5a" data-correct>Appliers never edit a node; they put a new node object in the map</button><button id="q5b"><code>Object.freeze</code> is called on every node in production</button><button id="q5c">JavaScript objects are copied on assignment</button><button id="q5d">The confirmed document is never read again</button>
+      <p class="why" hidden>Immutability by discipline, enforced by a property test that freezes the nodes and runs sixty random histories.</p></div>
+    <div class="quiz"><p class="q">6. Where is the rate-limit token spent, and what went wrong when it was spent elsewhere?</p>
+      <button id="q6a" data-correct>On arrival, in <code>submit()</code>; inside the queue a slow journal let the bucket refill, so floods were never refused</button><button id="q6b">In <code>handle()</code>, after validation, to avoid charging for bad ops</button><button id="q6c">In the WebSocket server, per frame, to save the room's time</button><button id="q6d">In the client, to avoid a round trip</button>
+      <p class="why" hidden>Limit where work ARRIVES, not where it is processed.</p></div>
+    <div class="quiz"><p class="q">7. Why is <code>peer.doc</code> useless as a <code>useSyncExternalStore</code> snapshot?</p>
+      <button id="q7a" data-correct>It is edited in place, so its identity never changes and React sees no difference</button><button id="q7b">It is too large to compare</button><button id="q7c">React cannot hold objects in a snapshot</button><button id="q7d">It changes on every render and causes a loop</button>
+      <p class="why" hidden>React compares snapshots with <code>Object.is</code>. The snapshot is built from <code>revision</code>, <code>pendingCount</code>, <code>status</code> and <code>presenceRevision</code>.</p></div>
+    <div class="quiz"><p class="q">8. The simulator's replay check passed even when last-writer-wins was broken inside doc-model. Why?</p>
+      <button id="q8a" data-correct>The check used doc-model's own applier, so the wrong rule agreed with itself</button><button id="q8b">The seeds were too few</button><button id="q8c">Set-prop ops were never generated</button><button id="q8d">The room caught it first</button>
+      <p class="why" hidden>An oracle must not share code with what it judges. The fix computes "the latest write per prop" from first principles.</p></div>
+  </section>
+
+  <footer>Next: Lesson 3, after epic 3. An AI agent joins the document as one more peer: the Claude Agent SDK, tools that emit ops, streaming, cancellation, and what "the AI did this" must mean in an audit log.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>

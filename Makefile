@@ -18,7 +18,7 @@ sim: ; node apps/sync/src/sim-cli.ts
 
 # Outside `make check`: proves every lesson's exercises and drills behave as their chapter says.
 .PHONY: drills
-drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh
+drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh && sh drills/lesson-2/check.sh
 
 # Outside `make check` (minutes, builds an image): F1 on a fresh clone of the committed HEAD.
 .PHONY: clean-clone
