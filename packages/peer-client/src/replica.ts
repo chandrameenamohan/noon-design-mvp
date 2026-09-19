@@ -33,7 +33,7 @@ const MAX_PAUSE_MS = 30_000;
  *   optimistic  confirmed + every op of ours the server has not answered yet. What the user sees.
  * The invariant (tested as a property): optimistic == confirmed, then each pending op, in order.
  */
-export function createReplica({ manifest, maxPending = 2000, window = 50 }: { manifest: Manifest; maxPending?: number; /** How many unanswered ops may be on the wire at once. */ window?: number }) {
+export function createReplica({ manifest, maxPending = 2000, window = 50, mintOpId = () => crypto.randomUUID() }: { manifest: Manifest; maxPending?: number; /** How many unanswered ops may be on the wire at once. */ window?: number; /** Injected, like the room's clock: the simulator needs every run of a seed to be identical. */ mintOpId?: () => string }) {
   let confirmed: Doc = emptyDoc();
   let optimistic: Doc = emptyDoc();
   let seq = 0;
@@ -199,7 +199,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50 }: { ma
     local(op: Op): LocalResult {
       if (!ready) return { ok: false, reason: "not_ready" };
       if (pending.length >= maxPending) return { ok: false, reason: "too_many_pending" };
-      const clientOp = ClientOp.safeParse({ opId: crypto.randomUUID(), baseSeq: seq, op });
+      const clientOp = ClientOp.safeParse({ opId: mintOpId(), baseSeq: seq, op });
       if (!clientOp.success) return { ok: false, reason: "invalid_op" }; // e.g. props over 32 KB: the server would drop the connection
       const verdict = validate(optimistic, op, manifest);
       if (!verdict.ok) return { ok: false, reason: verdict.reason };

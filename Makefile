@@ -10,6 +10,12 @@ deadcode:  ; pnpm exec knip
 dup:       ; pnpm exec jscpd .
 e2e:       ; pnpm exec playwright test
 
+# The reconcile simulator (SPEC F8a). Its committed seeds also run inside `make check`, as unit tests
+# (apps/sync/src/sim.test.ts); this target is for a person: `make sim`, or one seed with its trace:
+#   node apps/sync/src/sim-cli.ts --seed 7 --trace
+.PHONY: sim
+sim: ; node apps/sync/src/sim-cli.ts
+
 # Outside `make check`: proves every lesson's exercises and drills behave as their chapter says.
 .PHONY: drills
 drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh
