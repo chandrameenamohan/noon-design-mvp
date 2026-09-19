@@ -219,9 +219,11 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
           // The server found the op changed nothing: the wait is over, and so is our guess about it.
           const mine = pending.find((each) => each.opId === message.opId);
           if (!mine) return { rejected: [], resync: false };
-          // We can check: when the ack was sent, the server's document was exactly our confirmed one.
-          // If the op WOULD change it, this ack is wrong; believing it would silently delete an edit.
-          if (applyOp(confirmed, mine.op) !== confirmed) return { rejected: [], resync: true };
+          // BELIEVE it, even when the op would change the document we hold now. The room's verdict is
+          // about the moment it first SAW the op; a resend is answered from its memory, by which time
+          // someone may have written a newer value. Our edit was a no-op then, so the newer value
+          // stands: last writer wins. (An earlier version refused to believe such an ack and resynced:
+          // the resend got the same remembered ack, for ever. The simulator's seed 761.)
           pending = pending.filter((each) => each !== mine);
           answered();
           rebuild();

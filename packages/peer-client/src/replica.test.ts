@@ -272,12 +272,20 @@ test("a pause the server asks for is capped: a hostile retryAfterMs cannot silen
   expect(replica.receive({ type: "rejected", opId: out.opId, reason: "rate_limited", retryAfterMs: 2 ** 31 }).pauseMs).toBe(30_000);
 });
 
-test("an 'ack' for an op that WOULD change the confirmed document is not believed: keep the op, resync", () => {
+test("an 'ack' is believed even if the op would change the document we hold NOW: the room judged it earlier, and a newer write stands", () => {
+  // I set gap=2 when it already was 2 (a no-op; the ack is lost). Someone sets gap=1. I reconnect and
+  // resend: the room answers from its memory, "ack". Not believing it was an endless resync.
   const replica = ready();
-  sent(replica, add("a"));
-  const effects = replica.receive({ type: "ack", opId: replica.pending[0]?.opId ?? "" });
-  expect(effects.resync).toBe(true);
-  expect(replica.pending).toHaveLength(1);
+  sent(replica, add("n"));
+  const server = emptyDoc();
+  applyOpInto(server, add("n"));
+  applyOpInto(server, { type: "set_prop", nodeId: "n", key: "gap", value: 1 });
+  const mine = queued(replica, { type: "set_prop", nodeId: "n", key: "gap", value: 2 });
+  replica.receive({ type: "welcome", doc: server, seq: 3 });
+  const effects = replica.receive({ type: "ack", opId: mine.opId });
+  expect(effects.resync).toBe(false);
+  expect(replica.pending.map((p) => p.opId)).not.toContain(mine.opId);
+  expect(replica.doc.nodes["n"]?.props["gap"]).toBe(1);
 });
 
 test("'ack' (the server found the op changed nothing) ends the wait and drops the guess", () => {

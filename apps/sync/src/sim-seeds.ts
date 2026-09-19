@@ -12,5 +12,12 @@ export const NAMED = {
   replicaAppliesLateAckAgain: 2,
   /** The same bug made in the SOURCE (replica.ts, `message.seq <= seq`): first caught here once the simulator learned to make colliding edits. */
   lateAckInSource: 53,
+  /**
+   * A REAL bug, found by the verifier's 3,000-seed sweep, in code that every committed seed passed: the
+   * room answered a resend with a remembered "ack" (rightly), the replica did not believe it because the
+   * op would change the document it holds NOW, resynced, resent, and did so for ever.
+   */
+  rememberedAckLivelock: 761,
+  rememberedAckLivelockAgain: 834,
 } as const;
 export const SEEDS: readonly number[] = [...new Set([...Array.from({ length: 40 }, (_, i) => i + 1), ...Object.values(NAMED)])];

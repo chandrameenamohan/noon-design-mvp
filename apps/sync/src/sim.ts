@@ -51,7 +51,14 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
   let step = 0;
 
   // The independent record of what the room decided: every sequenced op, by seq and by opId.
+  const firstSeq = 1;
   const log: SequencedOp[] = [];
+  // A client's own edits must reach the room in the order it made them (red, then blue).
+  const madeAt = new Map<string, number>();
+  const inOrder = (client: { name: string }, frames: ClientOp[]): ClientOp[] => {
+    frames.reduce((last, frame) => { const at = madeAt.get(frame.opId) ?? -1; if (at < last) fail(`${client.name} sent ${short(frame.opId)} AFTER an op it made later`); return at; }, -1);
+    return frames;
+  };
   const seqOf = new Map<string, number>();
   // Last writer wins, from FIRST PRINCIPLES: per node, the value of each prop is the one in the
   // highest-seq op that wrote it. Kept apart from doc-model on purpose: the "replay the log" check
@@ -95,11 +102,19 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
     if (message.type !== "op" || log.some((each) => each.seq === message.seq)) return;
     const before = seqOf.get(message.opId);
     if (before !== undefined) fail(`op ${short(message.opId)} was applied TWICE: at seq ${String(before)} and again at seq ${String(message.seq)}`);
+    if (message.seq !== (log.at(-1)?.seq ?? firstSeq - 1) + 1) fail(`seq ${String(message.seq)} does not follow seq ${String(log.at(-1)?.seq ?? firstSeq - 1)}: a number was skipped or repeated`);
     seqOf.set(message.opId, message.seq);
     log.push({ seq: message.seq, opId: message.opId, actor: message.actor, op: message.op });
     // Every op in the log CHANGED something (one that would not is answered with "ack" and gets no seq),
     // and the room emits them in seq order, so this is simply "the latest write".
     const { op } = message;
+    // "index is the node's FINAL position" (SPEC 2.4), from first principles: the room has already
+    // applied the op when it announces it, so look where the node actually is.
+    const parent = op.type === "add_node" ? room.doc.nodes[op.parentId] : op.type === "move_node" ? room.doc.nodes[op.newParentId] : undefined;
+    if (parent && (op.type === "add_node" || op.type === "move_node")) {
+      const wanted = Math.min(Math.max(op.index, 0), parent.children.length - 1);
+      if (parent.children.indexOf(op.nodeId) !== wanted) fail(`${op.nodeId} should be child ${String(wanted)} of ${parent.id}, it is child ${String(parent.children.indexOf(op.nodeId))}`);
+    }
     if (op.type === "add_node") lastWritten.set(op.nodeId, new Map(Object.entries(op.props)));
     else if (op.type === "set_prop" && op.value === null) lastWritten.get(op.nodeId)?.delete(op.key);
     else if (op.type === "set_prop") lastWritten.get(op.nodeId)?.set(op.key, op.value);
@@ -139,7 +154,7 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
     const effects = client.replica.receive(message satisfies DocMessage);
     for (const rejection of effects.rejected) trace.push(`${client.name} gives up ${short(rejection.opId)}: ${rejection.reason}`);
     if (effects.resync || effects.fatal) { disconnect(client); connect(client); }
-    client.toServer.push(...client.replica.takeSendable());
+    client.toServer.push(...inOrder(client, client.replica.takeSendable()));
   }
 
   for (const client of clients) connect(client);
@@ -149,8 +164,9 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
     if (roll < 0.35) {
       const op = chance(0.6) ? conflictOp(random, client.replica.doc) : randomOp(random, client.replica.doc);
       const result = client.replica.local(op);
+      if (result.ok) madeAt.set(result.opId, madeAt.size);
       trace.push(`${client.name} edits  ${describe(op)}${result.ok ? "" : ` (refused locally: ${result.reason})`}`);
-      if (client.peer) client.toServer.push(...client.replica.takeSendable());
+      if (client.peer) client.toServer.push(...inOrder(client, client.replica.takeSendable()));
     } else if (roll < 0.65) await deliverToServer(client);
     else if (roll < 0.95) deliverToClient(client);
     else if (roll < 0.99) {
