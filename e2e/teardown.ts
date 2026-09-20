@@ -9,4 +9,5 @@ export default function teardown(): void {
   const sql = "delete from orgs where id in (select m.org_id from memberships m join users u on u.id = m.user_id where u.email like 'e2e-%@example.com'); delete from users where email like 'e2e-%@example.com'";
   const path = `${process.env["PATH"] ?? ""}:/Applications/Docker.app/Contents/Resources/bin`;
   execFileSync("docker", ["compose", "exec", "-T", "postgres", "psql", "-U", "noon", "-d", "noon", "-qc", sql], { env: { ...process.env, PATH: path }, stdio: "ignore" });
+  execFileSync("docker", ["compose", "start", "worker"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped it
 }

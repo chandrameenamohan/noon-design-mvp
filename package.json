@@ -10,6 +10,7 @@
     "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^10.0.1",
     "@noon/contracts": "workspace:^",
+    "@noon/db": "workspace:^",
     "@noon/design-system": "workspace:^",
     "@noon/peer-client": "workspace:^",
     "@playwright/test": "^1.63.0",

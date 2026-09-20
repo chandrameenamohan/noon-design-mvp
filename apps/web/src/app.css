@@ -21,3 +21,9 @@ input, select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid #5b6472
 .also-here { display: flex; gap: 0.75rem; list-style: none; padding: 0; margin: 0.5rem 0; min-height: 1.5rem; font-weight: 600; }
 .selected-by { font-size: 0.8rem; font-weight: 600; margin-inline-start: 0.4rem; }
 .presence-cursor { position: absolute; pointer-events: none; transform: translate(4px, 4px); padding: 0 0.3rem; border-radius: 0 6px 6px 6px; color: #fff; font-size: 0.75rem; white-space: nowrap; }
+.ai-panel { display: grid; gap: 0.4rem; max-width: 40rem; margin-block: 1rem; }
+.ai-panel textarea { font: inherit; padding: 0.4rem; border: 1px solid #5b6472; border-radius: 4px; resize: vertical; }
+.ai-panel textarea:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
+.ai-actions { display: flex; gap: 0.5rem; }
+.ai-panel button:disabled { color: #5b6472; cursor: not-allowed; }
+#ai-status { margin: 0; min-height: 1.5rem; }

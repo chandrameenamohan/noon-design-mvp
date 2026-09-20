@@ -200,6 +200,11 @@ export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ V
     }
     return c.json(run, 201);
   });
+  app.post("/documents/:id/runs/:runId/cancel", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const run = doc && (await db.forOrg(doc.orgId).cancelRun(doc.id, c.req.param("runId")));
+    return run ? c.json(run) : notFound(c);
+  });
   app.get("/documents/:id/runs/:runId", async (c) => {
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     const run = doc && (await db.forOrg(doc.orgId).getRun(doc.id, c.req.param("runId")));

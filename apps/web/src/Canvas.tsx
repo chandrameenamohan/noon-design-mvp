@@ -3,6 +3,7 @@ import type { Doc, DocNode, Manifest, Op, Presence } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
+import { AiPanel } from "./AiPanel.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { usePeer } from "./usePeer.ts";
@@ -107,6 +108,7 @@ export function Canvas({ documentId }: { documentId: string }) {
       <div role="toolbar" aria-label="Add a component">
         {manifest.components.map((component) => <button key={component.name} type="button" onClick={() => { add(component); }}>Add {component.name}</button>)}
       </div>
+      <AiPanel documentId={documentId} />
       {refusals.map((refusal) => (
         <p key={refusal.id} role="alert" className="refusal">
           {sentenceFor(refusal.reason)} <button type="button" onClick={() => { dismiss(refusal.id); }}>Dismiss</button>

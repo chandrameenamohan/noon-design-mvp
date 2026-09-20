@@ -29,8 +29,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
   connectTimeoutMs?: number;
   /** The whole run, connect to last op. ponytail: one number for every run; per-org limits are F31 (E9). */
   runTimeoutMs?: number;
-}): (job: Job) => Promise<void> {
-  return async (job) => {
+}): (job: Job, cancelled: AbortSignal) => Promise<void> {
+  return async (job, cancelled) => {
     // Fail FAST and by name, before anything is connected or spent. A missing token does not make
     // the SDK throw: it answers with a polite "please log in", which would look like a run that
     // succeeded and did nothing (measured).
@@ -58,7 +58,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     let watchdog: NodeJS.Timeout | undefined;
     const ended = new Promise<never>((_, reject) => {
       const end = (reason: string): void => { reject(new JobFailure(reason)); };
-      stopping.addEventListener("abort", () => { end("worker_stopped"); }, { once: true, signal: abort.signal }); // SIGTERM: say so NOW, inside the shutdown deadline
+      stopping.addEventListener("abort", () => { end("worker_stopped"); }, { once: true, signal: abort.signal });
+      cancelled.addEventListener("abort", () => { end("cancelled"); }, { once: true, signal: abort.signal }); // F10: the ops already applied stay // SIGTERM: say so NOW, inside the shutdown deadline
       const deadline = Date.now() + runTimeoutMs;
       let silentSince = Date.now();
       watchdog = setInterval(() => {

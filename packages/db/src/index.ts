@@ -46,6 +46,8 @@ type JobStore = {
   finish(key: JobKey, status: "succeeded" | "failed" | "cancelled", reason?: string): Promise<void>;
   /** The oldest jobs still waiting, across ALL orgs: what the worker offers to the queue again. */
   queued(limit: number): Promise<JobKey[]>;
+  /** Has someone asked for this running job to stop? The worker asks once a second. */
+  cancelRequested(key: JobKey): Promise<boolean>;
 };
 
 type PageInput = { limit?: number; cursor?: string | undefined };
@@ -62,6 +64,8 @@ type OrgScope = {
   /** Undefined when the document does not exist in THIS org; "busy" when it already has an unfinished run. The run starts as `queued`. */
   createRun(input: { documentId: string; instruction: string; createdBy: string | undefined }): Promise<Run | "busy" | undefined>;
   getRun(documentId: string, id: string): Promise<Run | undefined>;
+  /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
+  cancelRun(documentId: string, id: string): Promise<Run | undefined>;
 };
 
 // Rows arrive as `any` from the driver. Each is parsed once, here, at the database boundary.
@@ -261,6 +265,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           orgId, jobId, status, status === "failed" ? (FailureReason.safeParse(reason).success ? reason : "internal") : null,
         ]);
       },
+      cancelRequested: async ({ jobId, orgId }) =>
+        isId(jobId) && isId(orgId) && (await pool.query("select 1 from jobs where org_id = $1 and id = $2 and cancel_requested_at is not null", [orgId, jobId])).rowCount === 1,
       queued: (limit) =>
         rows(
           z.object({ id: z.string(), org_id: z.string(), queue: z.literal("ai") }).transform((r) => ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
@@ -321,6 +327,20 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             throw err;
           }
         },
+        cancelRun: async (documentId, id) =>
+          orgExists && isId(documentId) && isId(id)
+            ? one(
+                RunRow,
+                // ONE statement decides by the status it finds, so a claim at the same moment cannot slip
+                // between "is it queued?" and "cancel it". A finished run matches nothing in the update
+                // and comes back as it is: cancelling twice, or too late, is not an error.
+                "with hit as (update jobs set cancel_requested_at = now(), status = case status when 'queued' then 'cancelled' else status end, " +
+                  "finished_at = case status when 'queued' then now() else finished_at end " +
+                  "where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai' and status in ('queued', 'running') returning *) " +
+                  "select * from hit union all select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai' and not exists (select 1 from hit)",
+                [orgId, documentId, id],
+              )
+            : undefined,
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)
             ? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id])

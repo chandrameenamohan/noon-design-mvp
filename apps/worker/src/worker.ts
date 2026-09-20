@@ -3,7 +3,8 @@ import type { Db, Job } from "@noon/db";
 import { connection, createProducer, describeError, JobRef, QUEUES, type QueueName } from "@noon/queue";
 
 /** One function per queue. It gets the job as Postgres has it, never what the queue message claims. */
-export type Handlers = Record<QueueName, (job: Job) => Promise<void>>;
+/** `cancelled` is aborted when the user asks for the job to stop (F10): end quickly, keep what was done. */
+export type Handlers = Record<QueueName, (job: Job, cancelled: AbortSignal) => Promise<void>>;
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */
@@ -19,12 +20,14 @@ export class JobFailure extends Error {
 const log = (level: "warn" | "error", message: string, extra: Record<string, unknown> = {}) =>
   process.stderr.write(`${JSON.stringify({ level, source: "worker", message, ...extra })}\n`);
 
-export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30_000, onAlive }: {
+export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30_000, cancelPollMs = 1000, onAlive }: {
   db: Db;
   redisUrl: string;
   prefix?: string;
   handlers: Handlers;
   sweepMs?: number;
+  /** How often a running job's row is asked "has someone cancelled you?". F10 allows 3 s in all. */
+  cancelPollMs?: number;
   /** Called after every sweep in which Postgres AND Redis answered: the container healthcheck hangs on it. */
   onAlive?: () => void;
 }): Promise<RunningWorker> {
@@ -37,14 +40,26 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
     // message finds nothing to claim and ends here, so a job runs at most once per claim.
     const job = await jobs.claim(ref);
     if (!job) return;
+    // ponytail: a poll per running job (a handful at most). Redis pub/sub if a second ever matters.
+    const cancel = new AbortController();
+    const watch = setInterval(() => {
+      jobs.cancelRequested(ref).then((asked) => { if (asked) cancel.abort(); }, () => undefined); // a failed look is tried again in a second
+    }, cancelPollMs);
     try {
-      await handlers[job.queue](job); // the row's queue, not the message's
-      await jobs.finish(ref, "succeeded");
+      await handlers[job.queue](job, cancel.signal); // the row's queue, not the message's
+      // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
+      await jobs.finish(ref, cancel.signal.aborted ? "cancelled" : "succeeded");
     } catch (err) {
+      if (cancel.signal.aborted) {
+        await jobs.finish(ref, "cancelled");
+        return;
+      }
       // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user
       // (finish() stores anything that is not a plain name as `internal`).
       log("error", describeError(err), { jobId: ref.jobId });
       await jobs.finish(ref, "failed", err instanceof JobFailure ? err.reason : "internal");
+    } finally {
+      clearInterval(watch);
     }
   }
 

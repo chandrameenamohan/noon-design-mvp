@@ -31,7 +31,7 @@ afterAll(async () => {
   await producer.close();
   await db.drop();
 });
-const work = async (sweepMs = 60_000) => (worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai: (job) => ai(job) }, sweepMs }));
+const work = async (sweepMs = 60_000) => (worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai: (job, cancelled) => ai(job, cancelled) }, sweepMs, cancelPollMs: 100 }));
 
 const as = (user: string, method: string, path: string, body?: unknown) =>
   fetch(`${api.url}${path}`, { method, headers: { "x-dev-user": user, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -214,4 +214,57 @@ test("a job of another queue neither stops the sweep nor can be started by a mes
   await producer.enqueue({ queue: "ai", jobId: git, orgId: doc.orgId });
   await new Promise((r) => setTimeout(r, 200));
   expect(await count("select count(*)::int as n from jobs where id = $1 and status = 'queued' and started_at is null", [git])).toBe(1);
+});
+
+// --- E3.3: cancel (F10) ---------------------------------------------------------------------------
+const cancel = (user: string, run: Run) => as(user, "POST", `/documents/${run.documentId}/runs/${run.id}/cancel`);
+
+test("cancelling a RUNNING run aborts its handler and ends it as `cancelled` within 3 s; cancelling again changes nothing", async () => {
+  await worker?.close();
+  await work(60_000);
+  const doc = await aDocument("ann@example.com");
+  let aborted = false;
+  ai = (_job, signal) => new Promise((_, reject) => { signal.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); }); });
+  const run = await startRun("ann@example.com", doc, "slow");
+  for (let i = 0; i < 100 && (await readRun("ann@example.com", run)).status !== "running"; i++) await new Promise((r) => setTimeout(r, 20));
+
+  const started = Date.now();
+  const res = await cancel("ann@example.com", run);
+  expect(res.status).toBe(200);
+  expect(Run.parse(await res.json()).status).toBe("running"); // asked, not yet done: the worker ends it
+  const done = await terminal("ann@example.com", run);
+  expect(Date.now() - started).toBeLessThan(3000);
+  expect(done).toMatchObject({ status: "cancelled", error: null });
+  expect(aborted).toBe(true);
+  expect(Run.parse(await (await cancel("ann@example.com", run)).json())).toEqual(done);
+  // The document is free again at once.
+  ai = record;
+  expect((await terminal("ann@example.com", await startRun("ann@example.com", doc, "next"))).status).toBe("succeeded");
+});
+
+test("cancelling a run that is still QUEUED ends it at once, and the worker never starts it", async () => {
+  await worker?.close();
+  worker = undefined;
+  const doc = await aDocument("ann@example.com");
+  aiCalls = [];
+  ai = record;
+  const run = await startRun("ann@example.com", doc, "never started");
+  expect(Run.parse(await (await cancel("ann@example.com", run)).json())).toMatchObject({ status: "cancelled", startedAt: null });
+  await work(50);
+  await new Promise((r) => setTimeout(r, 300));
+  expect(aiCalls).toEqual([]);
+  expect((await readRun("ann@example.com", run)).status).toBe("cancelled");
+});
+
+test("only a member can cancel, and only under the right document: everything else is the same 404", async () => {
+  const doc = await aDocument("ann@example.com");
+  const other = await aDocument("ann@example.com");
+  await worker?.close();
+  worker = undefined;
+  const run = await startRun("ann@example.com", doc, "mine");
+  for (const res of [await cancel("eve@example.com", run), await as("ann@example.com", "POST", `/documents/${other.id}/runs/${run.id}/cancel`), await as("ann@example.com", "POST", `/documents/${doc.id}/runs/${doc.id}/cancel`)]) {
+    expect(res.status).toBe(404);
+    expect(ErrorBody.parse(await res.json())).toEqual({ error: "not_found" });
+  }
+  expect((await readRun("ann@example.com", run)).status).toBe("queued");
 });
