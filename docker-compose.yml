@@ -93,6 +93,14 @@ services:
     environment:
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      # The AI peer joins documents like any other peer: it signs its own session (actor = agent)
+      # with the secret the sync server verifies, and dials sync INSIDE the Docker network.
+      SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+      SYNC_URL: "ws://sync:3001"
+      # The owner's `claude setup-token` value, from .env. Optional: without it every AI run fails at
+      # once as `token_missing`. ANTHROPIC_API_KEY must NOT be set here: the worker refuses to start.
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      AI_MODEL: "${AI_MODEL:-claude-opus-5}"
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }

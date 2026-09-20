@@ -38,7 +38,7 @@ export type DocumentStore = {
 
 type JobKey = { queue: "ai"; jobId: string; orgId: string };
 /** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
-export type Job = { id: string; orgId: string; documentId: string; queue: "ai"; input: Record<string, unknown> };
+export type Job = { id: string; orgId: string; documentId: string; queue: "ai"; input: Record<string, unknown>; /** Undefined once that user has been deleted. */ createdBy: string | undefined };
 type JobStore = {
   /** queued -> running, atomically. Undefined when there is nothing to claim: unknown, already claimed, finished, or a job of ANOTHER queue. */
   claim(key: JobKey): Promise<Job | undefined>;
@@ -81,8 +81,8 @@ const RunRow = z
   .transform((r): Run =>
     Run.parse({ id: r.id, orgId: r.org_id, documentId: r.document_id, status: r.status, instruction: r.input.instruction, error: r.error, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at }));
 const JobRow = z
-  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.literal("ai"), input: z.record(z.string(), z.unknown()) })
-  .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input }));
+  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.literal("ai"), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
+  .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const isId = (x: string): boolean => Id.safeParse(x).success;

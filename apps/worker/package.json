@@ -7,9 +7,15 @@
     "dev": "node --watch src/main.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.278",
+    "@noon/contracts": "workspace:^",
     "@noon/db": "workspace:^",
+    "@noon/design-system": "workspace:^",
+    "@noon/doc-model": "workspace:^",
+    "@noon/peer-client": "workspace:^",
     "@noon/process": "workspace:^",
     "@noon/queue": "workspace:^",
+    "@noon/session-token": "workspace:^",
     "bullmq": "^5.81.5",
     "zod": "^4.6.5"
   }

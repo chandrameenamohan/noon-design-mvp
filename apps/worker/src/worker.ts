@@ -9,8 +9,9 @@ export type RunningWorker = { close(): Promise<void> };
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */
 export class JobFailure extends Error {
   readonly reason: string;
-  constructor(reason: string) {
-    super(reason);
+  /** `detail` is for the LOG only (it may quote a provider's error); the user only ever sees `reason`. */
+  constructor(reason: string, detail?: string) {
+    super(detail === undefined ? reason : `${reason}: ${detail}`);
     this.reason = reason;
   }
 }

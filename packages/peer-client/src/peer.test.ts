@@ -295,3 +295,42 @@ test("after a reconnect we never see OURSELVES: the room may not know yet that o
   expect(peer.others.map((p) => p.name)).toEqual(["Ada"]);
   peer.close();
 });
+
+// --- E3.2: the per-op outcome ---------------------------------------------------------------------
+test("submit().settled resolves with what the SERVER decided about that op, and confirmed/seq show only what the server said", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  const server = net.sockets[0];
+  if (!server) throw new Error("unreachable");
+  const sentOp = (n: number) => JSON.parse(server.sent[n] ?? "null") as { opId: string; op: Op };
+
+  const first = peer.submit(add("a"));
+  const second = peer.submit(add("b"));
+  if (!first.ok || !second.ok) throw new Error("unreachable");
+  expect(peer.doc.nodes["a"]).toBeDefined(); // the guess
+  expect(peer.confirmed.nodes["a"]).toBeUndefined(); // not yet a fact
+  expect(peer.seq).toBe(0);
+
+  await until(() => server.sent.length === 2, "both ops on the wire");
+  server.say({ type: "op", seq: 1, opId: sentOp(0).opId, actor: { kind: "agent", id: "me", runId: "r" }, op: sentOp(0).op });
+  server.say({ type: "rejected", opId: sentOp(1).opId, reason: "document_limit" });
+  expect(await first.settled).toEqual({ ok: true, seq: 1 });
+  expect(await second.settled).toEqual({ ok: false, reason: "document_limit" });
+  expect(peer.confirmed.nodes["a"]).toBeDefined();
+  expect(peer.confirmed.nodes["b"]).toBeUndefined();
+  expect(peer.seq).toBe(1);
+
+  const same = peer.submit({ type: "set_prop", nodeId: "a", key: "gap", value: null }); // changes nothing: never sent
+  if (!same.ok) throw new Error("unreachable");
+  expect(await same.settled).toEqual({ ok: true });
+  expect(server.sent).toHaveLength(2);
+
+  const refusedHere = peer.submit(add("a")); // the replica itself says no: there is nothing to wait for
+  expect(refusedHere).toEqual({ ok: false, reason: "duplicate_node" });
+
+  const lost = peer.submit(add("c"));
+  if (!lost.ok) throw new Error("unreachable");
+  peer.close();
+  expect(await lost.settled).toEqual({ ok: false, reason: "connection_closed" });
+});

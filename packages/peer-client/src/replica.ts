@@ -4,11 +4,22 @@ import { applyOp, applyOpInto, checkDoc, emptyDoc, validate } from "@noon/doc-mo
 /** An op of ours that the server refused for good. `quiet`: nothing the user needs to hear about. */
 export type Rejection = { opId: string; op: Op; reason: RejectReason | "connection_closed"; quiet: boolean };
 
-/** What the caller must do after a message: frames to send, refusals to show, or "reconnect and start from a fresh welcome". */
-/** `fatal`: this server cannot be worked with; reconnecting would only repeat it. */
-export type Effects = { rejected: Rejection[]; resync: boolean; fatal?: "document_corrupt"; /** Send nothing for this long (the server's budget). */ pauseMs?: number };
+/**
+ * The end of the story for ONE op of ours. A person watches the canvas; a program (the AI worker's
+ * tool call, F11) needs an answer per op. `seq` is missing when the op was accepted but changed nothing.
+ */
+export type Outcome = { ok: true; seq?: number } | { ok: false; reason: Rejection["reason"] };
 
-export type LocalResult = { ok: true; opId: string } | { ok: false; reason: RejectReason | "not_ready" | "invalid_op" | "too_many_pending" };
+/**
+ * What the caller must do after a message: refusals to show, outcomes to hand to whoever is waiting,
+ * or "reconnect and start from a fresh welcome".
+ * `settled`: ops of ours whose fate is now final; an opId appears here at most once, ever.
+ * `fatal`: this server cannot be worked with; reconnecting would only repeat it.
+ * `pauseMs`: send nothing for this long (the server's budget).
+ */
+export type Effects = { rejected: Rejection[]; settled: { opId: string; outcome: Outcome }[]; resync: boolean; fatal?: "document_corrupt"; pauseMs?: number };
+
+export type LocalResult = { ok: true; opId: string; /** False: it changes nothing, so it was never queued and nobody will answer it. */ queued: boolean } | { ok: false; reason: RejectReason | "not_ready" | "invalid_op" | "too_many_pending" };
 
 /**
  * `inFlight`: on the wire of the CURRENT connection, not answered yet.
@@ -66,7 +77,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
     // client trusts no one: a cycle in here would send the first move_node check round for ever.
     if (checkDoc(doc).length > 0) {
       ready = false;
-      return { rejected: [], resync: false, fatal: "document_corrupt" };
+      return { rejected: [], settled: [], resync: false, fatal: "document_corrupt" };
     }
     confirmed = doc;
     seq = welcomeSeq;
@@ -80,11 +91,11 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
       each.inFlight = false;
     }
     rebuild();
-    return { rejected: [], resync: false };
+    return { rejected: [], settled: [], resync: false };
   }
 
   function onOp(message: Extract<ServerMessage, { type: "op" }>): Effects {
-    const effects: Effects = { rejected: [], resync: false };
+    const effects: Effects = { rejected: [], settled: [], resync: false };
     if (message.seq > seq + 1) return { ...effects, resync: true }; // we missed something: touch nothing, start again from a welcome
     // Ours only if the id AND the content match. The room keys its memory by sender, so another peer
     // can submit a different op under an opId of ours that it saw in a broadcast; if we had not heard
@@ -97,6 +108,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
     if (mineAt >= 0) {
       pending = pending.filter((_, i) => i !== mineAt);
       answered();
+      effects.settled.push({ opId: message.opId, outcome: { ok: true, seq: message.seq } });
     }
     if (message.seq <= seq) {
       // An answer to a resend, for an op the welcome ALREADY contains. Applying it again could
@@ -116,7 +128,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
   }
 
   function onRejected({ opId, reason, retryAfterMs }: Extract<ServerMessage, { type: "rejected" }>): Effects {
-    const effects: Effects = { rejected: [], resync: false };
+    const effects: Effects = { rejected: [], settled: [], resync: false };
     const mine = pending.find((each) => each.opId === opId);
     if (!mine) return effects;
 
@@ -150,11 +162,13 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
       }
       pending = pending.filter((each) => each !== mine);
       rebuild();
+      effects.settled.push({ opId, outcome: alreadyThere ? { ok: true } : { ok: false, reason } });
       return alreadyThere ? effects : { ...effects, rejected: [{ opId, op: mine.op, reason, quiet: false }] };
     }
 
     pending = pending.filter((each) => each !== mine);
     rebuild();
+    effects.settled.push({ opId, outcome: { ok: false, reason } });
     // "gone": someone removed the node first. The canvas already shows that; there is nothing to say.
     return { ...effects, rejected: [{ opId, op: mine.op, reason, quiet: reason === RejectReason.enum.gone }] };
   }
@@ -204,10 +218,10 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
       const verdict = validate(optimistic, op, manifest);
       if (!verdict.ok) return { ok: false, reason: verdict.reason };
       // An edit that changes nothing (a drag that ended where it began) is not worth a message.
-      if (!applyOpInto(optimistic, clientOp.data.op)) return { ok: true, opId: clientOp.data.opId };
+      if (!applyOpInto(optimistic, clientOp.data.op)) return { ok: true, opId: clientOp.data.opId, queued: false };
       revision++;
       pending.push({ ...clientOp.data, staleCount: 0, inFlight: false, maybeApplied: false });
-      return { ok: true, opId: clientOp.data.opId };
+      return { ok: true, opId: clientOp.data.opId, queued: true };
     },
 
     receive(message: DocMessage): Effects {
@@ -218,7 +232,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
         case "ack": {
           // The server found the op changed nothing: the wait is over, and so is our guess about it.
           const mine = pending.find((each) => each.opId === message.opId);
-          if (!mine) return { rejected: [], resync: false };
+          if (!mine) return { rejected: [], settled: [], resync: false };
           // BELIEVE it, even when the op would change the document we hold now. The room's verdict is
           // about the moment it first SAW the op; a resend is answered from its memory, by which time
           // someone may have written a newer value. Our edit was a no-op then, so the newer value
@@ -227,7 +241,7 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
           pending = pending.filter((each) => each !== mine);
           answered();
           rebuild();
-          return { rejected: [], resync: false };
+          return { rejected: [], settled: [{ opId: message.opId, outcome: { ok: true } }], resync: false };
         }
       }
     },

@@ -150,7 +150,8 @@ test("'stale': an op the document already shows is dropped quietly", () => {
   applyOpInto(server, add("a"));
   replica.receive({ type: "welcome", doc: server, seq: 9 });
   const effects = replica.receive({ type: "rejected", opId: out.opId, reason: "stale" });
-  expect(effects).toEqual({ rejected: [], resync: false });
+  expect(effects).toMatchObject({ rejected: [], resync: false });
+  expect(effects.settled).toMatchObject([{ outcome: { ok: true } }]); // it IS there: for whoever waits on it, that is success
   expect(replica.pending).toHaveLength(0);
 });
 
@@ -247,7 +248,7 @@ test("'rate_limited': the op stays, sending pauses, then it and everything after
   const [a, b, c] = [sent(replica, add("a")), sent(replica, add("b")), sent(replica, add("c"))];
   replica.receive(ack(1, a));
   const effects = replica.receive({ type: "rejected", opId: b.opId, reason: "rate_limited", retryAfterMs: 120 });
-  expect(effects).toEqual({ rejected: [], resync: false, pauseMs: 120 });
+  expect(effects).toEqual({ rejected: [], settled: [], resync: false, pauseMs: 120 });
   replica.receive({ type: "rejected", opId: c.opId, reason: "rate_limited", retryAfterMs: 1 });
   expect(replica.doc.nodes["c"]).toBeDefined(); // still shown: it is late, not refused
   expect(replica.takeSendable()).toEqual([b]); // carefully: one first
@@ -360,4 +361,25 @@ test.each(Array.from({ length: 60 }, (_, i) => i + 1))("rebase property, seed %i
   while (inFlight.length > 0) deliver(true);
   expect(replica.pending).toHaveLength(0);
   expect(replica.doc).toEqual(server);
+});
+
+// --- E3.2: every op of ours gets exactly ONE outcome (the AI worker turns it into a tool result) ---
+test("each op of ours is reported settled exactly once: applied with its seq, a no-op, refused, or lost", () => {
+  const replica = ready();
+  const a = sent(replica, text("a", "hello"));
+  expect(replica.receive(ack(1, a)).settled).toEqual([{ opId: a.opId, outcome: { ok: true, seq: 1 } }]);
+  expect(replica.receive(ack(1, a)).settled).toEqual([]); // a repeated answer settles nothing twice
+
+  const noop = sent(replica, setText("a", "x")); // the room may find it changes nothing by the time it arrives
+  expect(replica.receive({ type: "ack", opId: noop.opId }).settled).toEqual([{ opId: noop.opId, outcome: { ok: true } }]);
+
+  const bad = sent(replica, add("b"));
+  expect(replica.receive({ type: "rejected", opId: bad.opId, reason: "document_limit" }).settled).toEqual([{ opId: bad.opId, outcome: { ok: false, reason: "document_limit" } }]);
+  const gone = sent(replica, add("c"));
+  expect(replica.receive({ type: "rejected", opId: gone.opId, reason: "gone" }).settled).toEqual([{ opId: gone.opId, outcome: { ok: false, reason: "gone" } }]); // quiet for a person, but a tool call must hear it
+
+  const slow = sent(replica, add("d"));
+  expect(replica.receive({ type: "rejected", opId: slow.opId, reason: "rate_limited", retryAfterMs: 5 }).settled).toEqual([]); // not an outcome: it goes out again
+  expect(replica.receive(remote(2, add("z"))).settled).toEqual([]); // someone else's op is not ours to settle
+  expect(replica.abandon()).toMatchObject([{ opId: slow.opId, reason: "connection_closed" }]);
 });

@@ -1,7 +1,10 @@
 import { ServerMessage, type ClientMessage, type Doc, type Presence, type Manifest, type Op } from "@noon/contracts";
-import { createReplica, type LocalResult, type Rejection } from "./replica.ts";
+import { createReplica, type LocalResult, type Outcome, type Rejection } from "./replica.ts";
 
-export type { Rejection };
+export type { Outcome, Rejection };
+
+/** What submit() gives back: the replica's own verdict now, and for an accepted op the server's verdict later. `settled` never rejects. */
+export type Submitted = { ok: true; opId: string; settled: Promise<Outcome> } | Extract<LocalResult, { ok: false }>;
 
 /** connecting: opening, or waiting for the welcome. live: edits flow. offline: will retry. closed: will not. */
 export type PeerStatus = "connecting" | "live" | "offline" | "closed";
@@ -54,6 +57,13 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     clearTimeout(pauseTimer);
     pauseTimer = undefined;
     lastHeard = Date.now(); // the silence during a pause was ours, not the server's
+  };
+
+  // Whoever asked about an op's fate (submit().settled). Only ops still unanswered are in here.
+  const waiting = new Map<string, (outcome: Outcome) => void>();
+  const settle = (opId: string, outcome: Outcome): void => {
+    waiting.get(opId)?.(outcome);
+    waiting.delete(opId);
   };
 
   const setStatus = (next: PeerStatus): void => {
@@ -111,7 +121,10 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     socket = undefined; // its close event must not start a reconnect
     old?.close();
     // Whatever is still unsent never will be. Say so, instead of showing edits that no longer exist anywhere.
-    for (const rejection of replica.abandon()) onRejected?.(rejection);
+    for (const rejection of replica.abandon()) {
+      settle(rejection.opId, { ok: false, reason: rejection.reason });
+      onRejected?.(rejection);
+    }
     setStatus("closed");
     onChange?.();
   }
@@ -187,6 +200,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
       setStatus("live");
     }
     if (message.type === "welcome") sendOwn();
+    for (const { opId, outcome } of effects.settled) settle(opId, outcome);
     for (const rejection of effects.rejected) onRejected?.(rejection);
     // The picture changed, or what is still unsaved did (an acknowledgement changes only that).
     if (replica.revision !== revisionBefore || replica.pendingCount !== pendingBefore) onChange?.();
@@ -272,17 +286,20 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     },
 
     /** Make an edit. Shown at once; sent now, or after the next welcome if we are not live. */
-    submit(op: Op): LocalResult {
+    submit(op: Op): Submitted {
       const waitingBefore = replica.pendingCount;
       const result = replica.local(op);
-      if (result.ok) {
-        if (waitingBefore === 0 && replica.pendingCount === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
-        flush();
-        onChange?.();
-      }
-      return result;
+      if (!result.ok) return result;
+      // An edit that changes nothing is never sent, so nobody will answer it: it is settled already.
+      const settled = result.queued ? new Promise<Outcome>((resolve) => waiting.set(result.opId, resolve)) : Promise.resolve<Outcome>({ ok: true });
+      if (waitingBefore === 0 && replica.pendingCount === 1) lastHeard = Date.now(); // the silence clock starts with the first thing we wait for
+      flush();
+      onChange?.();
+      return { ok: true, opId: result.opId, settled };
     },
-
+    /** What the SERVER has said, in its order, and how far. Codegen and the git peer project from this, never from the guess. */
+    get confirmed(): Doc { return replica.confirmed; },
+    get seq(): number { return replica.seq; },
     close(): void { finish("closed_by_caller"); },
   };
 }
