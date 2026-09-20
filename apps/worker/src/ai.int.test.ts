@@ -163,3 +163,19 @@ test("hostile or sloppy arguments: a `__proto__` prop is refused (not silently d
   expect(results[1]?.ok).toBe(true);
   expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
 });
+
+// Found by the E3.2 re-verify: the wait for "live" polled every 20 ms and nobody stopped it. A run that
+// ended BEFORE its peer connected (sync down at the start) left that loop ticking for the life of the worker.
+test("a run that ends before its peer ever connects leaves no timer behind", async () => {
+  const handler = createAiHandler({ ...base(), sessions: { secret: TEST_SECRET, syncUrl: "ws://127.0.0.1:1" }, connectTimeoutMs: 150, runAgent: forever });
+  await expect(handler(job())).rejects.toMatchObject({ reason: "sync_unreachable" });
+  const real = globalThis.setTimeout;
+  let scheduled = 0;
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => { scheduled++; return real(...args); }) as typeof setTimeout;
+  try {
+    await new Promise((r) => real(r, 300));
+  } finally {
+    globalThis.setTimeout = real;
+  }
+  expect(scheduled).toBe(0);
+});

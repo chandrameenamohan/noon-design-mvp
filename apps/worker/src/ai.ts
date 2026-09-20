@@ -72,7 +72,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     ended.catch(() => undefined); // when the agent finishes first, nobody is left to hear this one
     try {
       const live = (async () => {
-        while (peer.status !== "live") await new Promise((r) => setTimeout(r, 20));
+        // `!abort.signal.aborted`: when the run ends first, this wait must end too (it ticked for ever: a closed peer is never "live").
+        while (peer.status !== "live" && !abort.signal.aborted) await new Promise((r) => setTimeout(r, 20));
       })();
       await Promise.race([live, ended]);
       peer.setPresence({ cursor: null, selection: null }); // no pointer, but it tells the people already here that the AI has arrived
