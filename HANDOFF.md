@@ -1,6 +1,6 @@
 # HANDOFF: Noon-like MVP
 
-Written 2026-09-20 at commit `0f7320f` (plus this file). Read this first in a new session, then run
+Written 2026-09-20 at commit `0f7320f`, updated at `2e00802` (end of epic 3). Read this first in a new session, then run
 `bd prime`. Everything here is either a decision the user made or a fact about the repo; where a
 file is the source of truth, this points at it instead of repeating it.
 
@@ -63,19 +63,33 @@ written. The user reads lessons at their own pace. Their last standing instructi
 Helper used all session:
 `K() { python3 -c "import json;print(json.load(open('.beads/key-map.json'))['$1'])"; }` then `bd show $(K E3.1)`.
 
-## 4. State: epics 0, 1 and 2 are DONE
+## 4. State: epics 0, 1, 2 and 3 are BUILT
 
-62 beads. Closed: E0.H, E1.1-E1.5, E1.H, E2.1a, E2.1b, E2.2a, E2.2b, E2.3a, E2.3b, E2.4, E2.5a,
-E2.5b, E2.6, E2.8, E2.9, E2.H, and the three epics. `make check` is green at HEAD. The only
-uncommitted change when this was written is `.beads/interactions.jsonl` (bd's own log; commit it
-with the next commit).
+`make check` is green at HEAD. Epic 3's work is finished, reviewed and verified, but E3.2, E3.3,
+E3.4 and E3.H are **still open in bd for ONE reason**: the live check
+`node scripts/live-agent.ts` cannot pass, because `CLAUDE_CODE_OAUTH_TOKEN` in `.env` is rejected
+by the provider (401, on the host as well as in the container). Every real run ends
+`failed / token_invalid`, which is the designed answer. **Ask the owner to run `claude setup-token`
+and put the value in `.env`**, then:
+
+```
+docker compose up -d worker && node scripts/live-agent.ts   # expect: outcome ok
+bd close <E3.2> <E3.3> <E3.4> <E3.H> and the epic
+```
+
+Everything else in epic 3 is done: each bead has a STATUS note saying so, and `bd memories e3-`
+holds its lessons (e3-1-jobs-queue-worker, e3-2-ai-peer, e3-3-instruction-cancel, e3-4-usage,
+e3-h-lesson-3).
 
 Lessons published (private to the user):
 - 0001 HLD: https://claude.ai/artifact/J2DVNLFHkKrLPwLyghFBc4
 - Lesson 0 (TS primer): https://claude.ai/artifact/3qLjxgH6vjT2bUnEa52omY
 - Lesson 1 (epic 1): https://claude.ai/artifact/TkBHmpDAedwZNEmFrFWqpV
 - Lesson 2 (epic 2): https://claude.ai/artifact/WCwLXNrjZJ1qX7knksdipw
-- PDFs: `docs/handbook/lesson-{0,1,2}.pdf`. Drills for lessons 1 and 2 are RED on purpose.
+- Lesson 3 (epic 3): https://claude.ai/artifact/Qio1tZn6jkECjtZop15Uq7
+- Note (not a lesson): multiplayer approaches compared, https://claude.ai/artifact/DNmGqNoLDGLtJBNEGaoFEF
+- PDFs: `docs/handbook/lesson-{0,1,2,3}.pdf` and `notes-multiplayer-approaches.pdf`.
+  Drills for lessons 1, 2 and 3 are RED on purpose.
 
 ### What exists (one line each)
 
@@ -145,24 +159,30 @@ Environment facts: `docker` is not on PATH (use `/Applications/Docker.app/Conten
 Postgres runs in compose and integration + e2e tests need it (`./init.sh` boots everything);
 `pnpm exec` runs from the repo root; `tsc` with file args needs `--ignoreConfig`.
 
-## 6. NEXT: epic 3, the AI agent peer
+## 6. NEXT: epic 4, code projection and the sandbox
 
-Order: **E3.1** (Redis joins the dev environment) -> **E3.2** (the AI peer runs the Agent SDK
-isolated to our tools: four ops, read tree, read manifest) -> **E3.3** (a user types an
-instruction) -> **E3.4** (tokens and cost stored against the org) -> **E3.H** (Lesson 3 + PDF +
-drills). Read each bead with `bd show $(K E3.x)`; BEADS.md has acceptance and check names.
+Epic 3 is built (see section 4 for the one credential that blocks its beads from closing).
 
-Notes already waiting on E3.2 (from epic 2 reviews), in short:
-- peer-client needs a per-op outcome for the agent: `submit()` -> `{ ok, opId, settled: Promise<...> }`
-  (F11: an invalid AI op must come back as a TOOL ERROR). Also expose `confirmed` and `seq`
-  (codegen in E4 and the git peer in E5 must project from CONFIRMED, not optimistic).
-- The room's budget is per (kind, id, runId): cap concurrent runs per user here.
-- An agent has no `nam` claim; the canvas falls back to `actor.kind`. Nothing tests that yet.
-- The agent must edit through `@noon/peer-client` like everyone else (single write path).
-- From the agent-sdk learning test (SPEC §2a): `z.record` in a tool schema silently empties the
-  WHOLE MCP server's tool list. Props are `z.object({}).catchall(...)` for that reason.
-- Default to the latest models when wiring the SDK (Opus 5 `claude-opus-5`, Sonnet 5, Haiku 4.5);
-  use the `claude-api` skill for SDK details instead of guessing.
+What epic 3 added, in one line each:
+- `packages/queue`: BullMQ producer; a message carries only `{queue, jobId, orgId}`; `enqueue` and
+  `ping` have deadlines (ioredis never settles when Redis is away).
+- `packages/db`: `jobs` (the run IS the row; CHECK constraints carry the state machine; one
+  unfinished AI run per document as a partial unique index) and `usage` (its own table: billing
+  outlives the document). `jobStore` = claim / finish / queued / cancelRequested / recordUsage.
+- `apps/worker`: `worker.ts` (claim, cancel poll, record usage, finish, sweep), `ai.ts` (the run,
+  raced against one `ended` promise: `timed_out` / `sync_unreachable` / `worker_stopped` /
+  `cancelled`), `sdk.ts` (the Agent SDK with a capability ceiling + `checkInit` + `wrapInstruction`),
+  `tools.ts` (six tools over `peer.submit` + `await settled`).
+- `apps/api`: `POST /documents/:id/runs`, `GET .../runs/:runId`, `POST .../runs/:runId/cancel`,
+  `GET /orgs/:orgId/usage`.
+- `packages/peer-client`: `submit()` returns `{ ok, opId, settled }`, one outcome per op, exactly
+  once (the simulator asserts it); `confirmed` and `seq` are exposed for codegen (E4) and git (E5).
+- `apps/web`: the AI panel. `e2e/stub-worker.ts`: the real pipeline with a scripted model.
+
+Read `bd show $(K E4.1)` and BEADS.md for the order. Notes already waiting on later beads:
+E9.5 (usage only for finished runs; token and cost scopes differ; no periods), E8.2 (a viewer can
+start a run and read the org's costs), E9.6 (per-org fairness, a reaper for jobs left `running`),
+E3.2 (a run that hits the budget cap reports `agent_failed`, should be `budget_exceeded`).
 
 Then epics 4 (codegen + sandbox), 5 (git peer + ship), 6 (journal + snapshots), 7 (multi-node with
 fencing), 8 (auth, RBAC, audit), 9 (job hardening), Z (SPEC §8 scenario + the local Antithesis-style
