@@ -66,6 +66,13 @@ test("a run created through the api reaches `succeeded` through the worker, havi
   expect(done.startedAt).not.toBeNull();
   expect(done.finishedAt).not.toBeNull();
   expect(aiCalls).toEqual(["add a payment card\nwith a Pay button"]);
+
+  // That run was found by the worker's startup sweep. This one can only arrive through the api's own
+  // enqueue: the next sweep is a minute away.
+  aiCalls = [];
+  const live = await terminal("ann@example.com", await startRun("ann@example.com", doc, "delivered live"));
+  expect(live.status).toBe("succeeded");
+  expect(aiCalls).toEqual(["delivered live"]);
   // Zero ops: the document is exactly as it was created.
   expect(await count("select count(*)::int as n from documents where id = $1 and seq = 0 and content is null", [doc.id])).toBe(1);
 });
@@ -148,10 +155,10 @@ test("eight claims racing for one job: exactly one wins, and a late report canno
   worker = undefined;
   const doc = await aDocument("ann@example.com");
   const run = await db.db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction: "race", createdBy: undefined });
-  if (!run) throw new Error("unreachable");
-  const key = { jobId: run.id, orgId: run.orgId };
+  if (run === undefined || run === "busy") throw new Error("unreachable");
+  const key = { queue: "ai" as const, jobId: run.id, orgId: run.orgId };
   const jobs = db.db.jobStore();
-  expect(await jobs.claim({ jobId: run.id, orgId: doc.id })).toBeUndefined(); // the wrong org names nothing
+  expect(await jobs.claim({ ...key, orgId: doc.id })).toBeUndefined(); // the wrong org names nothing
   const claims = await Promise.all(Array.from({ length: 8 }, () => jobs.claim(key)));
   expect(claims.filter(Boolean)).toEqual([{ id: run.id, orgId: run.orgId, documentId: doc.id, queue: "ai", input: { instruction: "race" } }]);
 
@@ -161,4 +168,50 @@ test("eight claims racing for one job: exactly one wins, and a late report canno
   await jobs.finish(key, "failed", "late");
   expect(await jobs.claim(key)).toBeUndefined();
   expect(await readRun("ann@example.com", run)).toEqual(done);
+});
+
+test("a reason that is not a plain name never reaches the user, and cannot leave the job running", async () => {
+  await work(60_000);
+  const doc = await aDocument("ann@example.com");
+  for (const bad of ["Request req_123 to https://api.example.com failed: prompt was 'secret'", `nul${String.fromCharCode(0)}byte`, "", "x".repeat(300)]) {
+    ai = () => Promise.reject(new JobFailure(bad));
+    expect(await terminal("ann@example.com", await startRun("ann@example.com", doc, "x")), JSON.stringify(bad)).toMatchObject({ status: "failed", error: "internal" });
+  }
+});
+
+test("a document has one unfinished run at a time: the second is a 409, and a finished run frees the document", async () => {
+  const doc = await aDocument("ann@example.com");
+  let release = (): void => undefined;
+  ai = () => new Promise<void>((resolve) => { release = resolve; });
+  const first = await startRun("ann@example.com", doc, "slow");
+  const racing = await Promise.all(Array.from({ length: 5 }, () => as("ann@example.com", "POST", `/documents/${doc.id}/runs`, { instruction: "me too" })));
+  for (const res of racing) {
+    expect(res.status).toBe(409);
+    expect(ErrorBody.parse(await res.json())).toEqual({ error: "run_in_progress" });
+  }
+  expect(await count("select count(*)::int as n from jobs where document_id = $1", [doc.id])).toBe(1);
+  // Another document is not held up by this one.
+  ai = record;
+  expect((await terminal("ann@example.com", await startRun("ann@example.com", await aDocument("ann@example.com"), "elsewhere"))).status).toBe("succeeded");
+  release();
+  expect((await terminal("ann@example.com", first)).status).toBe("succeeded");
+  expect((await as("ann@example.com", "POST", `/documents/${doc.id}/runs`, { instruction: "next" })).status).toBe(201);
+});
+
+test("a job of another queue neither stops the sweep nor can be started by a message on the ai queue", async () => {
+  await worker?.close();
+  worker = undefined;
+  ai = record;
+  const doc = await aDocument("ann@example.com");
+  // Older than everything else, so it sorts first in the sweep.
+  const git = ((await db.rawQuery("insert into jobs (org_id, document_id, queue, input, created_at) values ($1, $2, 'git', '{}', now() - interval '1 day') returning id", [doc.orgId, doc.id])) as { rows: { id: string }[] }).rows[0]?.id ?? "";
+  const lost = await db.db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction: "behind a git job", createdBy: undefined });
+  if (lost === undefined || lost === "busy") throw new Error("unreachable");
+  await work(50);
+  expect((await terminal("ann@example.com", lost)).status).toBe("succeeded");
+
+  expect(await db.db.jobStore().claim({ queue: "ai", jobId: git, orgId: doc.orgId })).toBeUndefined();
+  await producer.enqueue({ queue: "ai", jobId: git, orgId: doc.orgId });
+  await new Promise((r) => setTimeout(r, 200));
+  expect(await count("select count(*)::int as n from jobs where id = $1 and status = 'queued' and started_at is null", [git])).toBe(1);
 });

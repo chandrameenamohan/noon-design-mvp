@@ -16,7 +16,7 @@ import {
   type User,
 } from "@noon/contracts";
 import type { Db } from "@noon/db";
-import type { JobRef } from "@noon/queue";
+import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
 import type { SessionConfig } from "./config.ts";
 import type { Identify } from "./identity.ts";
@@ -24,7 +24,7 @@ import type { Identify } from "./identity.ts";
 const MAX_BODY_BYTES = 64 * 1024;
 
 type ErrorCode = ErrorBody["error"];
-const fail = (c: Context, status: 400 | 401 | 404 | 413 | 415 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
+const fail = (c: Context, status: 400 | 401 | 404 | 409 | 413 | 415 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
 
@@ -182,6 +182,7 @@ export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ V
     } satisfies SessionResponse);
   });
 
+  // MEMBERSHIP ONLY, like the org routes above: a viewer can start a run until E8.2 enforces roles here too.
   // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look.
   app.post("/documents/:id/runs", async (c) => {
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
@@ -189,12 +190,13 @@ export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ V
     const { instruction } = await body(c, CreateRunBody);
     const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id });
     if (!run) return notFound(c); // the document was deleted in between
+    if (run === "busy") return fail(c, 409, "run_in_progress");
     try {
       await enqueue({ queue: "ai", jobId: run.id, orgId: run.orgId });
     } catch (err) {
       // Still a 201: the run exists and the worker's sweep will pick it up. Failing the request would
       // invite a retry, and a second run (idempotency keys are E9).
-      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${err instanceof Error ? err.message : String(err)}` })}\n`);
+      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
     }
     return c.json(run, 201);
   });

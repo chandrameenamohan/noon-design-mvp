@@ -61,7 +61,7 @@ test("two processes migrating a fresh database at the same moment both succeed",
     const other = createDb({ connectionString: TEST_DATABASE_URL, schema: fresh.schema });
     try {
       await Promise.all([fresh.db.migrate(), other.migrate()]);
-      expect(await fresh.db.appliedMigrations()).toEqual(["0001_init.sql", "0002_memberships_user_id.sql", "0003_document_content.sql", "0004_jobs.sql"]);
+      expect(await fresh.db.appliedMigrations()).toEqual(["0001_init.sql", "0002_memberships_user_id.sql", "0003_document_content.sql", "0004_jobs.sql", "0005_jobs_review.sql"]);
     } finally {
       await other.close();
       await fresh.drop();
@@ -76,4 +76,31 @@ test("when Postgres kills an idle connection the process survives and the next q
   );
   await new Promise((r) => setTimeout(r, 200)); // let the pool notice; an unhandled 'error' would fail this test run
   expect(await t.db.forOrg(org.id).listWorkspaces()).toMatchObject({ items: [] });
+});
+
+// From the E3.1 review: the jobs migration's promises, proven against the DATABASE with raw SQL.
+test("the database itself refuses a half-finished, mislabelled or cross-org job, and a second unfinished AI run on one document", async () => {
+  const mine = await t.createOrg("Jobs");
+  const theirs = await t.createOrg("Other");
+  const ws = await t.db.forOrg(mine.id).createWorkspace({ name: "ws" });
+  const doc = await t.db.forOrg(mine.id).createDocument({ workspaceId: ws.id, title: "doc" });
+  if (!doc) throw new Error("unreachable");
+  const insert = (columns: string, values: string, orgId = mine.id) =>
+    t.rawQuery(`insert into jobs (org_id, document_id, queue, input${columns}) values ($1, $2, 'ai', '{"instruction":"x"}'${values})`, [orgId, doc.id]);
+
+  await expect(insert("", "", theirs.id)).rejects.toMatchObject({ code: "23503" }); // another org's document
+  await expect(t.rawQuery("insert into jobs (org_id, document_id, queue, input) values ($1, $2, 'mail', '{}')", [mine.id, doc.id])).rejects.toMatchObject({ code: "23514" });
+  await expect(insert(", status", ", 'succeeded'")).rejects.toMatchObject({ code: "23514" }); // finished, but when?
+  await expect(insert(", status, finished_at", ", 'failed', now()")).rejects.toMatchObject({ code: "23514" }); // failed, but why?
+  await expect(insert(", status, finished_at, error", ", 'succeeded', now(), 'oops'")).rejects.toMatchObject({ code: "23514" });
+  await expect(insert(", finished_at", ", now()")).rejects.toMatchObject({ code: "23514" }); // queued, yet finished
+  for (const reason of ["Has Spaces", "x".repeat(65), "9starts_with_digit", "stack at /repo/x.ts:1"]) {
+    await expect(t.rawQuery("insert into jobs (org_id, document_id, queue, input, status, finished_at, error) values ($1, $2, 'ai', '{}', 'failed', now(), $3)", [mine.id, doc.id, reason]), reason).rejects.toMatchObject({ code: "23514" });
+  }
+
+  await insert(", status, finished_at, error", ", 'failed', now(), 'token_missing'"); // finished runs do not count
+  await insert("", "");
+  await expect(insert("", "")).rejects.toMatchObject({ code: "23505" });
+  await expect(insert(", status, started_at", ", 'running', now()")).rejects.toMatchObject({ code: "23505" });
+  await t.rawQuery("insert into jobs (org_id, document_id, queue, input) values ($1, $2, 'git', '{}')", [mine.id, doc.id]); // other queues are not held up by an AI run
 });

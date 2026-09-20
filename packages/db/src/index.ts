@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { CreateRunBody, Doc, Document, Id, Name, Org, Run, User, Workspace, type Page } from "@noon/contracts";
+import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Run, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -36,16 +36,16 @@ export type DocumentStore = {
   save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
 };
 
-type JobKey = { jobId: string; orgId: string };
+type JobKey = { queue: "ai"; jobId: string; orgId: string };
 /** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
 export type Job = { id: string; orgId: string; documentId: string; queue: "ai"; input: Record<string, unknown> };
 type JobStore = {
-  /** queued -> running, atomically. Undefined when there is nothing to claim: unknown, already claimed, or finished. */
+  /** queued -> running, atomically. Undefined when there is nothing to claim: unknown, already claimed, finished, or a job of ANOTHER queue. */
   claim(key: JobKey): Promise<Job | undefined>;
-  /** running -> a terminal status. `reason` is required for `failed` and is what the user will read. */
+  /** running -> a terminal status. `reason` is what the user will read: anything that is not a plain name is stored as `internal`. */
   finish(key: JobKey, status: "succeeded" | "failed" | "cancelled", reason?: string): Promise<void>;
   /** The oldest jobs still waiting, across ALL orgs: what the worker offers to the queue again. */
-  queued(limit: number): Promise<({ queue: "ai" } & JobKey)[]>;
+  queued(limit: number): Promise<JobKey[]>;
 };
 
 type PageInput = { limit?: number; cursor?: string | undefined };
@@ -59,8 +59,8 @@ type OrgScope = {
   createDocument(input: { workspaceId: string; title: string }): Promise<Document | undefined>;
   listDocuments(workspaceId: string, page?: PageInput): Promise<Page<Document> | undefined>;
   getDocument(id: string): Promise<Document | undefined>;
-  /** Undefined when the document does not exist in THIS org. The run starts as `queued`. */
-  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined }): Promise<Run | undefined>;
+  /** Undefined when the document does not exist in THIS org; "busy" when it already has an unfinished run. The run starts as `queued`. */
+  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined }): Promise<Run | "busy" | undefined>;
   getRun(documentId: string, id: string): Promise<Run | undefined>;
 };
 
@@ -247,21 +247,25 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     }),
 
     jobStore: () => ({
-      claim: async ({ jobId, orgId }) =>
+      // `queue = $3`: the message says which queue it came from, the ROW says which queue the job is
+      // on, and they must agree BEFORE anything is written. Without it, a message on the ai queue that
+      // names a git job would mark it running and then fail to parse it: running for ever.
+      claim: async ({ queue, jobId, orgId }) =>
         isId(jobId) && isId(orgId)
-          ? one(JobRow, "update jobs set status = 'running', started_at = now() where org_id = $1 and id = $2 and status = 'queued' returning *", [orgId, jobId])
+          ? one(JobRow, "update jobs set status = 'running', started_at = now() where org_id = $1 and id = $2 and queue = $3 and status = 'queued' returning *", [orgId, jobId, queue])
           : undefined,
       async finish({ jobId, orgId }, status, reason) {
         if (!isId(jobId) || !isId(orgId)) return;
         // `status = 'running'`: a finished job stays finished, whoever reports late.
         await pool.query("update jobs set status = $3, error = $4, finished_at = now() where org_id = $1 and id = $2 and status = 'running'", [
-          orgId, jobId, status, status === "failed" ? (reason ?? "internal").slice(0, 200) || "internal" : null,
+          orgId, jobId, status, status === "failed" ? (FailureReason.safeParse(reason).success ? reason : "internal") : null,
         ]);
       },
       queued: (limit) =>
         rows(
           z.object({ id: z.string(), org_id: z.string(), queue: z.literal("ai") }).transform((r) => ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
-          "select id, org_id, queue from jobs where status = 'queued' order by created_at limit $1",
+          // Only the queues this code knows: the day `git` jobs exist, one of them must not stop the AI sweep for every org.
+          "select id, org_id, queue from jobs where status = 'queued' and queue = 'ai' order by created_at, id limit $1",
           [limit],
         ),
     }),
@@ -304,12 +308,18 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         createRun: async ({ documentId, instruction, createdBy }) => {
           const input = CreateRunBody.parse({ instruction }); // the same contract the reader uses, BEFORE the write
           if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
-          return one(
-            RunRow,
-            // insert ... select: the row is only created if the document exists in this org.
-            "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *",
-            [orgId, documentId, JSON.stringify(input), createdBy ?? null],
-          );
+          try {
+            return await one(
+              RunRow,
+              // insert ... select: the row is only created if the document exists in this org.
+              "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *",
+              [orgId, documentId, JSON.stringify(input), createdBy ?? null],
+            );
+          } catch (err) {
+            // The unique index IS the check: "count, then insert" would let two requests at the same moment both in.
+            if (err instanceof Error && "constraint" in err && err.constraint === "jobs_one_unfinished_run_per_document") return "busy";
+            throw err;
+          }
         },
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)

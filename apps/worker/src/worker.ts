@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import type { Db, Job } from "@noon/db";
-import { connection, createProducer, JobRef, QUEUES, type QueueName } from "@noon/queue";
+import { connection, createProducer, describeError, JobRef, QUEUES, type QueueName } from "@noon/queue";
 
 /** One function per queue. It gets the job as Postgres has it, never what the queue message claims. */
 export type Handlers = Record<QueueName, (job: Job) => Promise<void>>;
@@ -24,7 +24,7 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
   prefix?: string;
   handlers: Handlers;
   sweepMs?: number;
-  /** Called after every sweep that reached both stores: the container healthcheck hangs on it. */
+  /** Called after every sweep in which Postgres AND Redis answered: the container healthcheck hangs on it. */
   onAlive?: () => void;
 }): Promise<RunningWorker> {
   const jobs = db.jobStore();
@@ -37,11 +37,12 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
     const job = await jobs.claim(ref);
     if (!job) return;
     try {
-      await handlers[ref.queue](job);
+      await handlers[job.queue](job); // the row's queue, not the message's
       await jobs.finish(ref, "succeeded");
     } catch (err) {
-      // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user.
-      log("error", err instanceof Error ? err.message : String(err), { jobId: ref.jobId });
+      // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user
+      // (finish() stores anything that is not a plain name as `internal`).
+      log("error", describeError(err), { jobId: ref.jobId });
       await jobs.finish(ref, "failed", err instanceof JobFailure ? err.reason : "internal");
     }
   }
@@ -50,26 +51,25 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
   // Retries, heartbeats and resuming stale jobs are E9 (F28).
   const workers = QUEUES.map((name) => {
     const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: 4, ...scoped });
-    worker.on("error", (err) => log("warn", err.message, { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
+    worker.on("error", (err) => log("warn", describeError(err), { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
     return worker;
   });
   await Promise.all(workers.map((w) => w.waitUntilReady()));
 
   // Redis is not the truth (SPEC §2.9): it can be flushed, and the api can die between its INSERT
   // and its enqueue. Whatever Postgres still calls `queued` is offered again; jobId + claim() make
-  // a second offer harmless. ponytail: a poll; LISTEN/NOTIFY or an outbox if 30 s is ever too slow.
+  // a second offer harmless. ponytail: a poll; LISTEN/NOTIFY or an outbox if `sweepMs` is ever too slow.
   const producer = createProducer({ redisUrl, ...scoped });
-  let sweeping = false;
-  async function sweep(): Promise<void> {
-    if (sweeping) return;
-    sweeping = true;
+  let sweeping: Promise<void> | undefined;
+  const sweep = (): Promise<void> => (sweeping ??= sweepOnce().finally(() => (sweeping = undefined)));
+  async function sweepOnce(): Promise<void> {
     try {
-      for (const ref of await jobs.queued(100)) await producer.enqueue(ref);
+      await producer.ping(); // with nothing queued the loop below never touches Redis, and "alive" would mean "Postgres is up"
+      // One refused offer must not hide the 99 behind it: it stays `queued` and is offered again next time.
+      for (const ref of await jobs.queued(100)) await producer.enqueue(ref).catch((err: unknown) => log("warn", `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
       onAlive?.();
     } catch (err) {
-      log("warn", `sweep failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      sweeping = false;
+      log("warn", `sweep failed: ${describeError(err)}`);
     }
   }
   await sweep();
@@ -78,6 +78,7 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
   return {
     async close() {
       clearInterval(timer);
+      await sweeping; // never close the producer under a sweep that is using it
       await Promise.all(workers.map((w) => w.close())); // waits for jobs in flight
       await producer.close();
     },

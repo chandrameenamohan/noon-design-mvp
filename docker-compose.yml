@@ -21,14 +21,16 @@ services:
   # Postgres `jobs` table is the truth and the worker re-queues from it, so losing Redis loses nothing.
   redis:
     image: redis:7
-    # noeviction: BullMQ breaks if Redis silently drops its keys under memory pressure.
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?run ./init.sh}", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    # noeviction + a ceiling: when full, Redis REFUSES writes (the api still answers, the sweep retries)
+    # rather than dropping BullMQ's keys or growing until the host kills it.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?run ./init.sh}", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
     environment:
       REDISCLI_AUTH: "${REDIS_PASSWORD:?run ./init.sh}" # for the healthcheck only
     # 6380 on the host: developer machines tend to have a Redis of their own on 6379.
     ports: ["127.0.0.1:${REDIS_PORT:-6380}:6379"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # redis-cli exits 0 on an ERROR reply too (measured with a wrong password): only the word PONG is health.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 2s
       timeout: 2s
       retries: 30

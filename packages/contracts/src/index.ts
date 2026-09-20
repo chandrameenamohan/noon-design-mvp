@@ -44,16 +44,21 @@ export const CreateDocumentBody = z.strictObject({ title: Name });
 const Instruction = z.string().trim().min(1).max(4000).regex(/^(?:\P{Cc}|[\n\t])*$/u, "must not contain control characters");
 export const CreateRunBody = z.strictObject({ instruction: Instruction });
 const RunStatus = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
-/** `error` is a short named reason, present exactly when the status is `failed`. */
+/** Why a run failed, as a NAME the UI turns into a sentence. Never an error message: those carry paths, request ids, prompt text. */
+export const FailureReason = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+/**
+ * `error` is present exactly when the status is `failed`. `instruction` is a plain string on the way
+ * OUT: if the input rule is ever tightened, the runs already stored must still be readable.
+ */
 export const Run = z.object({
-  id: Id, orgId: Id, documentId: Id, status: RunStatus, instruction: Instruction, error: z.string().min(1).max(200).nullable(),
+  id: Id, orgId: Id, documentId: Id, status: RunStatus, instruction: z.string(), error: FailureReason.nullable(),
   createdAt: Timestamp, startedAt: Timestamp.nullable(), finishedAt: Timestamp.nullable(),
 });
 export type Run = z.infer<typeof Run>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "not_ready", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "not_ready", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
