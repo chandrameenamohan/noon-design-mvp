@@ -56,12 +56,18 @@ export function buildTools(peer: AgentPeer, manifest: Manifest): AgentTool[] {
     shape,
     // The model's arguments are input from outside like any other: parsed here, whatever the SDK did before.
     run: async (args) => {
-      // Zod quietly DROPS an own "__proto__" key: the tool would report success for a prop that was never
-      // set. Refuse it on the raw input, one level down too (that is where `props` lives).
-      const smuggled = (raw: unknown): boolean => typeof raw === "object" && raw !== null && (Object.hasOwn(raw, "__proto__") || Object.values(raw).some(smuggled));
-      if (smuggled(args)) return refused("invalid_arguments", "__proto__ is a reserved name.");
-      const parsed = z.strictObject(shape).safeParse(args);
-      return parsed.success ? run(parsed.data) : refused("invalid_arguments", parsed.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; "));
+      try {
+        // Zod quietly DROPS an own "__proto__" key: the tool would report success for a prop that was never
+        // set. Refuse it on the raw input, one level down too (that is where `props` lives).
+        const smuggled = (raw: unknown): boolean => typeof raw === "object" && raw !== null && (Object.hasOwn(raw, "__proto__") || Object.values(raw).some(smuggled));
+        if (smuggled(args)) return refused("invalid_arguments", "__proto__ is a reserved name.");
+        const parsed = z.strictObject(shape).safeParse(args);
+        return parsed.success ? await run(parsed.data) : refused("invalid_arguments", parsed.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; "));
+
+      } catch (err) {
+        // A tool ANSWERS, whatever it was handed: arguments nested deeper than the stack (a model can emit that) land here.
+        return refused("invalid_arguments", err instanceof RangeError ? "nested too deeply" : "could not be read");
+      }
     },
   });
 

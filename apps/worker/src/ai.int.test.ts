@@ -161,6 +161,11 @@ test("hostile or sloppy arguments: a `__proto__` prop is refused (not silently d
   })(job());
   expect(results[0]).toMatchObject({ ok: false, text: expect.stringContaining("invalid_arguments") as string });
   expect(results[1]?.ok).toBe(true);
+  // A model can nest deeper than the stack goes (about 10,000 levels fit in one output). A tool never throws: it answers.
+  let deep: unknown = "x";
+  for (let i = 0; i < 20_000; i++) deep = { n: deep };
+  const tools = (await import("./tools.ts")).buildTools({ submit: () => ({ ok: false, reason: "not_ready" }), get doc(): never { throw new Error("unused"); } }, manifest);
+  expect(await call(tools, "add_node", { parentId: "root", component: "Card", props: deep })).toMatchObject({ ok: false, text: expect.stringContaining("invalid_arguments") as string });
   expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
 });
 
