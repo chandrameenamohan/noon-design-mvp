@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSdkMcpServer, query, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
-import type { UsageAmount } from "@noon/contracts";
+import { MAX_COST_USD, type UsageAmount } from "@noon/contracts";
 import type { AgentTool } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
 
@@ -106,8 +106,11 @@ export async function probeTools(tools: AgentTool[]): Promise<void> {
 
 /** The SDK's final usage, in our words. Anything missing or odd counts as 0: a report must never fail a run that worked. */
 export function usageOf(model: string, usage: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }, costUsd: number | null | undefined): UsageAmount {
-  const whole = (n: number | null | undefined): number => (typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
-  return { model, inputTokens: whole(usage.input_tokens), outputTokens: whole(usage.output_tokens), cacheReadTokens: whole(usage.cache_read_input_tokens), cacheWriteTokens: whole(usage.cache_creation_input_tokens), costUsd: typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0 };
+  // Out of range counts as "not known", like every other odd value: what this returns must always be
+  // storable, or one absurd field from the provider would cost the run its whole row.
+  const inRange = (n: number | null | undefined, max: number): boolean => typeof n === "number" && Number.isFinite(n) && n > 0 && n <= max;
+  const whole = (n: number | null | undefined): number => (inRange(n, Number.MAX_SAFE_INTEGER) ? Math.round(n as number) : 0);
+  return { model, inputTokens: whole(usage.input_tokens), outputTokens: whole(usage.output_tokens), cacheReadTokens: whole(usage.cache_read_input_tokens), cacheWriteTokens: whole(usage.cache_creation_input_tokens), costUsd: inRange(costUsd, MAX_COST_USD) ? (costUsd as number) : 0 };
 }
 
 /**

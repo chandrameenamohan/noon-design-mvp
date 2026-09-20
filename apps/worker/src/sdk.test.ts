@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { FailureReason } from "@noon/contracts";
+import { FailureReason, UsageAmount } from "@noon/contracts";
 import { checkInit, failureReason, usageOf, wrapInstruction } from "./sdk.ts";
 
 test("a failed run is named after what the USER can do about it, and every name fits the contract", () => {
@@ -43,4 +43,9 @@ test("the instruction is fenced with a tag nobody can guess, so no spelling of a
 test("usage counts cache tokens too, and a missing or odd number is 0, never a failed run", () => {
   expect(usageOf("claude-opus-5", { input_tokens: 12, output_tokens: 340, cache_read_input_tokens: 9000, cache_creation_input_tokens: 800 }, 0.0123)).toEqual({ model: "claude-opus-5", inputTokens: 12, outputTokens: 340, cacheReadTokens: 9000, cacheWriteTokens: 800, costUsd: 0.0123 });
   expect(usageOf("m", { input_tokens: null, output_tokens: -5, cache_read_input_tokens: Number.NaN }, undefined)).toEqual({ model: "m", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 });
+  // A number too big to store (or to read back as itself) counts as "not known", like every other odd
+  // value: a run that worked must never lose its whole row because one field was absurd.
+  const mad = usageOf("m", { input_tokens: 1e30, output_tokens: Number.MAX_SAFE_INTEGER + 2 }, 1e21);
+  expect(mad).toEqual({ model: "m", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 });
+  expect(UsageAmount.safeParse(mad).success).toBe(true); // whatever the provider says, what we report is storable
 });

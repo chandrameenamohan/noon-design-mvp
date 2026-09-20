@@ -89,6 +89,8 @@ const RunRow = z
   .transform((r): Run =>
     Run.parse({ id: r.id, orgId: r.org_id, documentId: r.document_id, status: r.status, instruction: r.input.instruction, error: r.error, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at }));
 // bigint and numeric arrive as STRINGS from the driver (learning-tests/postgres): converted once, here.
+// Safe because UsageAmount caps what may be WRITTEN at Number.MAX_SAFE_INTEGER, so no stored token count
+// (and no sum of them worth reading) leaves the range a JS number holds exactly.
 const count = z.string().regex(/^\d+$/).transform(Number);
 const money = z.string().regex(/^\d+(\.\d+)?$/).transform(Number);
 const UsageRow = z

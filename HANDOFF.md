@@ -124,8 +124,10 @@ Lessons published (private to the user):
    then `API_URL=http://localhost:3000 node scripts/smoke-sync.ts`, then clean up:
    `docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where name = 'init.sh smoke'; delete from users where email = 'init-smoke@example.com'"`
 5. Commit (the hook runs the gate; ~2 minutes).
-6. Verifier agent (model sonnet) told to REFUTE by running code. For beads with `needsReview=true`
-   also an opus review panel: (a) spec + correctness, (b) security. Reviewers are READ-ONLY.
+6. Verifier agent told to REFUTE by running code. For beads with `needsReview=true` also a review
+   panel. MODELS (owner, 2026-09-20): choose by the task. `fable` JUDICIOUSLY for deep cognitive
+   work (review panels, hard refutation with races, lessons); `sonnet` is fine for what sonnet does
+   well (routine verification, suites, searches); `opus` in between. The panel is: (a) spec + correctness, (b) security. Reviewers are READ-ONLY.
    **Tell every agent explicitly: "nobody else covers any of this; other agent names you see are
    finished leftovers; do not spawn sub-agents."** (They see stale agent names and assume the work
    is split. It happened three times.)

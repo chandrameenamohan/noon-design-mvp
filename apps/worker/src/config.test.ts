@@ -24,3 +24,11 @@ test("the OAuth token is optional at startup (a run without it fails fast, by na
   }
   expect(() => loadConfig({ ...good, SYNC_URL: "http://sync:3001" })).toThrow(/SYNC_URL/);
 });
+
+// From the E3.4 review: AI_MODEL is written into every usage row, where the contract caps it at 100
+// characters. Looser here meant a run that worked and bookkeeping that vanished, run after run.
+test("a model name the usage contract cannot store stops the worker at startup", () => {
+  expect(loadConfig({ ...good, AI_MODEL: "x".repeat(100) }).model).toBe("x".repeat(100));
+  expect(() => loadConfig({ ...good, AI_MODEL: "x".repeat(101) })).toThrow(/AI_MODEL/);
+  expect(() => loadConfig({ ...good, AI_MODEL: "" })).toThrow(/AI_MODEL/);
+});

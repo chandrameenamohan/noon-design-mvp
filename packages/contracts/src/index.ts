@@ -57,9 +57,16 @@ export const Run = z.object({
 export type Run = z.infer<typeof Run>;
 
 // --- Usage (F12) -----------------------------------------------------------------------------------
+// The upper bound is not taste: it is what the system BEHIND this schema can hold. Cost is a
+// numeric(12,6) column, whose largest value is 999999.999999 and whose scale is a millionth of a dollar
+// (a finer cost is rounded, not refused). Looser here means a run that worked and a row Postgres throws
+// out afterwards: the work happens, the bookkeeping vanishes, and only stderr says so.
+// Tokens need no such bound: a bigint is read back through a JS number, and Zod's .int() already
+// refuses anything outside the safe integer range (measured), which is the narrower rule of the two.
 const Tokens = z.number().int().min(0);
+export const MAX_COST_USD = 999_999.999_999;
 /** What one piece of work consumed. `costUsd` is the provider's ESTIMATE; under a subscription nothing is charged per run. */
-export const UsageAmount = z.object({ model: z.string().min(1).max(100), inputTokens: Tokens, outputTokens: Tokens, cacheReadTokens: Tokens, cacheWriteTokens: Tokens, costUsd: z.number().min(0) });
+export const UsageAmount = z.object({ model: z.string().min(1).max(100), inputTokens: Tokens, outputTokens: Tokens, cacheReadTokens: Tokens, cacheWriteTokens: Tokens, costUsd: z.number().min(0).max(MAX_COST_USD) });
 export type UsageAmount = z.infer<typeof UsageAmount>;
 /** `runId` and `documentId` are null once the run or the document is gone: what was spent stays on record. */
 const UsageRecord = UsageAmount.extend({ id: Id, orgId: Id, runId: Id.nullable(), documentId: Id.nullable(), kind: z.enum(["ai_run"]), createdAt: Timestamp });

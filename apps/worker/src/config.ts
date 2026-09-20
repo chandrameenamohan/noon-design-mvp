@@ -15,7 +15,9 @@ const Env = z.object({
   SYNC_URL: z.string({ error: "SYNC_URL is required" }).refine((value) => URL.canParse(value) && ["ws:", "wss:"].includes(new URL(value).protocol), "SYNC_URL must be a ws:// or wss:// URL").transform((value) => value.replace(/\/+$/, "")),
   // Optional at startup: without it every run fails at once as `token_missing`, which the user can read.
   CLAUDE_CODE_OAUTH_TOKEN: z.string().optional().transform((value) => (value === "" ? undefined : value)),
-  AI_MODEL: z.string().min(1).default("claude-opus-5"),
+  // Written into every usage row, where the contract caps it at 100 characters (a gateway alias or an
+  // inference-profile ARN is longer than that): refuse it here, at startup, not once per finished run.
+  AI_MODEL: z.string().min(1, "AI_MODEL must not be empty").max(100, "AI_MODEL must be at most 100 characters").default("claude-opus-5"),
   ANTHROPIC_API_KEY: mustBeUnset("ANTHROPIC_API_KEY"),
   ANTHROPIC_AUTH_TOKEN: mustBeUnset("ANTHROPIC_AUTH_TOKEN"),
 });
