@@ -61,7 +61,7 @@ test("two processes migrating a fresh database at the same moment both succeed",
     const other = createDb({ connectionString: TEST_DATABASE_URL, schema: fresh.schema });
     try {
       await Promise.all([fresh.db.migrate(), other.migrate()]);
-      expect(await fresh.db.appliedMigrations()).toEqual(["0001_init.sql", "0002_memberships_user_id.sql", "0003_document_content.sql", "0004_jobs.sql", "0005_jobs_review.sql", "0006_jobs_cancel.sql"]);
+      expect(await fresh.db.appliedMigrations()).toEqual(["0001_init.sql", "0002_memberships_user_id.sql", "0003_document_content.sql", "0004_jobs.sql", "0005_jobs_review.sql", "0006_jobs_cancel.sql", "0007_usage.sql"]);
     } finally {
       await other.close();
       await fresh.drop();

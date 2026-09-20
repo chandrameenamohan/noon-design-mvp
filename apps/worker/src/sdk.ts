@@ -3,15 +3,15 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSdkMcpServer, query, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
+import type { UsageAmount } from "@noon/contracts";
 import type { AgentTool } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
 
 const SERVER = "noon";
 const sdkName = (t: Pick<AgentTool, "name">): string => `mcp__${SERVER}__${t.name}`;
 
-type AgentUsage = { inputTokens: number; outputTokens: number; costUsd: number };
 /** The seam between "a run" and "a model": tests script this, production is sdkRunner(). */
-export type RunAgent = (input: { instruction: string; tools: AgentTool[]; signal: AbortSignal }) => Promise<AgentUsage>;
+export type RunAgent = (input: { instruction: string; tools: AgentTool[]; signal: AbortSignal }) => Promise<UsageAmount>;
 
 const SYSTEM_PROMPT = `You edit a user-interface design document: a tree of component instances from the customer's own design system.
 Your only abilities are the tools provided: read_tree, read_manifest, add_node, set_prop, move_node, remove_node. You have no files, shell or web.
@@ -104,6 +104,12 @@ export async function probeTools(tools: AgentTool[]): Promise<void> {
   }
 }
 
+/** The SDK's final usage, in our words. Anything missing or odd counts as 0: a report must never fail a run that worked. */
+export function usageOf(model: string, usage: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }, costUsd: number | null | undefined): UsageAmount {
+  const whole = (n: number | null | undefined): number => (typeof n === "number" && Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+  return { model, inputTokens: whole(usage.input_tokens), outputTokens: whole(usage.output_tokens), cacheReadTokens: whole(usage.cache_read_input_tokens), cacheWriteTokens: whole(usage.cache_creation_input_tokens), costUsd: typeof costUsd === "number" && Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0 };
+}
+
 /**
  * Why a run failed, as a name the user can act on (F9, SPEC §4): "your token is no good" and "the
  * provider is busy" call for different things. `apiError` is the SDK's classification of the failed request.
@@ -143,7 +149,8 @@ export function sdkRunner({ model, oauthToken }: { model: string; oauthToken: st
       if (message.type === "assistant" && message.error !== undefined) apiError = message.error; // the SDK's own classification: no string matching on error text
       if (message.type !== "result") continue;
       if (message.subtype !== "success" || message.is_error) throw new JobFailure(failureReason(message.subtype, apiError), (message.subtype === "success" ? message.result : message.subtype).slice(0, 500));
-      return { inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens, costUsd: message.total_cost_usd };
+      // Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.
+      return usageOf(model, message.usage, message.total_cost_usd);
     }
     throw new JobFailure(signal.aborted ? "cancelled" : "agent_failed");
   };

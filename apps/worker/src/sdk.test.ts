@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { FailureReason } from "@noon/contracts";
-import { checkInit, failureReason, wrapInstruction } from "./sdk.ts";
+import { checkInit, failureReason, usageOf, wrapInstruction } from "./sdk.ts";
 
 test("a failed run is named after what the USER can do about it, and every name fits the contract", () => {
   expect(failureReason("success", "authentication_failed")).toBe("token_invalid"); // measured: an expired setup-token arrives as result=success, is_error=true
@@ -38,4 +38,9 @@ test("the instruction is fenced with a tag nobody can guess, so no spelling of a
   expect(wrapInstruction("a").tag).not.toBe(wrapInstruction("a").tag);
   const bidi = String.fromCodePoint(0x202e);
   expect(wrapInstruction(`pay${bidi}now`).prompt).toContain("paynow"); // invisible formatting characters are dropped
+});
+
+test("usage counts cache tokens too, and a missing or odd number is 0, never a failed run", () => {
+  expect(usageOf("claude-opus-5", { input_tokens: 12, output_tokens: 340, cache_read_input_tokens: 9000, cache_creation_input_tokens: 800 }, 0.0123)).toEqual({ model: "claude-opus-5", inputTokens: 12, outputTokens: 340, cacheReadTokens: 9000, cacheWriteTokens: 800, costUsd: 0.0123 });
+  expect(usageOf("m", { input_tokens: null, output_tokens: -5, cache_read_input_tokens: Number.NaN }, undefined)).toEqual({ model: "m", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 });
 });

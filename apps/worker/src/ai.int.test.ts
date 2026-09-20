@@ -10,7 +10,7 @@ import type { AgentTool } from "./tools.ts";
 // scripted: a stub that calls our tools the way the SDK would, with whatever a model might send.
 const ctx = useSyncServer();
 const job = (instruction = "add a card"): Job => ({ id: randomUUID(), orgId: TEST_ORG, documentId: randomUUID(), queue: "ai", input: { instruction }, createdBy: randomUUID() });
-const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+const usage = { model: "stub", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
 const never = new AbortController().signal;
 const base = () => ({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: new AbortController().signal });
 const handlerWith = (runAgent: RunAgent) => createAiHandler({ ...base(), runAgent });

@@ -7,12 +7,12 @@ beforeAll(async () => {
 });
 afterAll(() => t.drop());
 
-test("migrations create the six tables, and every tenant table carries org_id", async () => {
+test("migrations create the seven tables, and every tenant table carries org_id", async () => {
   const tables = await t.columnsByTable();
   expect(Object.keys(tables).sort()).toEqual(
-    ["documents", "jobs", "memberships", "orgs", "schema_migrations", "users", "workspaces"].sort(),
+    ["documents", "jobs", "memberships", "orgs", "schema_migrations", "usage", "users", "workspaces"].sort(),
   );
-  for (const tenantTable of ["memberships", "workspaces", "documents", "jobs"]) {
+  for (const tenantTable of ["memberships", "workspaces", "documents", "jobs", "usage"]) {
     expect(tables[tenantTable], tenantTable).toContain("org_id");
   }
 });

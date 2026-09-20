@@ -1,10 +1,12 @@
 import { Worker } from "bullmq";
+import type { UsageAmount } from "@noon/contracts";
 import type { Db, Job } from "@noon/db";
 import { connection, createProducer, describeError, JobRef, QUEUES, type QueueName } from "@noon/queue";
 
 /** One function per queue. It gets the job as Postgres has it, never what the queue message claims. */
 /** `cancelled` is aborted when the user asks for the job to stop (F10): end quickly, keep what was done. */
-export type Handlers = Record<QueueName, (job: Job, cancelled: AbortSignal) => Promise<void>>;
+/** A handler may return what the job CONSUMED (F12); the worker records it against the job's org. */
+export type Handlers = Record<QueueName, (job: Job, cancelled: AbortSignal) => Promise<UsageAmount | undefined>>;
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */
@@ -48,7 +50,10 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
       jobs.cancelRequested(ref).then((asked) => { if (asked) cancel.abort(); }, () => undefined); // a failed look is tried again in a second
     }, cancelPollMs);
     try {
-      await handlers[job.queue](job, cancel.signal); // the row's queue, not the message's
+      const consumed = await handlers[job.queue](job, cancel.signal); // the row's queue, not the message's
+      // ponytail: only a run that reached its end reports what it consumed; a cancelled or timed-out run has
+      // spent tokens too, which the SDK only totals in its final message. Per-turn accounting is E9.5.
+      if (consumed) await jobs.recordUsage(ref, consumed).catch((err: unknown) => log("error", `usage not recorded: ${describeError(err)}`, { jobId: ref.jobId })); // a run that worked is not failed over its bookkeeping
       // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
       await jobs.finish(ref, cancel.signal.aborted ? "cancelled" : "succeeded");
     } catch (err) {

@@ -1,4 +1,4 @@
-import type { Manifest } from "@noon/contracts";
+import type { Manifest, UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
@@ -29,7 +29,7 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
   connectTimeoutMs?: number;
   /** The whole run, connect to last op. ponytail: one number for every run; per-org limits are F31 (E9). */
   runTimeoutMs?: number;
-}): (job: Job, cancelled: AbortSignal) => Promise<void> {
+}): (job: Job, cancelled: AbortSignal) => Promise<UsageAmount> {
   return async (job, cancelled) => {
     // Fail FAST and by name, before anything is connected or spent. A missing token does not make
     // the SDK throw: it answers with a polite "please log in", which would look like a run that
@@ -81,7 +81,7 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       const instruction = typeof job.input["instruction"] === "string" ? job.input["instruction"] : "";
       const agent = runAgent({ instruction, tools: buildTools(peer, manifest), signal: abort.signal });
       agent.catch(() => undefined); // if `ended` wins, the aborted agent rejects later, to nobody
-      await Promise.race([agent, ended]);
+      return await Promise.race([agent, ended]); // what the run consumed (F12): the worker records it
     } finally {
       clearInterval(watchdog);
       abort.abort(); // stops the model, and removes the listener on `stopping`

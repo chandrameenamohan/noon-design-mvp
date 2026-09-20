@@ -165,6 +165,13 @@ export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ V
     return doc ? c.json(doc) : notFound(c);
   });
 
+  // F12: what this org's AI runs have consumed. Behind the org middleware like everything else about an
+  // org, so another org's usage is the usual 404. ponytail: totals over all time; periods and limits are E9.5.
+  org.get("/usage", async (c) => {
+    const report = await c.var.scope.usage(pageQuery(c));
+    return report ? c.json(report) : badCursor(c);
+  });
+
   app.route("/orgs/:orgId", org);
 
   // The routing hook (SPEC §2.11): a peer never knows a sync address in advance, it asks here.

@@ -31,7 +31,7 @@ const scripted: RunAgent = async ({ instruction, tools, signal }) => {
     await sleep(400, signal);
     await call("add_node", { parentId: card, component: "Button", props: { label: `AI ${String(i)}` } });
   }
-  return { inputTokens: 1200, outputTokens: 340, costUsd: 0.0123 };
+  return { model: "scripted", inputTokens: 1200, outputTokens: 340, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.0123 };
 };
 
 const config = loadConfig(process.env);

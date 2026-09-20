@@ -56,6 +56,20 @@ export const Run = z.object({
 });
 export type Run = z.infer<typeof Run>;
 
+// --- Usage (F12) -----------------------------------------------------------------------------------
+const Tokens = z.number().int().min(0);
+/** What one piece of work consumed. `costUsd` is the provider's ESTIMATE; under a subscription nothing is charged per run. */
+export const UsageAmount = z.object({ model: z.string().min(1).max(100), inputTokens: Tokens, outputTokens: Tokens, cacheReadTokens: Tokens, cacheWriteTokens: Tokens, costUsd: z.number().min(0) });
+export type UsageAmount = z.infer<typeof UsageAmount>;
+/** `runId` and `documentId` are null once the run or the document is gone: what was spent stays on record. */
+const UsageRecord = UsageAmount.extend({ id: Id, orgId: Id, runId: Id.nullable(), documentId: Id.nullable(), kind: z.enum(["ai_run"]), createdAt: Timestamp });
+export const UsageReport = z.object({
+  totals: UsageAmount.omit({ model: true }).extend({ runs: Tokens }),
+  items: z.array(UsageRecord),
+  nextCursor: z.string().nullable(),
+});
+export type UsageReport = z.infer<typeof UsageReport>;
+
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
   error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "not_ready", "internal"]),

@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Run, User, Workspace, type Page } from "@noon/contracts";
+import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Run, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -48,6 +48,8 @@ type JobStore = {
   queued(limit: number): Promise<JobKey[]>;
   /** Has someone asked for this running job to stop? The worker asks once a second. */
   cancelRequested(key: JobKey): Promise<boolean>;
+  /** What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per job. */
+  recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
 };
 
 type PageInput = { limit?: number; cursor?: string | undefined };
@@ -66,6 +68,8 @@ type OrgScope = {
   getRun(documentId: string, id: string): Promise<Run | undefined>;
   /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
   cancelRun(documentId: string, id: string): Promise<Run | undefined>;
+  /** Everything this org has consumed: totals over all of it, and one page of the records. Undefined = a bad cursor. */
+  usage(page?: PageInput): Promise<UsageReport | undefined>;
 };
 
 // Rows arrive as `any` from the driver. Each is parsed once, here, at the database boundary.
@@ -84,6 +88,16 @@ const RunRow = z
   .object({ id: z.string(), org_id: z.string(), document_id: z.string(), status: z.string(), input: z.object({ instruction: z.string() }), error: z.string().nullable(), created_at: timestamp, started_at: nullableTimestamp, finished_at: nullableTimestamp })
   .transform((r): Run =>
     Run.parse({ id: r.id, orgId: r.org_id, documentId: r.document_id, status: r.status, instruction: r.input.instruction, error: r.error, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at }));
+// bigint and numeric arrive as STRINGS from the driver (learning-tests/postgres): converted once, here.
+const count = z.string().regex(/^\d+$/).transform(Number);
+const money = z.string().regex(/^\d+(\.\d+)?$/).transform(Number);
+const UsageRow = z
+  .object({ id: z.string(), org_id: z.string(), job_id: z.string().nullable(), document_id: z.string().nullable(), kind: z.string(), model: z.string(), input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money, created_at: timestamp })
+  .transform((r): UsageReport["items"][number] =>
+    UsageReport.shape.items.element.parse({ id: r.id, orgId: r.org_id, runId: r.job_id, documentId: r.document_id, kind: r.kind, model: r.model, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd, createdAt: r.created_at }));
+const UsageTotalsRow = z
+  .object({ runs: count, input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money })
+  .transform((r): UsageReport["totals"] => ({ runs: r.runs, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd }));
 const JobRow = z
   .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.literal("ai"), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
   .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
@@ -267,6 +281,17 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       },
       cancelRequested: async ({ jobId, orgId }) =>
         isId(jobId) && isId(orgId) && (await pool.query("select 1 from jobs where org_id = $1 and id = $2 and cancel_requested_at is not null", [orgId, jobId])).rowCount === 1,
+      async recordUsage({ jobId, orgId }, amount) {
+        if (!isId(jobId) || !isId(orgId)) return;
+        const a = UsageAmount.parse(amount); // the same contract the reader uses, BEFORE the write
+        // insert ... select FROM THE JOB: org, document and user are what the row says, never what a caller
+        // says, and a key that names the job under another org selects nothing. `on conflict`: billed once.
+        await pool.query(
+          "insert into usage (org_id, job_id, document_id, user_id, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) " +
+            "select j.org_id, j.id, j.document_id, j.created_by, 'ai_run', $3, $4, $5, $6, $7, $8 from jobs j where j.org_id = $1 and j.id = $2 on conflict (job_id) do nothing",
+          [orgId, jobId, a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheWriteTokens, a.costUsd.toFixed(6)],
+        );
+      },
       queued: (limit) =>
         rows(
           z.object({ id: z.string(), org_id: z.string(), queue: z.literal("ai") }).transform((r) => ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
@@ -343,6 +368,19 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           // was tried) the read shares the update's snapshot and shows the row as it was before the winner
           // committed. The loser was told "queued" about a run that was already cancelled.
           return hit ?? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id]);
+        },
+        usage: async (input) => {
+          const none = { runs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
+          if (!orgExists) return { totals: none, items: [], nextCursor: null };
+          const items = await page(UsageRow, "usage t", "t.org_id = $1", [orgId], input);
+          if (!items) return undefined;
+          const totals = await exactlyOne(
+            UsageTotalsRow,
+            "select count(*)::text as runs, coalesce(sum(input_tokens), 0)::text as input_tokens, coalesce(sum(output_tokens), 0)::text as output_tokens, coalesce(sum(cache_read_tokens), 0)::text as cache_read_tokens, " +
+              "coalesce(sum(cache_write_tokens), 0)::text as cache_write_tokens, coalesce(sum(cost_usd), 0)::text as cost_usd from usage where org_id = $1",
+            [orgId],
+          );
+          return { totals, ...items };
         },
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)

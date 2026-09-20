@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { Document, ErrorBody, Org, Run, Workspace } from "@noon/contracts";
+import { Document, ErrorBody, Org, Run, UsageReport, Workspace } from "@noon/contracts";
 import { createProducer, type Producer } from "@noon/queue";
 import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
@@ -16,7 +16,7 @@ let db: TestDb, producer: Producer, api: RunningServer, worker: RunningWorker | 
 let aiCalls: unknown[] = [];
 const record: Handlers["ai"] = (job) => {
   aiCalls.push(job.input["instruction"]);
-  return Promise.resolve();
+  return Promise.resolve(undefined);
 };
 let ai: Handlers["ai"] = record;
 
@@ -182,7 +182,7 @@ test("a reason that is not a plain name never reaches the user, and cannot leave
 test("a document has one unfinished run at a time: the second is a 409, and a finished run frees the document", async () => {
   const doc = await aDocument("ann@example.com");
   let release = (): void => undefined;
-  ai = () => new Promise<void>((resolve) => { release = resolve; });
+  ai = () => new Promise<undefined>((resolve) => { release = () => { resolve(undefined); }; });
   const first = await startRun("ann@example.com", doc, "slow");
   const racing = await Promise.all(Array.from({ length: 5 }, () => as("ann@example.com", "POST", `/documents/${doc.id}/runs`, { instruction: "me too" })));
   for (const res of racing) {
@@ -280,4 +280,53 @@ test("two people cancel the same queued run at the same moment: both are told it
     const answers = await Promise.all([cancel("ann@example.com", run), cancel("ann@example.com", run), cancel("ann@example.com", run)]);
     for (const res of answers) expect(Run.parse(await res.json()).status, `round ${String(round)}`).toBe("cancelled");
   }
+});
+
+// --- E3.4: usage (F12) ----------------------------------------------------------------------------
+const spent = { model: "claude-test-1", inputTokens: 1200, outputTokens: 340, cacheReadTokens: 9000, cacheWriteTokens: 800, costUsd: 0.012345 };
+
+// integration:usage-recorded-and-readable
+test("after a run, its tokens and estimated cost are stored against the org and readable through the org's api, with totals", async () => {
+  await worker?.close();
+  await work(60_000);
+  const doc = await aDocument("usage-ann@example.com");
+  ai = () => Promise.resolve(spent);
+  const first = await terminal("usage-ann@example.com", await startRun("usage-ann@example.com", doc, "one"));
+  const second = await terminal("usage-ann@example.com", await startRun("usage-ann@example.com", doc, "two"));
+  ai = () => Promise.reject(new JobFailure("rate_limited")); // nothing to record: the provider never answered
+  await terminal("usage-ann@example.com", await startRun("usage-ann@example.com", doc, "three"));
+
+  const res = await as("usage-ann@example.com", "GET", `/orgs/${doc.orgId}/usage`);
+  expect(res.status).toBe(200);
+  const usage = UsageReport.parse(await res.json());
+  expect(usage.totals).toEqual({ runs: 2, inputTokens: 2400, outputTokens: 680, cacheReadTokens: 18000, cacheWriteTokens: 1600, costUsd: 0.02469 });
+  expect(usage.items.map((each) => each.runId).sort()).toEqual([first.id, second.id].sort());
+  expect(usage.items[0]).toMatchObject({ orgId: doc.orgId, documentId: doc.id, kind: "ai_run", ...spent });
+  expect(usage.nextCursor).toBeNull();
+
+  // A message delivered twice must not bill twice, and billing history outlives the document it was for.
+  await db.db.jobStore().recordUsage({ queue: "ai", jobId: first.id, orgId: doc.orgId }, spent);
+  await db.rawQuery("delete from documents where id = $1", [doc.id]);
+  const after = UsageReport.parse(await (await as("usage-ann@example.com", "GET", `/orgs/${doc.orgId}/usage`)).json());
+  expect(after.totals).toEqual(usage.totals);
+  expect(after.items.map((each) => each.runId)).toEqual([null, null]); // the runs went with the document; what they cost did not
+});
+
+// integration:usage-tenant-404
+test("another org sees none of it: its own usage is empty, and asking for someone else's org is the usual 404", async () => {
+  const mine = await aDocument("usage-bob@example.com");
+  ai = () => Promise.resolve(spent);
+  await terminal("usage-bob@example.com", await startRun("usage-bob@example.com", mine, "bob's"));
+  const theirs = await aDocument("usage-eve@example.com");
+
+  const eveOwn = UsageReport.parse(await (await as("usage-eve@example.com", "GET", `/orgs/${theirs.orgId}/usage`)).json());
+  expect(eveOwn).toEqual({ totals: { runs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 }, items: [], nextCursor: null });
+  const peek = await as("usage-eve@example.com", "GET", `/orgs/${mine.orgId}/usage`);
+  expect(peek.status).toBe(404);
+  expect(await peek.text()).toBe(await (await as("usage-eve@example.com", "GET", `/orgs/${crypto.randomUUID()}/usage`)).text()); // the same bytes as an org that does not exist
+  // The store itself refuses a job under the wrong org: nothing is written.
+  const bobs = ((await db.rawQuery("select id from jobs where document_id = $1", [mine.id])) as { rows: { id: string }[] }).rows[0]?.id ?? "";
+  await db.rawQuery("delete from usage where job_id = $1", [bobs]);
+  await db.db.jobStore().recordUsage({ queue: "ai", jobId: bobs, orgId: theirs.orgId }, spent);
+  expect(await count("select count(*)::int as n from usage where job_id = $1", [bobs])).toBe(0);
 });

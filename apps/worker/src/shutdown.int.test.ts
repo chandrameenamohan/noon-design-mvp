@@ -33,7 +33,7 @@ test("with Redis gone, a worker with nothing in flight still closes quickly", as
   const db = await createTestDb();
   const redis = await cuttableRedis();
   try {
-    const worker = await startWorker({ db: db.db, redisUrl: redis.url, prefix: `test-${randomBytes(6).toString("hex")}`, handlers: { ai: () => Promise.resolve() }, sweepMs: 60_000 });
+    const worker = await startWorker({ db: db.db, redisUrl: redis.url, prefix: `test-${randomBytes(6).toString("hex")}`, handlers: { ai: () => Promise.resolve(undefined) }, sweepMs: 60_000 });
     redis.cut();
     await new Promise((r) => setTimeout(r, 300)); // let the connections notice
     const started = Date.now();
