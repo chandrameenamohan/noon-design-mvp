@@ -1,0 +1,104 @@
+<title>TypeScript Lesson Three</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 to 3 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 3 · Epic 3</p>
+  <h1>A program joins the room</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, how an AI edits a shared document without a single new rule in the room, why a queue is never the truth, what it takes to stop a process you do not own, and where the money goes; and you can point at the line of code for every claim.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4 and 7 are the ones an architect interview will dig into.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + Redis + api + sync + worker<br>docker compose logs -f worker&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "agent tools registered and isolated", then each run<br>make integration&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the worker against real Postgres, Redis and sync<br>pnpm exec playwright test e2e/ai.spec.ts&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# two browser contexts and a scripted model</p>
+    <p>Try it: open a document in two windows, type an instruction in the AI panel of one, and watch the nodes arrive in both. Without <span class="mono">CLAUDE_CODE_OAUTH_TOKEN</span> in <span class="mono">.env</span> every run fails at once as <em>token_missing</em>, which the panel says in words; the browser test does not need a token, because its model is scripted.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-3/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-3/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend the agent's abilities, end to end.</strong> <code>read_tree</code> hands the model the whole document on every call; <span class="mono">tools.ts</span> names the upgrade itself ("a subtree argument when documents outgrow the context window"). Give the agent a seventh tool, <code>read_node</code>: one node and everything under it. You will touch the tool (its <code>shape</code> is the contract with the model: what it is told it may send; an unknown id is a refusal with a reason, never a throw), the system prompt (the list of abilities: a tool the model is not told about is a tool it will not reach for), and the init check that pins "exactly our six tools". The drill's last test starts the real SDK and stops at its init message: no credentials, no tokens, a few seconds. <span class="mono">make check</span> must stay green: the gate applies to you too.</p>
+      <p>Predict first: which existing test will fail the moment you add a seventh tool, and why is it right that it does? (Section 4's probe, and section 9's first layer.)</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-3/d2-run/run.ts</span> is a 60-line run with one bug from this chapter planted in it: the part of <span class="mono">ai.ts</span> that must <em>end</em>, over a fake peer and a scripted model. Its test ends a run before the peer ever connects, then counts what is still being scheduled afterwards. Form a theory from the failing number before you read the code.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. Why does the queue message carry only <code>{queue, jobId, orgId}</code>, and not the instruction itself?</summary>
+        <p>Because then the message cannot matter. A message can be lost (Redis flushed), duplicated (a redelivery), stale (a finished job), or forged (anyone who can reach Redis). If it carried the input, each of those would be a way to run the wrong work, or the same work twice. Carrying only a pointer makes every one of them harmless: the worker claims the row with one <code>UPDATE ... WHERE status = 'queued'</code>, reads the input from the row, and a message that finds nothing to claim does nothing. It also makes the sweep possible: what Postgres still calls <code>queued</code> can be offered again without knowing anything else. The price is one extra read per job, which is nothing next to a model call.</p></details>
+      <details class="recall"><summary>2. Why is usage its own table, and not four columns on the jobs row?</summary>
+        <p>Lifetimes. A job dies with its document (cascade), and a document dies with its workspace; what an org spent must outlive all of them, or a bill can be made smaller by deleting things. So usage has one hard owner, the org, and its links to the job, the document and the user are loose on purpose: <code>set null</code>, or no foreign key at all. Two more things fall out of the table being separate: the unique <code>job_id</code> gives at-most-once billing for free, and the write can be an <code>insert ... select</code> from the job row, so tenancy comes from the row and never from a caller. The price is a join to show usage next to a run, which E9.5 will pay.</p></details>
+      <details class="recall"><summary>3. Why does the agent have no write path of its own? A direct "apply these ops to the document" call from the worker would be faster.</summary>
+        <p>Because every property the room gives a person would then have to be built again for the AI, and one of them would be missed. Through peer-client the AI's ops are validated by the same rules, ordered by the same sequencer, rate-limited by their own bucket, stamped with an actor from the token (so a tool cannot claim to be a person), rolled back the same way when refused, and shown on every canvas one by one as they land. Concurrent human edits during a run are then an ordinary case, not a special one, and a prompt injection can at most do what a member with a mouse could do. The speed a direct path would buy is measured in milliseconds; the model call it sits inside is measured in seconds.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the three things that can end a run from outside and the name each one gives the user. Then name the four things that can happen to one op the agent submits. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>From outside: the worker is told to stop (<code>worker_stopped</code>, SIGTERM), the user pressed cancel (<code>cancelled</code>, polled from the row once a second), and the watchdog: the peer is not live for too long (<code>sync_unreachable</code>) or the run is over its deadline (<code>timed_out</code>). Whichever comes first wins, through one <code>ended</code> promise that only rejects. An op: applied with a <code>seq</code>; accepted but changed nothing (no <code>seq</code>); refused with a reason (by the replica now, or by the room later); or the connection ended first (<code>connection_closed</code>). All four are values of <code>settled</code>, and each op settles exactly once.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. A BullMQ message is delivered twice for the same run. What stops the run from happening twice?</p>
+      <button id="q1a" data-correct><code>claim()</code> is one <code>UPDATE ... WHERE status = 'queued'</code>; the second delivery finds nothing</button><button id="q1b">BullMQ guarantees exactly-once delivery</button><button id="q1c">The handler checks an in-memory set of job ids</button><button id="q1d">The message carries a version number the worker compares</button>
+      <p class="why" hidden>The row is the truth. A duplicate, stale or forged message finds nothing to claim and ends there.</p></div>
+    <div class="quiz"><p class="q">2. Two <code>POST /runs</code> for one document arrive in the same millisecond. Why does exactly one get a 201?</p>
+      <button id="q2a" data-correct>A partial unique index on <code>(document_id) where status in ('queued','running')</code>: the second INSERT violates it</button><button id="q2b">The route counts unfinished runs before inserting</button><button id="q2c">The api serialises requests per document</button><button id="q2d">Redis holds a lock per document</button>
+      <p class="why" hidden>"Count, then insert" is two statements and both requests count zero. The index is the check, and Postgres decides who was first.</p></div>
+    <div class="quiz"><p class="q">3. <code>Promise.race([attempt, deadline])</code> and the deadline wins. What is true of <code>attempt</code>?</p>
+      <button id="q3a" data-correct>It is still running, and if it rejects later with nobody listening the process ends</button><button id="q3b">It is cancelled by the race</button><button id="q3c">Its result is queued until the next <code>await</code></button><button id="q3d">It is garbage-collected at once</button>
+      <p class="why" hidden>A race only picks the first to settle. The loser needs a <code>.catch</code> now, and usually an abort.</p></div>
+    <div class="quiz"><p class="q">4. What does <code>options.env</code> do to the SDK's subprocess?</p>
+      <button id="q4a" data-correct>Replaces its environment entirely: only the named variables exist in the child</button><button id="q4b">Adds to the inherited environment</button><button id="q4c">Overrides only variables that already exist</button><button id="q4d">Nothing; it is documentation</button>
+      <p class="why" hidden>Measured. That is why the child gets PATH, HOME and the token, and never the database URL or the session secret.</p></div>
+    <div class="quiz"><p class="q">5. One tool on the MCP server uses <code>z.record(...)</code>. What happens?</p>
+      <button id="q5a" data-correct>The whole server's tool list comes back empty, silently, and the model writes text that looks like tool calls</button><button id="q5b">That one tool is dropped with a warning</button><button id="q5c">The SDK throws at startup</button><button id="q5d">The tool works, but its arguments arrive as strings</button>
+      <p class="why" hidden>Measured in learning-tests: <code>init.tools</code> was <code>[]</code>, no handler ever ran, 3 of 3 runs faked the call. The init probe is the only place it shows.</p></div>
+    <div class="quiz"><p class="q">6. Why does <code>submit().settled</code> never reject?</p>
+      <button id="q6a" data-correct>All four outcomes (applied, no-op, refused, connection closed) are values, so a tool has one path to answer the model</button><button id="q6b">Rejections are not allowed in peer-client</button><button id="q6c">The room never refuses an agent's op</button><button id="q6d">Because <code>await</code> cannot catch a rejection</button>
+      <p class="why" hidden>A tool ANSWERS whatever happens. <code>isError: true</code> with a reason is how the model learns; a thrown error would be a second path to forget.</p></div>
+    <div class="quiz"><p class="q">7. Two people cancel the same queued run at once. Why did the first, single-statement version tell the loser "queued"?</p>
+      <button id="q7a" data-correct>A data-modifying CTE and its outer query share one snapshot: the SELECT saw the row as it was before the winner committed</button><button id="q7b">The loser's request arrived before the row existed</button><button id="q7c">Postgres retried the loser's UPDATE automatically</button><button id="q7d">The worker had already claimed the run</button>
+      <p class="why" hidden>Read "how it is now" in a second statement: under READ COMMITTED each statement gets a fresh snapshot; inside one statement, nothing new.</p></div>
+    <div class="quiz"><p class="q">8. Why is <code>usage</code> its own table, with <code>document_id</code> having no foreign key at all?</p>
+      <button id="q8a" data-correct>A job and a document can be deleted; what an org spent must not disappear with them</button><button id="q8b">Foreign keys are slow on large tables</button><button id="q8c">The worker cannot see the documents table</button><button id="q8d">Usage rows are written before the document exists</button>
+      <p class="why" hidden>The org is the only hard owner. Loose links on purpose, and <code>unique (job_id)</code> for at-most-once billing.</p></div>
+  </section>
+
+  <footer>Next: Lesson 4, after epic 4. The document becomes code: one deterministic TSX projection of the tree, a sandbox that previews it live, and what "the file still fits the shape" must mean before an edit to the code can come back as ops.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
