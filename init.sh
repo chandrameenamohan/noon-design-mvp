@@ -63,7 +63,20 @@ for _ in $(seq 1 180); do
   case "$status" in succeeded|failed|cancelled) break ;; esac
   sleep 0.5
 done
-case "$status" in succeeded|failed|cancelled) ;; *) echo "FAIL: the run is still '$status' after 90 s (is the worker up?)"; exit 1 ;; esac
+case "$status" in
+  succeeded|cancelled) ;;
+  failed)
+    # WHY it failed decides: the provider or the credential is not this script's business, a broken
+    # environment is (the SDK's binary missing from the image, sync unreachable from the worker, ...).
+    reason=$(curl -fsS -H "$me" "$api/documents/$doc_id/runs/$run_id" | sed -n 's/.*"error":"\([^"]*\)".*/\1/p')
+    case "$reason" in
+      token_missing|token_invalid|rate_limited|provider_unavailable|account_problem|timed_out|too_many_steps) status="failed ($reason: the credential or the provider, not this environment)" ;;
+      *) echo "FAIL: the AI run failed as '$reason': that is this environment, not the model"; exit 1 ;;
+    esac ;;
+  # A slow provider must not fail the bootstrap: the run was accepted and claimed, which is what this checks.
+  running) status="still running after 90 s (a slow provider; not a failure of this environment)" ;;
+  *) echo "FAIL: the run is still '$status' after 90 s: the worker never claimed it (is it up?)"; exit 1 ;;
+esac
 echo "AI run smoke: $status"
 docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where name = 'init.sh smoke'; delete from users where email = 'init-smoke@example.com'" >/dev/null # leave nothing behind
 echo "PASS: dev environment is up (api writes and reads through a non-superuser role, hook installed)"

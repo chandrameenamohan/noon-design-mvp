@@ -152,11 +152,17 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
     if (!message || message.type === "presence" || message.type === "presence_left") return;
     trace.push(`room -> ${client.name}  ${message.type}${message.type === "op" ? ` seq ${String(message.seq)} ${short(message.opId)}` : message.type === "rejected" ? ` ${short(message.opId)} ${message.reason}` : message.type === "welcome" ? ` seq ${String(message.seq)}` : ` ${short(message.opId)}`}`);
     const effects = client.replica.receive(message satisfies DocMessage);
+    // INVARIANT (E3.2): an op of ours is settled exactly once, ever. A program waits on that answer (the AI
+    // worker's tool call): a second one is a lie, a missing one is a call that never returns.
+    for (const { opId } of effects.settled) {
+      if (!awaiting.delete(opId)) fail(`${client.name} settled ${short(opId)} ${madeAt.has(opId) ? "a second time" : "which it never made"}`);
+    }
     for (const rejection of effects.rejected) trace.push(`${client.name} gives up ${short(rejection.opId)}: ${rejection.reason}`);
     if (effects.resync || effects.fatal) { disconnect(client); connect(client); }
     client.toServer.push(...inOrder(client, client.replica.takeSendable()));
   }
 
+  const awaiting = new Set<string>(); // queued by some replica, not settled yet
   for (const client of clients) connect(client);
   for (step = 1; step <= steps && !failure; step++) {
     const client = clients[Math.floor(random() * clients.length)] as Client;
@@ -165,6 +171,7 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
       const op = chance(0.6) ? conflictOp(random, client.replica.doc) : randomOp(random, client.replica.doc);
       const result = client.replica.local(op);
       if (result.ok) madeAt.set(result.opId, madeAt.size);
+      if (result.ok && result.queued) awaiting.add(result.opId);
       trace.push(`${client.name} edits  ${describe(op)}${result.ok ? "" : ` (refused locally: ${result.reason})`}`);
       if (client.peer) client.toServer.push(...inOrder(client, client.replica.takeSendable()));
     } else if (roll < 0.65) await deliverToServer(client);
@@ -192,6 +199,7 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
     if (client.replica.pendingCount > 0) fail(`${client.name} still has ${String(client.replica.pendingCount)} unanswered ops after the network went quiet`);
     else if (canon(client.replica.doc) !== canon(room.doc)) fail(`${client.name} did not converge on the room's document`);
   }
+  if (awaiting.size > 0) fail(`${String(awaiting.size)} ops were never settled, first ${short([...awaiting][0] ?? "")}`);
   return { ok: failure === undefined, seed, steps, ...(failure === undefined ? {} : { failure }), trace };
 }
 

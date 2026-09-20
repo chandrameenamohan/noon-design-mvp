@@ -21,17 +21,19 @@ ready.then(
   (err: unknown) => process.stderr.write(`${JSON.stringify({ level: "error", source: "worker", message: `agent tool probe failed: ${describeError(err)}` })}\n`),
 );
 
+const stopping = new AbortController();
 const worker = await startWorker({
   db,
   redisUrl: config.redisUrl,
-  handlers: { ai: createAiHandler({ sessions: config.sessions, manifest, oauthToken: config.oauthToken, ready, runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) },
+  handlers: { ai: createAiHandler({ sessions: config.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, stillMember: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId)) !== undefined, runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) },
   sweepMs: 5000,
   // A worker has no port to probe; the container healthcheck reads this file's age instead.
   onAlive: () => { writeFileSync("/tmp/worker-alive", ""); },
 });
 process.stdout.write(`worker draining queues: ai (model ${config.model}, token ${config.oauthToken === undefined ? "MISSING: every run will fail as token_missing" : "present"})\n`);
 
-// Stop taking jobs and let the ones in flight finish, then close the pool.
-const shutdown = createShutdown({ steps: [() => worker.close(), () => db.close()], timeoutMs: 8000, exit: (code) => process.exit(code) });
+// Tell the runs in flight to end NOW (as failed/worker_stopped: a row left `running` would block its
+// document's next run for ever), stop taking jobs, wait for those endings to be written, close the pool.
+const shutdown = createShutdown({ steps: [() => { stopping.abort(); return worker.close(); }, () => db.close()], timeoutMs: 8000, exit: (code) => process.exit(code) });
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGINT", () => void shutdown());

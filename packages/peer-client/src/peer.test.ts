@@ -334,3 +334,14 @@ test("submit().settled resolves with what the SERVER decided about that op, and 
   peer.close();
   expect(await lost.settled).toEqual({ ok: false, reason: "connection_closed" });
 });
+
+test("a closed peer accepts nothing: submit() after close() is refused at once, changes nothing and leaves nobody waiting", async () => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  peer.close();
+  // Before the fix this returned ok, edited the closed peer's document and handed out a promise that never settled.
+  expect(peer.submit(add("late"))).toEqual({ ok: false, reason: "not_ready" });
+  expect(peer.doc.nodes["late"]).toBeUndefined();
+  expect(peer.pendingCount).toBe(0);
+});

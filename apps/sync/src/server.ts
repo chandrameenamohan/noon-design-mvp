@@ -123,6 +123,12 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
       ws.close(opened.closeCode, "cannot_open_document");
       return;
     }
+    // One room = one org: the org of whoever opened it. Two processes mint tokens now (the api and the
+    // AI worker); a token for this document under ANOTHER org is a stranger, whoever signed it.
+    if (claims.orgId !== opened.orgId) {
+      ws.close(CLOSE.documentNotFound, "cannot_open_document");
+      return;
+    }
     const { room } = opened;
     peerCounts.set(documentId, () => room.peerCount);
     if (ws.readyState !== ws.OPEN) {

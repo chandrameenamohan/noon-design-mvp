@@ -13,7 +13,7 @@ export type { RunAgent };
  * @noon/peer-client like a browser tab does (the single write path), so its ops get the same
  * validation, the same ordering, the same rate limit and the same rollback as a person's.
  */
-export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, connectTimeoutMs = 10_000 }: {
+export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, stillMember, stopping, connectTimeoutMs = 10_000, runTimeoutMs = 5 * 60_000 }: {
   /** `syncUrl` is how THIS process reaches the sync server (inside Docker: ws://sync:3001), not the browsers' address. */
   sessions: { secret: string; syncUrl: string };
   manifest: Manifest;
@@ -21,7 +21,14 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
   runAgent: RunAgent;
   /** The startup probe of the SDK's tool list. Rejected = no run may start. */
   ready: Promise<void>;
+  /** Asked when the run STARTS, which may be long after it was created: is that user still a member of the document's org? */
+  stillMember: (documentId: string, userId: string) => Promise<boolean>;
+  /** Aborted when the worker is told to stop (SIGTERM). */
+  stopping: AbortSignal;
+  /** How long the sync server may be unreachable, at the start or in the middle of a run. */
   connectTimeoutMs?: number;
+  /** The whole run, connect to last op. ponytail: one number for every run; per-org limits are F31 (E9). */
+  runTimeoutMs?: number;
 }): (job: Job) => Promise<void> {
   return async (job) => {
     // Fail FAST and by name, before anything is connected or spent. A missing token does not make
@@ -29,8 +36,11 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     // succeeded and did nothing (measured).
     if (oauthToken === undefined) throw new JobFailure("token_missing");
     await ready.catch(() => { throw new JobFailure("tools_missing"); });
+    if (stopping.aborted) throw new JobFailure("worker_stopped");
     const userId = job.createdBy;
-    if (userId === undefined) throw new JobFailure("owner_missing"); // the session is signed for the person the run acts for
+    // The session is signed for the person the run acts for. They were a member when they asked; a run can
+    // wait in the queue, and being removed from the org must take effect on what has not started yet.
+    if (userId === undefined || !(await stillMember(job.documentId, userId))) throw new JobFailure("owner_missing");
 
     const peer = connectPeer({
       manifest,
@@ -41,18 +51,39 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
         token: signSessionToken({ userId, orgId: job.orgId, documentId: job.documentId, secret: sessions.secret, ttlSeconds: 60, actor: { kind: "agent", runId: job.id } }),
       }),
     });
+    // A run must END, whatever happens around it. Left `running`, its row blocks this document's next
+    // run for ever (one unfinished run per document) and holds one of the worker's few slots. So three
+    // things can end it from outside, each with a name the user can read; whichever comes first wins.
     const abort = new AbortController();
+    let watchdog: NodeJS.Timeout | undefined;
+    const ended = new Promise<never>((_, reject) => {
+      const end = (reason: string): void => { reject(new JobFailure(reason)); };
+      stopping.addEventListener("abort", () => { end("worker_stopped"); }, { once: true, signal: abort.signal }); // SIGTERM: say so NOW, inside the shutdown deadline
+      const deadline = Date.now() + runTimeoutMs;
+      let silentSince = Date.now();
+      watchdog = setInterval(() => {
+        if (peer.status === "live") silentSince = Date.now();
+        // peer-client retries a lost server for ever, and an op it cannot send is never answered: the tool
+        // call waiting on it would never return. Closing the peer (below) answers it: connection_closed.
+        if (peer.closedBecause !== undefined || Date.now() - silentSince > connectTimeoutMs) end("sync_unreachable");
+        else if (Date.now() > deadline) end("timed_out");
+      }, 50);
+    });
+    ended.catch(() => undefined); // when the agent finishes first, nobody is left to hear this one
     try {
-      for (const deadline = Date.now() + connectTimeoutMs; peer.status !== "live"; await new Promise((r) => setTimeout(r, 20))) {
-        // closedBecause, not status: a peer is "closed" for one tick before its first connection starts.
-        if (peer.closedBecause !== undefined || Date.now() > deadline) throw new JobFailure("sync_unreachable");
-      }
+      const live = (async () => {
+        while (peer.status !== "live") await new Promise((r) => setTimeout(r, 20));
+      })();
+      await Promise.race([live, ended]);
       peer.setPresence({ cursor: null, selection: null }); // no pointer, but it tells the people already here that the AI has arrived
       const instruction = typeof job.input["instruction"] === "string" ? job.input["instruction"] : "";
-      await runAgent({ instruction, tools: buildTools(peer, manifest), signal: abort.signal });
+      const agent = runAgent({ instruction, tools: buildTools(peer, manifest), signal: abort.signal });
+      agent.catch(() => undefined); // if `ended` wins, the aborted agent rejects later, to nobody
+      await Promise.race([agent, ended]);
     } finally {
-      abort.abort();
-      peer.close(); // every tool call has awaited its op's outcome, so nothing of ours is still in flight
+      clearInterval(watchdog);
+      abort.abort(); // stops the model, and removes the listener on `stopping`
+      peer.close(); // an op still waiting is answered `connection_closed`; everything the agent was told succeeded, did
     }
   };
 }

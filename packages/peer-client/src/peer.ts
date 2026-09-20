@@ -188,6 +188,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
 
     const [revisionBefore, pendingBefore] = [replica.revision, replica.pendingCount];
     const effects = replica.receive(message);
+    for (const { opId, outcome } of effects.settled) settle(opId, outcome); // BEFORE a fatal end: these ops have left `pending`, so abandon() could not report them
     if (effects.fatal) { finish(effects.fatal); return; }
     if (message.type === "welcome") {
       if (message.you !== undefined) mine.add(message.you);
@@ -200,7 +201,6 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
       setStatus("live");
     }
     if (message.type === "welcome") sendOwn();
-    for (const { opId, outcome } of effects.settled) settle(opId, outcome);
     for (const rejection of effects.rejected) onRejected?.(rejection);
     // The picture changed, or what is still unsaved did (an acknowledgement changes only that).
     if (replica.revision !== revisionBefore || replica.pendingCount !== pendingBefore) onChange?.();
@@ -287,6 +287,9 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
 
     /** Make an edit. Shown at once; sent now, or after the next welcome if we are not live. */
     submit(op: Op): Submitted {
+      // A peer that has ended accepts nothing: finish() has already reported what was lost, and nothing
+      // would ever answer (or even send) this op, so its `settled` would hang for ever.
+      if (closedBecause !== undefined) return { ok: false, reason: "not_ready" };
       const waitingBefore = replica.pendingCount;
       const result = replica.local(op);
       if (!result.ok) return result;

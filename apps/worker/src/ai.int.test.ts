@@ -11,7 +11,10 @@ import type { AgentTool } from "./tools.ts";
 const ctx = useSyncServer();
 const job = (instruction = "add a card"): Job => ({ id: randomUUID(), orgId: TEST_ORG, documentId: randomUUID(), queue: "ai", input: { instruction }, createdBy: randomUUID() });
 const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
-const handlerWith = (runAgent: RunAgent) => createAiHandler({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", runAgent, ready: Promise.resolve() });
+const base = () => ({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: new AbortController().signal });
+const handlerWith = (runAgent: RunAgent) => createAiHandler({ ...base(), runAgent });
+/** A model that never finishes by itself: it ends only when the run's signal says so, as the real SDK does. */
+const forever: RunAgent = ({ signal }) => new Promise((_, reject) => { signal.addEventListener("abort", () => { reject(new Error("aborted")); }); });
 const call = (tools: AgentTool[], name: string, args: unknown) => {
   const tool = tools.find((t) => t.name === name);
   if (!tool) throw new Error(`no tool ${name}`);
@@ -77,7 +80,7 @@ test("an op the ROOM refuses (the document is full) is a tool error too, not a s
   const small = await startSyncServer({ port: 0, secrets: [TEST_SECRET], limits: { maxNodes: 2 } });
   try {
     const results: { ok: boolean; text: string }[] = [];
-    await createAiHandler({ sessions: { secret: TEST_SECRET, syncUrl: small.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), runAgent: async ({ tools }) => {
+    await createAiHandler({ ...base(), sessions: { secret: TEST_SECRET, syncUrl: small.url }, runAgent: async ({ tools }) => {
       results.push(await call(tools, "add_node", { parentId: "root", component: "Card", props: {} }));
       results.push(await call(tools, "add_node", { parentId: "root", component: "Card", props: {} }));
       return usage;
@@ -94,10 +97,11 @@ test.each([
   ["the startup probe failed", () => ({ ready: Promise.reject(new Error("tools_missing")) }), "tools_missing"],
   ["the sync server cannot be reached", () => ({ sessions: { secret: TEST_SECRET, syncUrl: "ws://127.0.0.1:1" } }), "sync_unreachable"],
   ["the user who started it no longer exists", () => ({}), "owner_missing"],
+  ["the user who started it has since been removed from the org", () => ({ stillMember: () => Promise.resolve(false) }), "owner_missing"],
 ] as const)("the run fails fast with a NAME when %s, and the model is never called", async (label, override, reason) => {
   let called = false;
-  const handler = createAiHandler({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), connectTimeoutMs: 500, runAgent: () => { called = true; return Promise.resolve(usage); }, ...override() });
-  await expect(handler(label.startsWith("the user") ? { ...job(), createdBy: undefined } : job())).rejects.toMatchObject({ reason });
+  const handler = createAiHandler({ ...base(), connectTimeoutMs: 500, runAgent: () => { called = true; return Promise.resolve(usage); }, ...override() });
+  await expect(handler(label.includes("no longer exists") ? { ...job(), createdBy: undefined } : job())).rejects.toMatchObject({ reason });
   expect(called).toBe(false);
 });
 
@@ -107,4 +111,55 @@ test("when the agent throws, the peer still leaves the document", async () => {
   await expect(handlerWith(() => Promise.reject(new Error("model exploded")))(run)).rejects.toThrow("model exploded");
   await human.next("presence_left");
   human.close();
+});
+
+// --- From the E3.2 review: nothing bounded a run once it was connected. A run that never ends holds one of
+// four worker slots for ever, and its `running` row blocks that document's next run for ever (409). ---
+test("a run that outlives its deadline is ended as `timed_out`: the model is aborted and the peer leaves", async () => {
+  const run = job();
+  const human = await connect(ctx.server.url, run.documentId);
+  let aborted = false;
+  const started = Date.now();
+  await expect(createAiHandler({ ...base(), runTimeoutMs: 300, runAgent: (input) => { input.signal.addEventListener("abort", () => { aborted = true; }); return forever(input); } })(run)).rejects.toMatchObject({ reason: "timed_out" });
+  expect(Date.now() - started).toBeLessThan(2000);
+  expect(aborted).toBe(true);
+  await human.next("presence_left");
+  human.close();
+});
+
+test("a worker that is told to stop ends its run as `worker_stopped` at once, so the row never stays `running`", async () => {
+  const stopping = new AbortController();
+  const running = createAiHandler({ ...base(), stopping: stopping.signal, runAgent: forever })(job());
+  setTimeout(() => { stopping.abort(); }, 100);
+  const started = Date.now();
+  await expect(running).rejects.toMatchObject({ reason: "worker_stopped" });
+  expect(Date.now() - started).toBeLessThan(1500);
+  // And a worker that is ALREADY stopping starts nothing.
+  await expect(createAiHandler({ ...base(), stopping: stopping.signal, runAgent: () => { throw new Error("must not be called"); } })(job())).rejects.toMatchObject({ reason: "worker_stopped" });
+});
+
+test("when the sync server goes away in the middle of a run, the waiting tool call comes back as an error and the run ends as `sync_unreachable`", async () => {
+  const { startSyncServer } = await import("../../sync/src/server.ts");
+  const doomed = await startSyncServer({ port: 0, secrets: [TEST_SECRET] });
+  let toolResult: { ok: boolean; text: string } | undefined;
+  const running = createAiHandler({ ...base(), sessions: { secret: TEST_SECRET, syncUrl: doomed.url }, connectTimeoutMs: 600, runAgent: async ({ tools, signal }) => {
+    expect((await call(tools, "add_node", { parentId: "root", component: "Card", props: {} })).ok).toBe(true);
+    await doomed.close();
+    toolResult = await call(tools, "add_node", { parentId: "root", component: "Card", props: {} }); // no server will ever answer this one
+    return forever({ instruction: "", tools, signal });
+  } })(job());
+  await expect(running).rejects.toMatchObject({ reason: "sync_unreachable" });
+  expect(toolResult).toMatchObject({ ok: false, text: expect.stringContaining("connection_closed") as string });
+});
+
+test("hostile or sloppy arguments: a `__proto__` prop is refused (not silently dropped), and props may be left out", async () => {
+  const results: { ok: boolean; text: string }[] = [];
+  await handlerWith(async ({ tools }) => {
+    results.push(await call(tools, "add_node", JSON.parse('{"parentId":"root","component":"Card","props":{"__proto__":{"polluted":true}}}')));
+    results.push(await call(tools, "add_node", { parentId: "root", component: "Card" }));
+    return usage;
+  })(job());
+  expect(results[0]).toMatchObject({ ok: false, text: expect.stringContaining("invalid_arguments") as string });
+  expect(results[1]?.ok).toBe(true);
+  expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
 });

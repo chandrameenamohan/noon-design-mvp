@@ -105,3 +105,15 @@ test("an oversized frame closes that peer with 1009 and the server carries on", 
   expect((await polite.next("op", (m) => m.opId === opId)).seq).toBe(1);
   polite.close();
 });
+
+// From the E3.2 review: the worker became the SECOND place that mints session tokens, so "one room = one org"
+// no longer rests on a single signer. The room's org is whoever opened it; a token for another org is a stranger.
+test("a token for the same document but ANOTHER org is refused like an unknown document", async () => {
+  const documentId = randomUUID();
+  const first = await connect(ctx.server.url, documentId);
+  await first.next("welcome");
+  const stranger = await connect(ctx.server.url, documentId, randomUUID(), {}, "33333333-3333-4333-8333-333333333333");
+  expect((await stranger.closed).code).toBe(4404);
+  expect(ctx.server.peerCount(documentId)).toBe(1);
+  first.close();
+});

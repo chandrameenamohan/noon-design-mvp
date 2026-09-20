@@ -97,7 +97,8 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
   // Budgets are kept per ACTOR (kind + id + run), not per connection: otherwise reconnecting would be
   // a free refill. An agent run gets its own, so that it cannot spend the budget of the person who started it.
   // ponytail: never pruned; one small entry per actor that ever edited here, for as long as the room lives.
-  // ponytail: a user could start many runs to multiply their budget; E3.2 caps concurrent runs per user.
+  // ponytail: a user could start many runs to multiply their budget. One unfinished run per DOCUMENT is
+  // enforced (E3.1); a cap per user and per org is F31 (E9.6).
   const buckets = new Map<string, { tokens: number; at: number }>();
   // Per CONNECTION: the op this peer was first refused for, when it may come back, and its strikes.
   const throttled = new WeakMap<Peer, { blockedOn: string; notBefore: number; strikes: number }>();

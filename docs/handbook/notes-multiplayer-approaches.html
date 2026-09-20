@@ -1,0 +1,437 @@
+<title>Multiplayer Approaches Compared</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.eyebrow { font: 500 12px/1.4 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h3 { font: 600 1.02rem/1.3 var(--sans); margin: 28px 0 6px; text-wrap: balance; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; overflow-wrap: anywhere; }
+a:focus-visible, summary:focus-visible, .scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code, dd code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; max-width: none; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; max-width: 36rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); vertical-align: bottom; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 8rem; }
+td:first-child { font: 500 14px/1.4 var(--sans); }
+tr.ours td { background: var(--accent-wash); } tr.ours td:first-child { padding-left: 8px; }
+.case { border: 1px solid var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.case .label { color: var(--accent); margin-top: 4px; }
+.case p { font-size: 0.97rem; margin: 8px 0 0; max-width: none; }
+.say { border: 1px solid var(--ink); background: var(--surface); padding: 18px 20px; margin: 20px 0; }
+.say p { font: 400 1.08rem/1.55 var(--serif); margin: 0 0 10px; max-width: none; } .say p:last-child { margin: 0; }
+.say b { font-weight: 600; }
+.qa { border-top: 1px solid var(--rule); padding: 14px 0 2px; max-width: 36rem; }
+.qa .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.qa p { font-size: 0.97rem; margin: 0 0 10px; }
+dl.gloss { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; font-size: 0.95rem;
+  display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; }
+dl.gloss dt { font: 500 13px/1.7 var(--mono); color: var(--accent); } dl.gloss dd { margin: 0; }
+svg.diagram { display: block; min-width: 640px; width: 100%; height: auto; }
+.d-line { stroke: var(--rule); stroke-width: 1.5; fill: none; }
+.d-arrow { stroke: var(--ink); stroke-width: 1.5; fill: none; }
+.d-accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+.d-lost { stroke: var(--bad); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+.d-box { fill: var(--surface); stroke: var(--rule); stroke-width: 1.5; }
+.d-room { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.5; }
+.d-head { font: 600 13px var(--sans); fill: var(--ink); }
+.d-t { font: 400 11.5px var(--mono); fill: var(--ink); }
+.d-s { font: 400 11.5px var(--mono); fill: var(--slate); }
+.d-a { font: 500 11.5px var(--mono); fill: var(--accent); }
+.d-b { font: 500 11.5px var(--mono); fill: var(--bad); }
+.d-fill-ink { fill: var(--ink); } .d-fill-accent { fill: var(--accent); } .d-fill-bad { fill: var(--bad); }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media (max-width: 480px) { body { font-size: 17.5px; padding-inline: 16px; padding-block: 36px 72px; } pre { font-size: 12.5px; }
+  dl.gloss { grid-template-columns: 1fr; gap: 0; } dl.gloss dd { margin-bottom: 8px; } }
+@media print {
+  body { font-size: 11pt; padding: 0; background: #fff; }
+  main { max-width: none; } p, ul, ol, .lede, .qa, .note, footer { max-width: none; }
+  .scroll { overflow: visible; } pre { white-space: pre-wrap; overflow-wrap: anywhere; width: auto; min-width: 0; font-size: 8.4pt; }
+  table { font-size: 8.8pt; } td { min-width: 0; padding-right: 9px; } th { font-size: 6.8pt; padding-right: 9px; white-space: normal; }
+  td:first-child { font-size: 8.6pt; }
+  svg.diagram { min-width: 0; }
+  h2 { break-after: avoid; margin-top: 26pt; } h3, .label { break-after: avoid; }
+  tr, .case, .aside, .note, .say, .qa, dl.gloss, svg, pre { break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
+  .toc { display: none; }
+  footer { margin-top: 14pt; padding-top: 8pt; font-size: 8pt; }
+  dl.gloss { gap: 3px 16px; padding: 10px 14px; }
+}
+</style>
+
+<main>
+<p class="eyebrow">Noon MVP handbook · architecture notes</p>
+<h1>Many editors, one document: the approaches, and why we picked ours</h1>
+<p class="lede">A whiteboard-ready map. First the problems every multi-user editor must solve. Then the families of answers, with honest costs. Then what this project does, and the one requirement that decided it.</p>
+
+<ul class="toc">
+  <li><a href="#problem">1. The problem</a></li>
+  <li><a href="#families">2. The families of answers</a></li>
+  <li><a href="#figma">3. What Figma chose, and why</a></li>
+  <li><a href="#ours">4. What we do: the life of one op</a></li>
+  <li><a href="#framework">5. The decision framework</a></li>
+  <li><a href="#crib">6. Interview crib</a></li>
+  <li><a href="#glossary">7. Glossary</a></li>
+  <li><a href="#sources">8. Sources</a></li>
+</ul>
+
+<h2 id="problem">1. The problem</h2>
+<p>Alice and Bob have the same page open. It holds one Button. Alice sets its <code>label</code> to "Buy". At the same moment Bob sets it to "Pay".</p>
+<p>Each sees their own edit at once. The network can delay, repeat, reorder or lose their messages. A laptop can sleep. A server can die. Yet both screens must end up showing the same label.</p>
+
+<div class="scroll" tabindex="0" role="group" aria-label="Diagram: two concurrent edits and a lost acknowledgement">
+<svg class="diagram" viewBox="0 0 680 262" role="img" aria-label="Alice and Bob both send an edit to the server. Bob's arrives first and gets seq 8, Alice's arrives second and gets seq 9. The acknowledgement to Alice is lost.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker>
+    <marker id="ahb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-bad"/></marker>
+  </defs>
+  <text x="90" y="24" text-anchor="middle" class="d-head">Alice</text>
+  <text x="340" y="24" text-anchor="middle" class="d-head">Server</text>
+  <text x="590" y="24" text-anchor="middle" class="d-head">Bob</text>
+  <line x1="90" y1="36" x2="90" y2="252" class="d-line"/>
+  <line x1="340" y1="36" x2="340" y2="252" class="d-line"/>
+  <line x1="590" y1="36" x2="590" y2="252" class="d-line"/>
+  <text x="100" y="62" class="d-t">label = "Buy"</text>
+  <line x1="90" y1="80" x2="338" y2="130" class="d-arrow" marker-end="url(#ah)"/>
+  <text x="580" y="54" text-anchor="end" class="d-t">label = "Pay"</text>
+  <line x1="590" y1="70" x2="342" y2="100" class="d-arrow" marker-end="url(#ah)"/>
+  <text x="350" y="118" class="d-a">arrives 1st: seq 8</text>
+  <text x="330" y="152" text-anchor="end" class="d-a">arrives 2nd: seq 9</text>
+  <text x="350" y="152" class="d-s">so "Buy" wins, for everyone</text>
+  <line x1="340" y1="175" x2="225" y2="189" class="d-lost"/>
+  <path d="M217,183 l12,12 m0,-12 l-12,12" class="d-lost" style="stroke-dasharray:none"/>
+  <text x="350" y="182" class="d-b">ack lost on the way</text>
+  <text x="100" y="218" class="d-s">Alice resends. It must not apply twice.</text>
+  <text x="580" y="242" text-anchor="end" class="d-s">Bob's tab sleeps: he must catch up.</text>
+</svg>
+</div>
+
+<p>Any design, whatever its name, must answer these nine questions. Write this list on the whiteboard first.</p>
+<ol>
+  <li><b>Order.</b> Two edits happened "at the same time". Which one counts as later?</li>
+  <li><b>Convergence.</b> Does everyone end up with the same document, always?</li>
+  <li><b>Instant feel.</b> My own edit must show now, not after a round trip.</li>
+  <li><b>Duplicates and retries.</b> A resend must change the document once, not twice (exactly-once <i>effect</i>).</li>
+  <li><b>Reconnect.</b> After a dropped socket, how do I catch up, and what happens to my unsent edits?</li>
+  <li><b>Conflicting intent.</b> Edit a node that someone deleted. Move a frame into its own child (a cycle). Two inserts at one index.</li>
+  <li><b>Validity and permission.</b> Who says an edit is allowed at all?</li>
+  <li><b>Overload and abuse.</b> One client sends 10,000 edits a second.</li>
+  <li><b>Durability and failover.</b> The server dies. What is lost? Who owns the document next?</li>
+</ol>
+
+<h2 id="families">2. The families of answers</h2>
+<p>Six ideas are worth knowing. The first two avoid the problem. The next three solve it. The last is a different layer that people mix in by mistake.</p>
+
+<div class="scroll" tabindex="0" role="group" aria-label="Comparison table of approaches">
+<table>
+  <thead><tr><th>Approach</th><th>Who decides order</th><th>Offline / peer-to-peer</th><th>Enforcing validation, permissions</th><th>Moves in a tree</th><th>Metadata cost</th><th>Build cost</th></tr></thead>
+  <tbody>
+    <tr><td>A. Lock / check-out</td><td>Nobody: one editor at a time</td><td>No</td><td>Easy, at the lock holder</td><td>Trivial</td><td>None</td><td>Low</td></tr>
+    <tr><td>B. Last write wins, whole document</td><td>The clock or the last save</td><td>Sort of, but work is lost</td><td>Easy, at save</td><td>Trivial</td><td>None</td><td>Lowest</td></tr>
+    <tr><td>C. Operational Transformation</td><td>Central server; ops are rewritten to fit</td><td>Short offline only, in practice</td><td>Possible: a server is in the path</td><td>Hard: transform rules multiply</td><td>Low</td><td>High</td></tr>
+    <tr><td>D. True CRDT (Yjs, Automerge)</td><td>Nobody: the merge rule is in the data</td><td>Yes, this is the point</td><td>Hard: no one is the authority</td><td>Hard: cycles need a special algorithm</td><td>Grows with edit history</td><td>Low with a library, high without</td></tr>
+    <tr class="ours"><td>E. Server-ordered op log (ours, Figma-style)</td><td>One server process per document</td><td>Brief offline, then replay; no p2p</td><td>Natural: every op passes one gate</td><td>Simple: the server rejects cycles</td><td>A counter per op</td><td>Medium</td></tr>
+    <tr><td>F. Raft / replicated state machine</td><td colspan="6">A different layer. It makes the <i>server's</i> log survive machine failures. It says nothing about how browsers merge edits. You can put it under C or E.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>A. Pessimistic locking, or check-out</h3>
+<p>Only one person may edit an object at a time. Everyone else waits or reads. This is <code>SELECT ... FOR UPDATE</code> held by a human.</p>
+<p>Correct and simple, but people block each other, and a lock held by a closed laptop needs a timeout. It still suits rare, heavy edits: a contract, a binary asset.</p>
+
+<h3>B. Last write wins on the whole document</h3>
+<p>Every save sends the full document. The last save replaces everything. Alice fixes a label, Bob moves an image, and Bob's save erases Alice's fix.</p>
+<p>Add a version column and the second writer gets a conflict error instead: classic optimistic locking. Honest, but now a human merges by hand. Fine for a settings form, not for a canvas.</p>
+
+<h3>C. Operational Transformation (OT)</h3>
+<p>Clients send small ops such as "insert 'x' at position 5". A central server puts them in order. When two ops were made at the same time, one is <i>transformed</i> so it still means the same thing after the other. Insert at 5 becomes insert at 6.</p>
+<p>Google Docs is the well-known user. OT is excellent for text, where positions shift all the time. Its cost is the transform function: one for every pair of op types, each exactly right. For a tree with add, move, remove and set, the pairs multiply.</p>
+
+<h3>D. True CRDTs</h3>
+<p>A CRDT is a data type with a merge rule built in. Any two copies that have seen the same edits, in any order, hold the same state. No server has to decide anything. Yjs and Automerge are the two best-known libraries.</p>
+<p>This is the right tool when there is no server you can count on: offline for days, peer-to-peer, local-first apps. You pay for that freedom in four ways:</p>
+<ul>
+  <li><b>Metadata.</b> Every item carries ids, and deletes usually leave a marker (a tombstone) or stay in the history. Size follows the edit history, not only the content.</li>
+  <li><b>Tree moves are hard.</b> Alice moves A into B while Bob moves B into A. Each move is fine alone; merged, they make a cycle. Solving this needed its own research paper (Kleppmann and others, 2021).</li>
+  <li><b>No authority.</b> If nobody decides, nobody can refuse. Schema validation, permissions, rate limits and "who did this" must be bolted on by a server anyway, and a server that rejects edits breaks the "any order converges" promise.</li>
+  <li><b>Converged is not the same as intended.</b> The merge is always consistent. It is not always what either user meant.</li>
+</ul>
+
+<h3>E. Server-authoritative ordered op log</h3>
+<p>Clients send small ops. One server process per document gives each accepted op the next number. Everyone applies ops in that number order. Same ops, same order, same result: convergence without a merge function.</p>
+<p>In Java terms: the room is a Kafka partition with a single writer. The sequence number is the offset. Every replica is a consumer that replays the log. Concurrent edits to one prop resolve as last writer wins, where "last" means "highest number", never a clock.</p>
+
+<h3>F. Raft and replicated state machines</h3>
+<p>Raft keeps one log identical on three or five <i>servers</i>, so a machine can die and the log survives. It is what etcd and Consul use inside.</p>
+<p>Saying "use Raft" for collaborative editing confuses two layers. Raft answers problem 9, the server's own durability and failover. It does nothing for problems 1 to 8 between browsers. Our planned answer to problem 9 is simpler: Postgres holds the truth, and a lease with a fencing token decides who may write (section 4).</p>
+
+<h2 id="figma">3. What Figma chose, and why</h2>
+<div class="aside">
+  <p><b>A correction worth getting right in an interview.</b> Figma did not adopt CRDTs and later drop them. Their 2019 engineering post says they looked at OT and at CRDTs, and built something simpler that borrows CRDT ideas. In their words: "Figma isn't using true CRDTs though."</p>
+</div>
+<p><b>Why not OT.</b> The post's verdict: "OTs were unnecessarily complex for our problem space." A design file is a tree of objects with properties, not a long string of characters.</p>
+<p><b>Why not a true CRDT.</b> CRDTs are built for systems with no central authority, and that costs overhead. Figma has a server. Again their words: "Since Figma is centralized (our server is the central authority), we can simplify our system by removing this extra overhead and benefit from a faster and leaner implementation."</p>
+<p><b>What they built,</b> as described in that post and its 2017 companion:</p>
+<ul>
+  <li><b>Last writer wins per property, per object.</b> The document is a map of objects, each a map of properties. Two people change <i>different</i> properties of one object: both changes stay. They change the <i>same</i> property: the value that reached the server last wins. The server defines the order.</li>
+  <li><b>No flicker.</b> While a client has an unacknowledged change to a property, it ignores incoming server values for that same property. Its own change is its best guess of the final value.</li>
+  <li><b>Tree structure.</b> The parent link is a property stored on the child. If a reparent would create a cycle, the server rejects it.</li>
+  <li><b>Child order by fractional indexing.</b> Each child has a position between 0 and 1. To insert between two children, take a position between theirs. No other child has to be renumbered. If two clients pick the same position, the server assigns a unique one to the second. Concurrent inserts may interleave, which is acceptable for design objects.</li>
+  <li><b>An honest limit.</b> Text is a single property, so two people typing in the same text box do not merge. The post says so plainly.</li>
+</ul>
+<div class="case">
+  <p class="label">Tiny example: LWW per property</p>
+  <p>Alice sets <code>Button.label = "Buy"</code>. Bob sets <code>Button.color = "red"</code>. Result: a red "Buy" button. No conflict, because the unit of conflict is one property, not the object and not the document. Now both set <code>label</code>: the one the server saw last wins, on every screen.</p>
+</div>
+<p>The lesson to carry: <b>if a server is always in the path, let it decide the order, and you can delete most of the hard parts of a CRDT.</b></p>
+
+<h2 id="ours">4. What we do: the life of one op</h2>
+<p>This project is family E. SPEC.md states two keystones. "One room, one order": each document has exactly one in-memory room, the only sequencer; client clocks are never used. "One write path": browser, AI agent and git peer all submit ops through <code>packages/peer-client</code>.</p>
+<p>The whole vocabulary of change is four ops: <code>add_node</code>, <code>move_node</code>, <code>remove_node</code>, <code>set_prop</code>. The envelopes are small:</p>
+<p class="label">from <span class="mono">packages/contracts/src/index.ts</span></p>
+<div class="scroll" tabindex="0"><pre><code>/** What a peer submits. `opId` makes a resend harmless; `baseSeq` is the last seq the peer had seen. */
+export const ClientOp = z.strictObject({ opId: z.uuid(), baseSeq: z.number().int().min(0), op: Op });
+
+/** What the room broadcasts: the op, its place in the one true order, and who made it. */
+export const SequencedOp = z.object({ seq: z.number().int().min(1), opId: z.uuid(), actor: Actor, op: Op });</code></pre></div>
+<p>Note what the client does <i>not</i> send: the actor. The room stamps it from the verified session. A client-supplied actor could claim to be anyone.</p>
+
+<div class="scroll" tabindex="0" role="group" aria-label="Sequence diagram: the life of one op">
+<svg class="diagram" viewBox="0 0 760 400" role="img" aria-label="Alice's replica applies an op locally, sends it to the room, the room runs its checks and assigns seq 8, then broadcasts to Alice and Bob.">
+  <defs>
+    <marker id="ah2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-ink"/></marker>
+    <marker id="ah3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="d-fill-accent"/></marker>
+  </defs>
+  <text x="110" y="22" text-anchor="middle" class="d-head">Alice's replica</text>
+  <text x="400" y="22" text-anchor="middle" class="d-head">Room (one per document)</text>
+  <text x="650" y="22" text-anchor="middle" class="d-head">Bob's replica</text>
+  <line x1="110" y1="32" x2="110" y2="392" class="d-line"/>
+  <line x1="400" y1="32" x2="400" y2="392" class="d-line"/>
+  <line x1="650" y1="32" x2="650" y2="392" class="d-line"/>
+
+  <rect x="8" y="44" width="204" height="44" class="d-box"/>
+  <text x="18" y="62" class="d-a">1  local(op)</text>
+  <text x="18" y="79" class="d-t">check, show at once, queue</text>
+
+  <text x="200" y="106" text-anchor="middle" class="d-a">2</text>
+  <text x="200" y="122" text-anchor="middle" class="d-t">{opId, baseSeq: 7, op}</text>
+  <line x1="110" y1="130" x2="288" y2="130" class="d-arrow" marker-end="url(#ah2)"/>
+
+  <rect x="290" y="112" width="220" height="176" class="d-room"/>
+  <text x="302" y="132" class="d-a">3  one op at a time</text>
+  <text x="302" y="152" class="d-t">seen (sender, opId)? replay</text>
+  <text x="302" y="171" class="d-t">baseSeq too old?  "stale"</text>
+  <text x="302" y="190" class="d-t">validate against manifest</text>
+  <text x="302" y="209" class="d-t">limits; no-op? "ack" only</text>
+  <text x="302" y="228" class="d-t">persist (journal: epic 6)</text>
+  <text x="302" y="247" class="d-t">apply, take seq 8</text>
+  <text x="302" y="266" class="d-t">stamp actor, remember</text>
+
+  <text x="200" y="312" text-anchor="middle" class="d-a">4  op seq 8 = her ack</text>
+  <line x1="290" y1="320" x2="112" y2="320" class="d-accent" marker-end="url(#ah3)"/>
+  <text x="580" y="312" text-anchor="middle" class="d-a">4  op seq 8</text>
+  <line x1="510" y1="320" x2="648" y2="320" class="d-accent" marker-end="url(#ah3)"/>
+
+  <rect x="8" y="336" width="204" height="44" class="d-box"/>
+  <text x="18" y="354" class="d-a">5  confirmed += op</text>
+  <text x="18" y="371" class="d-t">drop it from pending</text>
+  <rect x="548" y="336" width="204" height="44" class="d-box"/>
+  <text x="558" y="354" class="d-a">5  confirmed += op</text>
+  <text x="558" y="371" class="d-t">rebuild what Bob sees</text>
+</svg>
+</div>
+
+<ol>
+  <li><b>Local.</b> Alice's replica validates the op against the document she sees, applies it at once, and puts it in a <code>pending</code> list. She never waits for the network.</li>
+  <li><b>Send.</b> The op goes out with a fresh <code>opId</code> and the <code>baseSeq</code> she had seen. At most 50 unanswered ops are on the wire at once.</li>
+  <li><b>The room decides.</b> One op at a time, through a queue. Dedupe first, then the <code>stale</code> guard, then validation against the design-system manifest, then size limits. An op that would change nothing gets a private <code>ack</code> and no number. A real change is made durable first (the seam exists; the journal is epic 6), then applied, then given the next <code>seq</code>.</li>
+  <li><b>Broadcast.</b> Everyone gets <code>{seq, opId, actor, op}</code>. The sender's copy is her acknowledgement. A refusal goes to the sender only, with a named reason.</li>
+  <li><b>Replicas catch up.</b> Each applies the server's op to its <code>confirmed</code> document and rebuilds the optimistic one.</li>
+</ol>
+
+<h3>The two documents in every client</h3>
+<p>A replica holds <code>confirmed</code> (what the server said, in server order, never guessed) and <code>optimistic</code> (confirmed plus my unanswered ops: what I see). When a remote op arrives, the guess is thrown away and made again:</p>
+<p class="label">from <span class="mono">packages/peer-client/src/replica.ts</span></p>
+<div class="scroll" tabindex="0"><pre><code>function rebuild(): void {
+  revision++;
+  optimistic = { ...confirmed, nodes: { ...confirmed.nodes } };
+  for (const each of pending) applyOpInto(optimistic, each.op);
+}</code></pre></div>
+<p>This is <code>git rebase</code>: my local commits are replayed on top of the new upstream. It also gives Figma's no-flicker rule for free. My pending "Buy" is re-applied over Bob's confirmed "Pay", so my label does not jump while I wait.</p>
+<div class="note">
+  <p><code>baseSeq</code> looks like an optimistic-locking version column, but it is used differently. We do not reject an op because the document moved on: that would turn every concurrent edit into an error. It is only a guard for one case, shown next.</p>
+</div>
+
+<h3>Resends: dedupe, and the rule for what the room forgot</h3>
+<p class="label">from <span class="mono">apps/sync/src/room.ts</span></p>
+<div class="scroll" tabindex="0"><pre><code>const key = `${peer.actor.id}:${opId}`;
+const before = remembered.get(key);
+if (before) {
+  peer.send({ type: "op", ...before.op });   // the ORIGINAL answer, not a second apply
+  return;
+}
+...
+if (baseSeq &lt; forgottenUpTo) {
+  refuse("stale");
+  return;
+}</code></pre></div>
+<p>The room remembers recent ops (20,000 ops or 8 MB) so a resend gets its original answer. Memory is bounded, so there must be a rule for what falls outside it. If an op was written against a <code>seq</code> older than anything the room remembers, the room cannot know whether it already applied it. It says <code>stale</code>, and the client resyncs instead of risking a second apply.</p>
+
+<h3>Conflicting intent, settled by order</h3>
+<p>SPEC.md §2.4 fixes the rules. Last writer wins per <code>(nodeId, key)</code> by <code>seq</code>. A remove beats any concurrent edit under it: the late edit finds no node and is refused as <code>gone</code>, silently, because the user did nothing wrong. A move that would create a cycle is refused as <code>cycle</code>. An <code>index</code> is clamped, and means the node's final position.</p>
+<p>In code this is one function, <code>plan(doc, op)</code> in <code>packages/doc-model/src/index.ts</code>. It is total: any op on any document has a defined result, and an op that no longer makes sense simply changes nothing. "A remove beats an edit" needs no special case.</p>
+<p>One difference from Figma: we order children by a plain integer index, not fractional positions. The server's order makes that safe. The cost: if Bob inserts ahead of Alice, her "index 2" may land one slot off from what she saw. For a layout tree we accept that.</p>
+
+<h3>Problem by problem, with the bugs that taught us</h3>
+<div class="scroll" tabindex="0" role="group" aria-label="Table: problem, mechanism, code, lesson">
+<table>
+  <thead><tr><th>Problem</th><th>Our mechanism</th><th>Where</th><th>What it cost us</th></tr></thead>
+  <tbody>
+    <tr><td>1 Order, 2 Convergence</td><td>One room per document gives each op the next <code>seq</code>. A queue handles one op at a time, because <code>persist</code> is awaited.</td><td><code>apps/sync/src/room.ts</code></td><td>Without the queue, two peers could both "successfully" add the same node id while the first write was still awaited.</td></tr>
+    <tr><td>3 Instant feel</td><td><code>confirmed</code> + <code>pending</code> = <code>optimistic</code>; <code>rebuild()</code>.</td><td><code>packages/peer-client/src/replica.ts</code></td><td>Copying only the node map: about 1 ms per remote op at 5,000 nodes, against 6.5 ms with a deep clone.</td></tr>
+    <tr><td>4 Duplicates</td><td>Dedupe per <code>(sender, opId)</code>, before validation. A resend keeps its <code>opId</code> and <code>baseSeq</code>.</td><td><code>room.ts</code>, <code>replica.ts</code></td><td>The key must include the sender: a broadcast shows every opId to everyone. And a late answer at or below my <code>seq</code> is not applied again, or it would overwrite a newer value.</td></tr>
+    <tr><td>4 What the room forgot</td><td><code>stale</code> via <code>baseSeq</code>. Only an op that no earlier connection carried is sent again.</td><td><code>room.ts</code>, <code>replica.ts</code></td><td>A stale resend could put an old write on top of a new one. "Would this op change the document now?" is not "was it applied?".</td></tr>
+    <tr><td>4 No-op acks</td><td>An op that changes nothing: <code>ack</code> to the sender, no <code>seq</code>, no broadcast. The client believes it.</td><td><code>room.ts</code>, <code>replica.ts</code></td><td>A livelock: the room remembered its ack, the replica distrusted it and resynced, the resend got the same ack, for ever. Each feature was correct alone. Found at about 1 seed in 700.</td></tr>
+    <tr><td>5 Reconnect</td><td>Fresh session per connection, a full <code>welcome</code>, pending ops resent. Backoff with jitter, reset only after a connection that lasted.</td><td><code>packages/peer-client/src/peer.ts</code></td><td>Resetting the backoff on every welcome meant a crash-looping server got a reconnect every 250 ms, for ever.</td></tr>
+    <tr><td>5 Frames during load</td><td>Listeners attached before the first <code>await</code>; early frames are queued until the room has loaded.</td><td><code>apps/sync/src/server.ts</code></td><td>A lost op. A test that failed 1 run in 6 was real: the message listener was attached after an await.</td></tr>
+    <tr><td>6 Conflicting intent</td><td><code>plan()</code> is total; <code>validate()</code> names the reason (<code>gone</code>, <code>cycle</code>, ...).</td><td><code>packages/doc-model/src</code></td><td><code>__proto__</code> as a prop name, and <code>-0</code> across a JSON hop, each made sender and peers diverge. Both are refused in the contract.</td></tr>
+    <tr><td>7 Validity, identity</td><td>Every op is validated against a manifest generated from the design system. The room stamps the actor.</td><td><code>packages/contracts</code>, <code>doc-model/src/validate.ts</code></td><td>Two of our own limits disagreed (a 500 KB contract, a 64 KB frame): a valid op would have killed the socket and been resent for ever.</td></tr>
+    <tr><td>8 Overload</td><td>Token bucket per actor (user, agent run, git), charged on arrival. After a refusal, later ops are refused too, to keep order. The client restarts at one op in flight.</td><td><code>room.ts</code>, <code>replica.ts</code></td><td>Resending the whole window after "too fast" cost 18,524 refusals for 600 ops.</td></tr>
+    <tr><td>9 Durability (today)</td><td>The whole document is saved when the last peer leaves and on shutdown. Save first, then close sockets.</td><td><code>apps/sync/src/server.ts</code></td><td>"Terminate sockets, then await pending saves" lost everything: the close handlers that start the saves run on a later tick.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>How we know it converges</h3>
+<p><code>apps/sync/src/sim.ts</code> is a seeded simulator. It drives the real room and the real replica with three peers, under delay, reordering across peers, dropped connections and room reloads. One seed, one run, byte for byte, so any failure can be replayed.</p>
+<p>After every step it checks invariants: no <code>opId</code> at two seqs, no gap in <code>seq</code>, last writer wins (computed apart from the code under test), the room equals a replay of its own log, a caught-up replica equals the room. At the end everyone must converge with nothing pending. The drain is bounded, so a livelock is a failure, not a hang.</p>
+<p>Two lessons: random ops rarely collide, so generate conflicts on purpose; and seeds 1 to 40 never found the livelock, so sweep thousands of seeds once and commit the ones that fail.</p>
+
+<h3>Planned, not built yet</h3>
+<div class="aside">
+  <p><b>Today's honest limit.</b> The <code>persist</code> seam is in the room, but no journal is wired to it. A <code>kill -9</code> on the sync server loses the edits made since the room opened. The code says so itself.</p>
+  <p><b>Epic 6: journal and snapshots.</b> Every op is appended to a Postgres table <i>before</i> it is broadcast. Snapshots go to MinIO. Opening a document loads the newest snapshot and replays the rows after it. This is event sourcing. A unique index on the op id then makes dedupe permanent, and the <code>stale</code> case goes away.</p>
+  <p><b>Epic 7: more than one sync node.</b> A Redis lease decides which node owns a room. A lease alone is not safe. <code>learning-tests/redis/test.ts</code> (finding 4) blocked a process for 2 s on a 300 ms lease: another process took the lease about 1.7 s before the first one woke up, still believing it was the owner. So each lease comes with a <b>fencing token</b>, a number that only grows, and the journal append checks it in the same SQL statement. A zombie's write is refused by the database, whatever the zombie believes.</p>
+</div>
+
+<h2 id="framework">5. The decision framework</h2>
+<p>Ask these six questions. The answers pick the family.</p>
+<div class="scroll" tabindex="0" role="group" aria-label="Decision table">
+<table>
+  <thead><tr><th>Question</th><th>If yes</th><th>If no</th><th>Our answer</th></tr></thead>
+  <tbody>
+    <tr><td>Is a server always in the path?</td><td>Let it decide order (C or E)</td><td>You need a CRDT (D)</td><td>Yes. Peers get a session from the API before they connect.</td></tr>
+    <tr><td>Must edits work offline for days, or peer-to-peer?</td><td>CRDT (D)</td><td>C or E is enough</td><td>No. A short disconnect is covered by pending ops.</td></tr>
+    <tr><td>Is the data free text?</td><td>OT, or a text CRDT</td><td>Objects and props: E with LWW is enough</td><td>No. A tree of typed components and props.</td></tr>
+    <tr><td>Must someone enforce schema, permissions, rate limits, audit?</td><td>You need an authority: C or E</td><td>D becomes attractive</td><td>Yes, all four. <b>This decided it.</b></td></tr>
+    <tr><td>Many writers on one document at once?</td><td>C, D or E. Not A or B</td><td>A lock or a version column may do</td><td>Yes: people, plus an AI agent making many ops.</td></tr>
+    <tr><td>Can users accept "converged but surprising"?</td><td>Automatic merge rules are fine</td><td>Prefer explicit refusals with reasons</td><td>Mostly no. A refused op names its reason.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>The sentence to say</h3>
+<div class="say">
+  <p>"There are five real options: locking, whole-document last-write-wins, Operational Transformation, CRDTs, and a server-ordered op log.</p>
+  <p><b>We picked the server-ordered op log,</b> because for us the important part is that <b>every edit, from a person, the AI agent or git, passes one gate</b>: validated against the design-system manifest, attributed by the server, rate-limited and auditable. And a central server already exists.</p>
+  <p>CRDTs do not give you that gate for free, because no one is the authority. OT does, but it is needlessly complex for a tree of typed props: we have no text positions to transform. Locking and whole-document LWW are not multiplayer."</p>
+</div>
+
+<h3>What we gave up</h3>
+<ul>
+  <li><b>Offline-first and peer-to-peer.</b> Without the server there is no order, so no confirmed edits.</li>
+  <li><b>One room is one writer.</b> A single document cannot use more than one process. We scale by sharding documents across nodes, not by splitting a document.</li>
+  <li><b>The server is on the critical path.</b> When storage is down, the room must refuse ops (<code>unavailable</code>) rather than accept what it cannot keep.</li>
+  <li><b>No merging inside a value.</b> Two people typing in one text prop: one wins. The same limit Figma states.</li>
+</ul>
+
+<h3>When I would choose differently</h3>
+<ul>
+  <li><b>A CRDT</b> for a notes app that must work on a plane for a week, for peer-to-peer sync, or when I cannot run a server per document. Also when a library like Yjs gives collaborative text out of the box and nothing needs enforcing.</li>
+  <li><b>OT, or a text CRDT inside the server-ordered design,</b> if rich text editing by several people in one paragraph becomes a core feature.</li>
+  <li><b>A lock</b> for rare, heavy, non-mergeable edits: publishing a release, editing a binary asset.</li>
+</ul>
+
+<h2 id="crib">6. Interview crib</h2>
+<div class="qa"><p class="q">Why not Yjs?</p>
+<p>Yjs solves merging without an authority. We have an authority and we need it: every op must be validated against the manifest, attributed and rate-limited. With a server ordering ops, convergence is free, so the CRDT machinery would be cost without benefit. I would reach for it if offline-first became a requirement.</p></div>
+<div class="qa"><p class="q">What happens to an op in flight when the socket drops?</p>
+<p>It stays in the client's <code>pending</code> list, still visible to the user. The client reconnects with backoff and jitter, gets a fresh <code>welcome</code>, rebuilds, and resends everything pending with the same <code>opId</code> and <code>baseSeq</code>. If the room had applied it, the room answers with the original sequenced op.</p></div>
+<div class="qa"><p class="q">How do you avoid applying a resend twice?</p>
+<p>The room dedupes on <code>(sender, opId)</code> before validating. Its memory is bounded, so an op older than that memory is refused as <code>stale</code> and the client resyncs. The planned journal has a unique index on the op id, which makes this permanent.</p></div>
+<div class="qa"><p class="q">What if two servers both think they own the room?</p>
+<p>That is planned work (epic 7). A lease cannot prevent it: a paused process does not know its lease expired, and our Redis learning test measured exactly that. The fix is a fencing token checked by the storage layer on every journal append, so the stale owner's write fails in Postgres.</p></div>
+<div class="qa"><p class="q">How do you know it converges?</p>
+<p>A seeded simulator runs the real room and real replica under delay, reorder, drops and reloads, and checks invariants after every step. It found a real livelock at about 1 seed in 700. The oracle for last-writer-wins shares no code with the model it judges.</p></div>
+<div class="qa"><p class="q">How does one document scale?</p>
+<p>It does not need to: a room is one document's editors, and a person dragging makes about 60 ops a second. The system scales by placing different documents on different nodes. The session endpoint returns the socket URL, so routing was a hook from day one.</p></div>
+<div class="qa"><p class="q">How is the AI agent different from a human editor?</p>
+<p>It is not, and that is the design. It edits through the same <code>peer-client</code>, as actor kind <code>agent</code> with its own run id and its own rate budget. It waits on a per-op <code>settled</code> outcome, so each tool call gets a real answer. The git peer (planned) will use the same path.</p></div>
+<div class="qa"><p class="q">Where does Raft fit?</p>
+<p>Under the server, not between the browsers. It replicates a server's log across machines. We plan to get the same safety from Postgres as the single journal plus a fenced lease, which is less to operate.</p></div>
+
+<h2 id="glossary">7. Glossary</h2>
+<dl class="gloss">
+  <dt>op</dt><dd>One small change, such as <code>set_prop</code>. We send ops, never whole documents.</dd>
+  <dt>seq</dt><dd>The number the room gives an accepted op. The one true order. Like a Kafka offset.</dd>
+  <dt>baseSeq</dt><dd>The last <code>seq</code> the sender had seen when it made the op. Lets the room say "too old to judge" (<code>stale</code>).</dd>
+  <dt>confirmed</dt><dd>The document as the server has stated it. Never guessed.</dd>
+  <dt>optimistic</dt><dd>Confirmed plus my unanswered ops. What I see on screen.</dd>
+  <dt>idempotent</dt><dd>Doing it twice has the same effect as once. Our <code>opId</code> makes a resend idempotent.</dd>
+  <dt>LWW</dt><dd>Last writer wins. The honest question is always "last by whose order?". Ours: the room's <code>seq</code>.</dd>
+  <dt>tombstone</dt><dd>A marker a CRDT keeps for a deleted item, so late edits can still be placed. A source of growth.</dd>
+  <dt>fencing token</dt><dd>A number that only grows, issued with a lease. Storage refuses writes that carry an older one.</dd>
+</dl>
+
+<h2 id="sources">8. Sources</h2>
+<ul>
+  <li>Evan Wallace, "How Figma's multiplayer technology works", Figma blog, 16 October 2019. <a href="https://www.figma.com/blog/how-figmas-multiplayer-technology-works/">figma.com/blog/how-figmas-multiplayer-technology-works</a>. Read for this page; the three quotes are exact.</li>
+  <li>Evan Wallace, "Realtime editing of ordered sequences", Figma blog, 2017 (fractional indexing). <a href="https://www.figma.com/blog/realtime-editing-of-ordered-sequences/">figma.com/blog/realtime-editing-of-ordered-sequences</a>. Read for this page.</li>
+  <li>Kleppmann, Mulligan, Gomes, Beresford, "A highly-available move operation for replicated trees", 2021. <a href="https://martin.kleppmann.com/papers/move-op.pdf">martin.kleppmann.com/papers/move-op.pdf</a></li>
+  <li>Martin Kleppmann, "How to do distributed locking", 2016 (why a lock needs a fencing token). <a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html">martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html</a></li>
+  <li>Yjs: <a href="https://docs.yjs.dev/">docs.yjs.dev</a>. Automerge: <a href="https://automerge.org/">automerge.org</a>. Raft: <a href="https://raft.github.io/">raft.github.io</a>.</li>
+  <li>This repository: <code>SPEC.md</code> (§2, §2a, §4, epics 6 and 7), <code>HANDOFF.md</code> §7, the files named above, and the project's <code>bd memories</code> for E2.2, E2.3, E2.4, E2.8 and E2.9.</li>
+</ul>
+
+<footer>Noon MVP handbook · written from the code at commit edbd19b. Everything under "planned" is design, not code.</footer>
+</main>
