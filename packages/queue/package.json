@@ -1,0 +1,13 @@
+{
+  "name": "@noon/queue",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@noon/contracts": "workspace:^",
+    "bullmq": "^5.81.5",
+    "zod": "^4.6.5"
+  }
+}

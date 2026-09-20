@@ -9,7 +9,7 @@ import { TEST_SESSIONS } from "./testing.ts";
 let server: RunningServer;
 beforeAll(async () => {
   // /health must answer without touching the database, so it gets one that cannot be used.
-  server = await startServer({ port: 0, db: {} as Db, identify: noIdentity, sessions: TEST_SESSIONS }); // port 0 = "any free port", so tests never collide
+  server = await startServer({ port: 0, db: {} as Db, identify: noIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // port 0 = "any free port", so tests never collide
 });
 afterAll(() => server.close());
 

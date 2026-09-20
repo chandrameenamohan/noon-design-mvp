@@ -6,6 +6,7 @@ import type { z } from "zod";
 import {
   CreateDocumentBody,
   CreateOrgBody,
+  CreateRunBody,
   CreateWorkspaceBody,
   PageQuery,
   type ErrorBody,
@@ -15,6 +16,7 @@ import {
   type User,
 } from "@noon/contracts";
 import type { Db } from "@noon/db";
+import type { JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
 import type { SessionConfig } from "./config.ts";
 import type { Identify } from "./identity.ts";
@@ -65,7 +67,15 @@ function pageQuery(c: Context): PageQuery {
 const badCursor = (c: Context) => fail(c, 400, "invalid_query", [{ field: "cursor", message: "not a cursor issued by this server" }]);
 
 /** Builds the HTTP app. Pure: no port is opened here, and the database arrives as an argument. */
-export function buildApp({ db, identify, sessions }: { db: Db; identify: Identify; sessions: SessionConfig }): Hono<{ Variables: { user: User } }> {
+export type AppDeps = {
+  db: Db;
+  identify: Identify;
+  sessions: SessionConfig;
+  /** Tells a worker that a job is waiting. A seam, so most api tests need no Redis. */
+  enqueue: (ref: JobRef) => Promise<void>;
+};
+
+export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
 
   app.use(async (c, next) => {
@@ -170,6 +180,28 @@ export function buildApp({ db, identify, sessions }: { db: Db; identify: Identif
       token,
       expiresAt: new Date((now + sessions.ttlSeconds) * 1000).toISOString(),
     } satisfies SessionResponse);
+  });
+
+  // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look.
+  app.post("/documents/:id/runs", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    if (!doc) return notFound(c);
+    const { instruction } = await body(c, CreateRunBody);
+    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id });
+    if (!run) return notFound(c); // the document was deleted in between
+    try {
+      await enqueue({ queue: "ai", jobId: run.id, orgId: run.orgId });
+    } catch (err) {
+      // Still a 201: the run exists and the worker's sweep will pick it up. Failing the request would
+      // invite a retry, and a second run (idempotency keys are E9).
+      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${err instanceof Error ? err.message : String(err)}` })}\n`);
+    }
+    return c.json(run, 201);
+  });
+  app.get("/documents/:id/runs/:runId", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const run = doc && (await db.forOrg(doc.orgId).getRun(doc.id, c.req.param("runId")));
+    return run ? c.json(run) : notFound(c);
   });
 
   app.notFound(notFound);

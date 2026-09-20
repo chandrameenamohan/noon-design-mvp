@@ -20,16 +20,16 @@ grep -q "make -s check" "$hook" || { echo "FAIL: the pre-commit gate is not inst
 # Local secrets: random, generated once, kept in the git-ignored .env that compose reads by itself.
 # Hex only, so a value can sit inside a postgres:// URL without escaping.
 touch .env
-for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET; do
+for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD; do
   grep -q "^$name=" .env || printf '%s=%s\n' "$name" "$(openssl rand -hex 24)" >> .env
 done
 . ./.env
 
-docker compose up -d --wait postgres
+docker compose up -d --wait postgres redis
 # POSTGRES_PASSWORD only applies when the data volume is first created. Setting it here as well keeps an
 # existing volume (and one created with an older password) in step with .env. Local socket, no password needed.
 docker compose exec -T postgres psql -U noon -d noon -qc "alter role noon password '$POSTGRES_PASSWORD'" >/dev/null
-docker compose up -d --build --wait api sync
+docker compose up -d --build --wait api sync worker
 
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")
@@ -50,5 +50,17 @@ super=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select rolsup
 # The whole live-editing path, with no test helpers: the api mints a session, a real WebSocket opens
 # against the sync server with that token, sends one op and is told it became seq 1.
 API_URL="$api" node scripts/smoke-sync.ts || { echo "FAIL: live-editing smoke test"; exit 1; }
+# Epic 3: a run goes api -> Postgres -> Redis -> worker -> Postgres and is read back through the api.
+ws_id=$(curl -fsS -X POST "$api/orgs/$org_id/workspaces" -H "$me" -H 'content-type: application/json' -d '{"name":"smoke"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+doc_id=$(curl -fsS -X POST "$api/orgs/$org_id/workspaces/$ws_id/documents" -H "$me" -H 'content-type: application/json' -d '{"title":"smoke"}' | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+run_id=$(curl -fsS -X POST "$api/documents/$doc_id/runs" -H "$me" -H 'content-type: application/json' -d '{"instruction":"smoke"}' | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
+[ -n "$run_id" ] || { echo "FAIL: POST /documents/$doc_id/runs did not return a run"; exit 1; }
+status=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  status=$(curl -fsS -H "$me" "$api/documents/$doc_id/runs/$run_id" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+  [ "$status" = "succeeded" ] && break
+  sleep 0.5
+done
+[ "$status" = "succeeded" ] || { echo "FAIL: the run ended as '$status', not 'succeeded' (is the worker up?)"; exit 1; }
 docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where name = 'init.sh smoke'; delete from users where email = 'init-smoke@example.com'" >/dev/null # leave nothing behind
 echo "PASS: dev environment is up (api writes and reads through a non-superuser role, hook installed)"

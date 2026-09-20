@@ -39,6 +39,18 @@ export const CreateOrgBody = z.strictObject({ name: Name });
 export const CreateWorkspaceBody = z.strictObject({ name: Name });
 export const CreateDocumentBody = z.strictObject({ title: Name });
 
+// --- AI runs (F9) ----------------------------------------------------------------
+/** Newlines and tabs are fine in an instruction; other control characters are not (jsonb cannot hold NUL). */
+const Instruction = z.string().trim().min(1).max(4000).regex(/^(?:\P{Cc}|[\n\t])*$/u, "must not contain control characters");
+export const CreateRunBody = z.strictObject({ instruction: Instruction });
+const RunStatus = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
+/** `error` is a short named reason, present exactly when the status is `failed`. */
+export const Run = z.object({
+  id: Id, orgId: Id, documentId: Id, status: RunStatus, instruction: Instruction, error: z.string().min(1).max(200).nullable(),
+  createdAt: Timestamp, startedAt: Timestamp.nullable(), finishedAt: Timestamp.nullable(),
+});
+export type Run = z.infer<typeof Run>;
+
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
   error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "not_ready", "internal"]),

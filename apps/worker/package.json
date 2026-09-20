@@ -1,5 +1,5 @@
 {
-  "name": "@noon/api",
+  "name": "@noon/worker",
   "private": true,
   "type": "module",
   "scripts": {
@@ -7,13 +7,10 @@
     "dev": "node --watch src/main.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.1",
-    "@noon/contracts": "workspace:^",
     "@noon/db": "workspace:^",
     "@noon/process": "workspace:^",
     "@noon/queue": "workspace:^",
-    "@noon/session-token": "workspace:^",
-    "hono": "^4.13.8",
+    "bullmq": "^5.81.5",
     "zod": "^4.6.5"
   }
 }

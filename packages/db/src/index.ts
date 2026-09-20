@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { Doc, Document, Id, Name, Org, User, Workspace, type Page } from "@noon/contracts";
+import { CreateRunBody, Doc, Document, Id, Name, Org, Run, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -23,6 +23,8 @@ export type Db = {
   ping(): Promise<void>;
   /** Loading and saving a document's tree, for the sync server. Every call names the org. */
   documentStore(): DocumentStore;
+  /** Claiming and finishing jobs, for the worker. Every call names the org. */
+  jobStore(): JobStore;
   /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
   forOrg(orgId: string): OrgScope;
   close(): Promise<void>;
@@ -32,6 +34,18 @@ export type Db = {
 export type DocumentStore = {
   load(orgId: string, documentId: string): Promise<{ doc: Doc | undefined; seq: number } | undefined>;
   save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
+};
+
+type JobKey = { jobId: string; orgId: string };
+/** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
+export type Job = { id: string; orgId: string; documentId: string; queue: "ai"; input: Record<string, unknown> };
+type JobStore = {
+  /** queued -> running, atomically. Undefined when there is nothing to claim: unknown, already claimed, or finished. */
+  claim(key: JobKey): Promise<Job | undefined>;
+  /** running -> a terminal status. `reason` is required for `failed` and is what the user will read. */
+  finish(key: JobKey, status: "succeeded" | "failed" | "cancelled", reason?: string): Promise<void>;
+  /** The oldest jobs still waiting, across ALL orgs: what the worker offers to the queue again. */
+  queued(limit: number): Promise<({ queue: "ai" } & JobKey)[]>;
 };
 
 type PageInput = { limit?: number; cursor?: string | undefined };
@@ -45,6 +59,9 @@ type OrgScope = {
   createDocument(input: { workspaceId: string; title: string }): Promise<Document | undefined>;
   listDocuments(workspaceId: string, page?: PageInput): Promise<Page<Document> | undefined>;
   getDocument(id: string): Promise<Document | undefined>;
+  /** Undefined when the document does not exist in THIS org. The run starts as `queued`. */
+  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined }): Promise<Run | undefined>;
+  getRun(documentId: string, id: string): Promise<Run | undefined>;
 };
 
 // Rows arrive as `any` from the driver. Each is parsed once, here, at the database boundary.
@@ -57,6 +74,15 @@ const WorkspaceRow = z.object({ id: z.string(), org_id: z.string(), name: z.stri
 const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id: z.string(), title: z.string(), created_at: timestamp }) // content and seq are read only by documentStore()
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
+
+const nullableTimestamp = z.date().nullable().transform((d) => d?.toISOString() ?? null);
+const RunRow = z
+  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), status: z.string(), input: z.object({ instruction: z.string() }), error: z.string().nullable(), created_at: timestamp, started_at: nullableTimestamp, finished_at: nullableTimestamp })
+  .transform((r): Run =>
+    Run.parse({ id: r.id, orgId: r.org_id, documentId: r.document_id, status: r.status, instruction: r.input.instruction, error: r.error, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at }));
+const JobRow = z
+  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.literal("ai"), input: z.record(z.string(), z.unknown()) })
+  .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input }));
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const isId = (x: string): boolean => Id.safeParse(x).success;
@@ -220,6 +246,26 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       },
     }),
 
+    jobStore: () => ({
+      claim: async ({ jobId, orgId }) =>
+        isId(jobId) && isId(orgId)
+          ? one(JobRow, "update jobs set status = 'running', started_at = now() where org_id = $1 and id = $2 and status = 'queued' returning *", [orgId, jobId])
+          : undefined,
+      async finish({ jobId, orgId }, status, reason) {
+        if (!isId(jobId) || !isId(orgId)) return;
+        // `status = 'running'`: a finished job stays finished, whoever reports late.
+        await pool.query("update jobs set status = $3, error = $4, finished_at = now() where org_id = $1 and id = $2 and status = 'running'", [
+          orgId, jobId, status, status === "failed" ? (reason ?? "internal").slice(0, 200) || "internal" : null,
+        ]);
+      },
+      queued: (limit) =>
+        rows(
+          z.object({ id: z.string(), org_id: z.string(), queue: z.literal("ai") }).transform((r) => ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
+          "select id, org_id, queue from jobs where status = 'queued' order by created_at limit $1",
+          [limit],
+        ),
+    }),
+
     getDocumentForMember: async (documentId, userId) =>
       isId(documentId) && isId(userId)
         ? one(DocumentRow, "select d.* from documents d join memberships m on m.org_id = d.org_id where d.id = $1 and m.user_id = $2", [documentId, userId])
@@ -255,6 +301,20 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             : { items: [], nextCursor: null },
         getDocument: async (id) =>
           orgExists && isId(id) ? one(DocumentRow, "select * from documents where org_id = $1 and id = $2", [orgId, id]) : undefined,
+        createRun: async ({ documentId, instruction, createdBy }) => {
+          const input = CreateRunBody.parse({ instruction }); // the same contract the reader uses, BEFORE the write
+          if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
+          return one(
+            RunRow,
+            // insert ... select: the row is only created if the document exists in this org.
+            "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *",
+            [orgId, documentId, JSON.stringify(input), createdBy ?? null],
+          );
+        },
+        getRun: async (documentId, id) =>
+          orgExists && isId(documentId) && isId(id)
+            ? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id])
+            : undefined,
       };
     },
 

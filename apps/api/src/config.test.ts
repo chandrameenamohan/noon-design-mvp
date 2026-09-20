@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { loadConfig } from "./config.ts";
 
 const url = "postgres://app:pw@db:5432/noon";
-const rest = { SESSION_TOKEN_SECRET: "s".repeat(32), SYNC_PUBLIC_URL: "ws://localhost:3001" };
+const rest = { SESSION_TOKEN_SECRET: "s".repeat(32), SYNC_PUBLIC_URL: "ws://localhost:3001", REDIS_URL: "redis://redis:6379" };
 
 test("refuses to start without a real DATABASE_URL instead of falling back to a default", () => {
   for (const bad of [undefined, "", " ", "not-a-url", "http://db/noon", "postgres://"]) {
@@ -34,4 +34,9 @@ test("the session secret and the public sync address are required, with no defau
     syncUrl: "wss://sync.example.com", // no trailing slash, so joining a path never doubles it
     ttlSeconds: 60,
   });
+});
+
+test("refuses to start without a REDIS_URL: a run that can never be queued must not be accepted quietly", () => {
+  for (const bad of [undefined, "", "redis:6379", "http://redis:6379"]) expect(() => loadConfig({ ...rest, DATABASE_URL: url, REDIS_URL: bad }), JSON.stringify(bad)).toThrow(/REDIS_URL/);
+  expect(loadConfig({ ...rest, DATABASE_URL: url }).redisUrl).toBe("redis://redis:6379");
 });

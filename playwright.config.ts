@@ -6,7 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
 // read by the shell (`. ./.env`) so that they never pass through this file or a log.
 const PORTS = { web: 5174, api: 3100, sync: 3101 };
 const fromEnv = (command: string): string =>
-  `sh -c 'set -a; . ./.env; set +a; export NODE_ENV=development DATABASE_URL="postgres://noon_app:$APP_DB_PASSWORD@localhost:\${PG_PORT:-5432}/noon"; ${command}'`;
+  `sh -c 'set -a; . ./.env; set +a; export NODE_ENV=development DATABASE_URL="postgres://noon_app:$APP_DB_PASSWORD@localhost:\${PG_PORT:-5432}/noon" REDIS_URL="redis://:$REDIS_PASSWORD@localhost:\${REDIS_PORT:-6380}"; ${command}'`;
 
 export default defineConfig({
   testDir: "e2e",

@@ -19,7 +19,7 @@ export function useTestServer(): Ctx {
   let server: RunningServer | undefined;
   beforeAll(async () => {
     db = await createTestDb();
-    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS });
+    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // runs are tested with a real queue in apps/worker
   });
   afterAll(async () => {
     await server?.close();

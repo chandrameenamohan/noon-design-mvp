@@ -73,7 +73,7 @@ test("lists are paged: limit, an opaque cursor, and null when there is no more",
 test("/ready answers 200 only when the database answers, while /health stays a pure liveness check", async () => {
   expect((await ctx.fetch(`/ready`)).status).toBe(200);
 
-  const dead = await startServer({ port: 0, identify: devHeaderIdentity, sessions: TEST_SESSIONS, db: { ...ctx.db.db, ping: () => Promise.reject(new Error("connection refused")) } satisfies Db });
+  const dead = await startServer({ port: 0, identify: devHeaderIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve(), db: { ...ctx.db.db, ping: () => Promise.reject(new Error("connection refused")) } satisfies Db });
   try {
     expect((await fetch(`${dead.url}/health`)).status).toBe(200);
     const ready = await fetch(`${dead.url}/ready`);

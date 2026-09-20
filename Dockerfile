@@ -10,12 +10,14 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/sync/package.json apps/sync/
 COPY apps/web/package.json apps/web/
+COPY apps/worker/package.json apps/worker/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
 COPY packages/design-system/package.json packages/design-system/
 COPY packages/doc-model/package.json packages/doc-model/
 COPY packages/peer-client/package.json packages/peer-client/
 COPY packages/process/package.json packages/process/
+COPY packages/queue/package.json packages/queue/
 COPY packages/session-token/package.json packages/session-token/
 RUN pnpm install --frozen-lockfile --prod
 

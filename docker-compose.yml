@@ -1,4 +1,4 @@
-# ponytail: only the stores an epic already needs. Redis arrives with epic 3, MinIO with epic 6, Gitea with epic 5.
+# ponytail: only the stores an epic already needs. MinIO arrives with epic 6, Gitea with epic 5.
 #
 # Secrets: there are NO default passwords here. `./init.sh` generates random ones into .env (git-ignored),
 # and compose refuses to start when one is missing, instead of quietly using a password from a public repo.
@@ -14,6 +14,21 @@ services:
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U noon -d noon"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  # Queues now (epic 3); rate limits and leases later. NOT durable on purpose: no volume, no AOF. The
+  # Postgres `jobs` table is the truth and the worker re-queues from it, so losing Redis loses nothing.
+  redis:
+    image: redis:7
+    # noeviction: BullMQ breaks if Redis silently drops its keys under memory pressure.
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?run ./init.sh}", "--save", "", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    environment:
+      REDISCLI_AUTH: "${REDIS_PASSWORD:?run ./init.sh}" # for the healthcheck only
+    # 6380 on the host: developer machines tend to have a Redis of their own on 6379.
+    ports: ["127.0.0.1:${REDIS_PORT:-6380}:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -41,9 +56,11 @@ services:
       # The app connects as noon_app: data access only, not a superuser, cannot alter the schema.
       # init.sh generates hex passwords, so the value is safe inside a URL without escaping.
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
     ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
     healthcheck:
       # Readiness, not liveness: "healthy" must mean the api can reach its database.
       # node:24-slim has no curl; Node's own fetch does the job.
@@ -64,6 +81,22 @@ services:
       migrate: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  # Long-running work, one BullMQ queue per kind (`ai` now; git, ship and sandbox in later epics).
+  worker:
+    build: .
+    command: ["node", "apps/worker/src/main.ts"]
+    environment:
+      DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      # No port to ask: main.ts touches this file while its queue connection is alive.
+      test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
       interval: 2s
       timeout: 2s
       retries: 30
