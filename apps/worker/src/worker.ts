@@ -41,6 +41,8 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
     const job = await jobs.claim(ref);
     if (!job) return;
     // ponytail: a poll per running job (a handful at most). Redis pub/sub if a second ever matters.
+    // The signal only ASKS. "Ends within 3 s" is the handler's promise (ai.ts races its work against it):
+    // a handler for a new queue that ignores the signal holds its slot, and a polite shutdown, for ever.
     const cancel = new AbortController();
     const watch = setInterval(() => {
       jobs.cancelRequested(ref).then((asked) => { if (asked) cancel.abort(); }, () => undefined); // a failed look is tried again in a second

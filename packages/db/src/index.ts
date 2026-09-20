@@ -327,20 +327,23 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             throw err;
           }
         },
-        cancelRun: async (documentId, id) =>
-          orgExists && isId(documentId) && isId(id)
-            ? one(
-                RunRow,
-                // ONE statement decides by the status it finds, so a claim at the same moment cannot slip
-                // between "is it queued?" and "cancel it". A finished run matches nothing in the update
-                // and comes back as it is: cancelling twice, or too late, is not an error.
-                "with hit as (update jobs set cancel_requested_at = now(), status = case status when 'queued' then 'cancelled' else status end, " +
-                  "finished_at = case status when 'queued' then now() else finished_at end " +
-                  "where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai' and status in ('queued', 'running') returning *) " +
-                  "select * from hit union all select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai' and not exists (select 1 from hit)",
-                [orgId, documentId, id],
-              )
-            : undefined,
+        cancelRun: async (documentId, id) => {
+          if (!orgExists || !isId(documentId) || !isId(id)) return undefined;
+          // ONE statement decides by the status it finds, so a claim at the same moment cannot slip
+          // between "is it queued?" and "cancel it".
+          const hit = await one(
+            RunRow,
+            "update jobs set cancel_requested_at = now(), status = case status when 'queued' then 'cancelled' else status end, " +
+              "finished_at = case status when 'queued' then now() else finished_at end " +
+              "where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai' and status in ('queued', 'running') returning *",
+            [orgId, documentId, id],
+          );
+          // Nothing to cancel: finished already, or someone else's cancel won this very moment. Either way
+          // the answer is the run as it NOW is, which takes a second statement: inside the first one (a CTE
+          // was tried) the read shares the update's snapshot and shows the row as it was before the winner
+          // committed. The loser was told "queued" about a run that was already cancelled.
+          return hit ?? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id]);
+        },
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)
             ? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id])

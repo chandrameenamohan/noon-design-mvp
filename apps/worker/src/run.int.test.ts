@@ -268,3 +268,16 @@ test("only a member can cancel, and only under the right document: everything el
   }
   expect((await readRun("ann@example.com", run)).status).toBe("queued");
 });
+
+// Found by the E3.3 verify (49 of 50 races): the loser of two cancels at the same moment was told "queued",
+// the row as it was BEFORE the winner committed. The answer must be the run as it now is.
+test("two people cancel the same queued run at the same moment: both are told it is cancelled", async () => {
+  await worker?.close();
+  worker = undefined;
+  for (let round = 0; round < 15; round++) {
+    const doc = await aDocument("ann@example.com");
+    const run = await startRun("ann@example.com", doc, "race");
+    const answers = await Promise.all([cancel("ann@example.com", run), cancel("ann@example.com", run), cancel("ann@example.com", run)]);
+    for (const res of answers) expect(Run.parse(await res.json()).status, `round ${String(round)}`).toBe("cancelled");
+  }
+});

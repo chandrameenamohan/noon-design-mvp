@@ -5,6 +5,7 @@ import { parseEnv } from "node:util";
 // The e2e layer shares Postgres and Redis with the dev stack, so the dev stack's WORKER would take
 // the runs these tests create (its sweep reads the same `jobs` table) and hand them to the real
 // model. It is stopped for the duration; teardown.ts starts it again.
+// If Playwright is KILLED (kill -9), teardown never runs and the worker stays stopped: `docker compose start worker`.
 // ponytail: a database and a Redis of its own for e2e is the upgrade.
 /** @public Playwright loads this file by PATH (playwright.config.ts globalSetup), which the dead-code check cannot see. */
 export default function setup(): void {
