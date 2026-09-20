@@ -79,8 +79,15 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
     async close() {
       clearInterval(timer);
       await sweeping; // never close the producer under a sweep that is using it
-      await Promise.all(workers.map((w) => w.close())); // waits for jobs in flight
-      await producer.close();
+      // Normally: stop fetching and wait for the jobs in flight. But BullMQ's polite close talks to
+      // Redis, and with Redis gone it waits for a connection that is not coming back: `docker stop`
+      // took 9 s and ended in exit 1 (found by the re-verify). So ask Redis first; no answer = force.
+      // Nothing is lost by that: a job's result lives in Postgres, not in BullMQ's bookkeeping.
+      const redisAnswers = await producer.ping().then(() => true, () => false);
+      // A close that fails because the connection is ALREADY gone has nothing left to do: say so, carry on.
+      const gone = (err: unknown): void => void log("warn", `close: ${describeError(err)}`);
+      await Promise.all(workers.map((w) => w.close(!redisAnswers).catch(gone)));
+      await producer.close().catch(gone);
     },
   };
 }
