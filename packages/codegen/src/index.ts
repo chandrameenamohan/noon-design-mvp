@@ -64,7 +64,17 @@ export function generate(doc: Doc, manifest: Manifest): Generated {
     return project(doc, manifest, no);
   } catch (err) {
     // `detail` is for the log; the user only ever sees the reason.
-    return no("malformed_doc", err instanceof Error ? err.message : String(err));
+    return no("malformed_doc", describe(err));
+  }
+}
+
+/** The net must not tear on what it catches: `String(x)` and even `instanceof` can throw. */
+function describe(err: unknown): string {
+  try {
+    const message: unknown = err instanceof Error ? err.message : String(err);
+    return typeof message === "string" ? message : "an exception";
+  } catch {
+    return "an exception that cannot be described";
   }
 }
 
@@ -112,11 +122,18 @@ function project(doc: Doc, manifest: Manifest, no: Refuse): Generated {
       if (node.component !== ROOT_COMPONENT) return no("malformed_doc", `${id}: the root must be ${ROOT_COMPONENT}, not ${node.component}`);
       if (Object.keys(node.props).length > 0) return no("malformed_doc", `${id}: the root cannot have props`);
     } else {
+      // A string, or nothing: a value that is converted to a string once for the check and again for
+      // the file can answer differently each time (a lying toString put `alert(1)` in the file).
+      if (typeof node.component !== "string") return no("malformed_doc", `${id}: the component name is not a string`);
       if (node.component === ROOT_COMPONENT) return no("reserved_component", `${id}: ${ROOT_COMPONENT} is the generated page component's own name`);
       const component = spec.get(node.component);
       if (!component) return no("unknown_component", `${id}: the design system has no ${node.component}`);
       if (!isIdentifier(node.component)) return no("malformed_doc", `${node.component}: not a usable component name`);
       if (node.children.length > 0 && !component.acceptsChildren) return no("parent_takes_no_children", `${id}: ${node.component} takes no children`);
+      // Every OWN key, not only the enumerable strings: `Object.hasOwn` (the required-prop check
+      // below) sees a hidden prop, so a walk that did not would drop it while calling the file
+      // complete. `Reflect.ownKeys` also counts Symbol keys, so one comparison refuses both.
+      if (Reflect.ownKeys(node.props).length !== Object.keys(node.props).length) return no("malformed_doc", `${id}: a prop is hidden (not enumerable, or keyed by a Symbol)`);
       for (const key of Object.keys(node.props).sort()) {
         const value = node.props[key];
         // `Object.hasOwn` says this prop is present and reading it says it is not. Leaving it out
@@ -173,7 +190,8 @@ function project(doc: Doc, manifest: Manifest, no: Refuse): Generated {
  */
 function jsLiteral(value: unknown): string | undefined {
   if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
+  // String(-0) is "0": a different number. validate() accepts -0, so it is written, not refused.
+  if (typeof value === "number") return Number.isFinite(value) ? (Object.is(value, -0) ? "-0" : String(value)) : undefined;
   if (typeof value === "boolean") return String(value);
   return undefined;
 }

@@ -125,7 +125,9 @@ function subtree(doc: Doc, id: string): string[] {
   for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
     if (seen.has(next)) continue;
     seen.add(next);
-    stack.push(...(nodeOf(doc, next)?.children ?? []));
+    // A loop, not `push(...children)`: spreading passes every child as an ARGUMENT, and about 130 000
+    // of them overflow the call stack (measured by the E4.1 verifier).
+    for (const child of nodeOf(doc, next)?.children ?? []) stack.push(child);
   }
   return [...seen];
 }

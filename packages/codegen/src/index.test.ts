@@ -320,6 +320,58 @@ test("whenever a document is generated, the file names exactly the props the doc
   expect(generated).toBeGreaterThan(100);
 });
 
+// --- found by the E4.1 verifier, each by running it ----------------------------------------------
+
+test("a component name that is not a string cannot say one thing to the check and another to the file", () => {
+  // Converted to a string once for the identifier check and again for the file: a toString that
+  // answers "Button" first and code after that got through, and the file ran `alert(1)`.
+  let calls = 0;
+  const liar = { toString: () => (calls++ < 1 ? "Button" : "Button />; alert(1); <Button") } as unknown as string;
+  const hostile: Manifest = { version: 1, components: [{ name: liar, acceptsChildren: false, props: [{ name: "label", type: { kind: "string" }, required: true }] }] };
+  expect(refusal(childOf("b", liar, { label: "x" }), hostile)).toBe("malformed_doc");
+});
+
+test("-0 is written as -0: validate accepts it, so the file must carry it, not a different number", () => {
+  expect(tsx(withProps("s", { gap: -0 }))).toContain("gap={-0}");
+});
+
+test("a prop that is not enumerable is refused, not dropped: the file would lose a prop the document holds", () => {
+  const props = Object.defineProperty({}, "label", { value: "hi", enumerable: false }) as Record<string, PropValue>;
+  expect(refusal(childOf("b", "Button", props))).toBe("malformed_doc");
+});
+
+test("a prop keyed by a Symbol is refused, not dropped", () => {
+  expect(refusal(withProps("s", { [Symbol("gap")]: 4 }))).toBe("malformed_doc");
+});
+
+test.each<[string, () => unknown]>([
+  ["an exception with no prototype", () => Object.create(null) as unknown],
+  ["an exception that throws when asked what it is", () => new Proxy({}, { getPrototypeOf: () => { throw new Error("no"); } })],
+  ["an Error whose message throws", () => Object.defineProperty(new Error(), "message", { get: () => { throw new Error("no"); } })],
+])("the safety net holds even when what it catches cannot be described: %s", (_name, thrown) => {
+  const doc = { rootId: "root", get nodes(): never { throw thrown(); } } as unknown as Doc;
+  expect(generate(doc, manifest)).toMatchObject({ ok: false, reason: "malformed_doc" });
+});
+
+test("the reason's detail is always a string, even when the exception's message is not", () => {
+  const thrown = Object.assign(new Error(), { message: { toString: () => "x" } });
+  const doc = { rootId: "root", get nodes(): never { throw thrown; } } as unknown as Doc;
+  const result = generate(doc, manifest);
+  expect(result.ok ? undefined : typeof result.detail).toBe("string");
+});
+
+test("a very wide document is generated, not called malformed because a helper spread its children into a call", () => {
+  const doc = emptyDoc();
+  const root = doc.nodes[ROOT_ID];
+  if (!root) throw new Error("no root");
+  for (let i = 0; i < 200_000; i++) {
+    const id = `w${String(i)}`;
+    doc.nodes[id] = { id, component: "Stack", props: {}, parentId: ROOT_ID, children: [] };
+    root.children.push(id);
+  }
+  expect(generate(doc, manifest).ok).toBe(true);
+});
+
 // --- fixtures that deliberately break a rule ---------------------------------------------------
 
 /** One node of any component under the root, written straight in: this is what drift looks like. */
