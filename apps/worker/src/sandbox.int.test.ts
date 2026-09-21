@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -74,14 +74,32 @@ test("the sandbox works in ITS OWN clone of the seed repo, on the document's wor
   await expect(docker("exec", sandboxName(b), "test", "-e", "only-in-a.txt")).rejects.toThrow();
 }, 60_000);
 
-test("one container per document: a second start, even a concurrent one, returns the same sandbox", async () => {
+/** Every caller got the SAME sandbox, and its URL reaches THIS document's container, not merely something. */
+async function expectOneSandbox(id: string, results: { url: string }[]): Promise<void> {
+  expect(new Set(results.map((r) => r.url)).size).toBe(1);
+  expect((await docker("ps", "--all", "--quiet", "--filter", `label=noon.document=${id}`)).split("\n").filter(Boolean)).toHaveLength(1);
+  await docker("exec", sandboxName(id), "sh", "-c", `echo ${id} > whoami.txt`);
+  expect((await (await fetch(new URL("whoami.txt", results[0]?.url))).text()).trim()).toBe(id);
+}
+
+test("one container per document: ten concurrent starts all get the same sandbox, and its URL is really it", async () => {
+  // The E4.2a verifier's race: the losers of `docker run` found the winner still starting, got
+  // "port not available" from `docker start` (the winner held it) and REMOVED the winner's container.
   const id = newDocument();
-  const [first, second] = await Promise.all([startSandbox(id, options), startSandbox(id, options)]);
-  const third = await startSandbox(id, options);
-  expect(second).toEqual(first);
-  expect(third).toEqual(first);
-  expect((await docker("ps", "--all", "--quiet", "--filter", `label=noon.document=${id}`)).split("\n")).toHaveLength(1);
-}, 60_000);
+  const results = await Promise.all(Array.from({ length: 10 }, () => startSandbox(id, options)));
+  await expectOneSandbox(id, results);
+  expect(await startSandbox(id, options)).toEqual(results[0]);
+}, 90_000);
+
+test("ten concurrent starts of a KILLED sandbox bring it back once, with its working tree", async () => {
+  const id = newDocument();
+  await startSandbox(id, options);
+  await docker("exec", sandboxName(id), "sh", "-c", "echo kept > kept.txt");
+  await docker("kill", sandboxName(id));
+  const results = await Promise.all(Array.from({ length: 10 }, () => startSandbox(id, options)));
+  await expectOneSandbox(id, results);
+  expect(await docker("exec", sandboxName(id), "cat", "kept.txt")).toBe("kept");
+}, 90_000);
 
 test("a stopped sandbox comes back on the SAME url with its working tree, because Vite's client only self-heals on the same origin", async () => {
   const id = newDocument();
@@ -108,29 +126,55 @@ test("a clone that died halfway is done again on the next start, not served as i
 test("a port something else holds is skipped, and the container it left behind does not block the next try", async () => {
   // Held on the host, where Docker has to bind. Two ports in the range, the first one taken.
   const held = createServer();
-  await new Promise<void>((resolve) => held.listen(21990, "127.0.0.1", resolve));
+  // Outside the file's shared range, so no other test's sandbox can already sit on either port.
+  await new Promise<void>((resolve) => held.listen(22990, "127.0.0.1", resolve));
   try {
     // An id whose first eight hex digits are 0 starts at the FIRST port of the range: the held one.
     const id = `00000000-${randomUUID().slice(9)}`;
     made.push(id);
-    const sandbox = await startSandbox(id, { ...options, ports: [21990, 21991] });
-    expect(sandbox.url).toBe("http://localhost:21991/");
+    const sandbox = await startSandbox(id, { ...options, ports: [22990, 22991] });
+    expect(sandbox.url).toBe("http://127.0.0.1:22991/");
     // With the ONLY port held, it gives up by name instead of looping.
-    await expect(startSandbox(newDocument(), { ...options, ports: [21990, 21990] })).rejects.toThrow(/no free port/u);
+    await expect(startSandbox(newDocument(), { ...options, ports: [22990, 22990] })).rejects.toThrow(/no free port/u);
   } finally {
     held.close();
   }
 }, 60_000);
 
-test("the container is confined: loopback-only port, no root, no capabilities", async () => {
+test("the URL names the address the port is bound to, so a listener on ::1 cannot answer for it", async () => {
+  // `localhost` may resolve to ::1 first, where Docker did not bind and anything else may listen.
+  expect((await startSandbox(newDocument(), options)).url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/u);
+}, 60_000);
+
+test("the container is confined: loopback-only port, no root, no capabilities, no swap, a small /tmp, its own network", async () => {
   const id = newDocument();
   await startSandbox(id, options);
-  const inspect = JSON.parse(await docker("container", "inspect", sandboxName(id))) as [{ HostConfig: { PortBindings: Record<string, { HostIp: string }[]>; CapDrop: string[]; SecurityOpt: string[] } }];
+  const inspect = JSON.parse(await docker("container", "inspect", sandboxName(id))) as [{ HostConfig: { PortBindings: Record<string, { HostIp: string }[]>; CapDrop: string[]; SecurityOpt: string[]; Memory: number; MemorySwap: number; Tmpfs: Record<string, string>; NetworkMode: string; Init: boolean } }];
   const config = inspect[0].HostConfig;
   expect(Object.values(config.PortBindings).flat().map((binding) => binding.HostIp)).toEqual(["127.0.0.1"]);
   expect(config.CapDrop).toEqual(["ALL"]);
   expect(config.SecurityOpt).toContain("no-new-privileges");
+  expect(config.MemorySwap).toBe(config.Memory); // equal = no swap on top of the memory limit
+  expect(config.Tmpfs["/tmp"]).toMatch(/size=/u);
+  expect(config.NetworkMode).toBe("noon-sandboxes");
   expect(await docker("exec", sandboxName(id), "id", "-u")).not.toBe("0");
+}, 60_000);
+
+test("one sandbox cannot reach another's dev server", async () => {
+  const [a, b] = [newDocument(), newDocument()];
+  await Promise.all([startSandbox(a, options), startSandbox(b, options)]);
+  const ip = await docker("container", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", sandboxName(b));
+  expect(ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/u);
+  const probe = `fetch('http://${ip}:5173/', { signal: AbortSignal.timeout(2000) }).then(() => console.log('reached'), () => console.log('refused'))`;
+  expect(await docker("exec", sandboxName(a), "node", "-e", probe)).toBe("refused");
+}, 60_000);
+
+test("docker stop takes a sandbox down at once, not after the 10 s grace (Vite handles SIGTERM itself: no --init needed)", async () => {
+  const id = newDocument();
+  await startSandbox(id, options);
+  const started = Date.now();
+  await docker("stop", sandboxName(id));
+  expect(Date.now() - started).toBeLessThan(5_000);
 }, 60_000);
 
 test.each(["not-a-uuid", "--upload-pack=touch /tmp/pwned", `${randomUUID()} `, randomUUID().toUpperCase()])("a document id that is not a plain uuid never reaches docker: %j", async (id) => {
@@ -142,21 +186,44 @@ test("a docker that never answers is abandoned at the deadline, and a cancelled 
   const hung = join(mkdtempSync(join(tmpdir(), "hung-docker-")), "docker");
   writeFileSync(hung, "#!/bin/sh\nexec sleep 3600\n", { mode: 0o755 });
   const started = Date.now();
-  await expect(startSandbox(randomUUID(), { ...options, docker: hung, readyTimeoutMs: 500 })).rejects.toThrow();
+  await expect(startSandbox(randomUUID(), { ...options, docker: hung, readyTimeoutMs: 500 })).rejects.toThrow(/not ready within 500 ms/u);
   expect(Date.now() - started).toBeLessThan(3_000);
-  await expect(startSandbox(randomUUID(), { ...options, signal: AbortSignal.abort() })).rejects.toThrow();
+  await expect(startSandbox(randomUUID(), { ...options, signal: AbortSignal.abort() })).rejects.toThrow(/cancelled/u);
+});
+
+test("a docker CLI that ignores SIGTERM is killed anyway, not left running when the start gives up", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "stubborn-docker-"));
+  const stubborn = join(dir, "docker");
+  // `trap '' TERM` is inherited across exec: this sleep cannot be ended politely.
+  writeFileSync(stubborn, `#!/bin/sh\necho $$ > ${dir}/pid\ntrap '' TERM\nexec sleep 3600\n`, { mode: 0o755 });
+  // 3 s, not 0.5: macOS scans a brand-new executable on its first run, and a stub killed before it
+  // ever ran would prove nothing (measured: no pid file at 300 ms).
+  await expect(startSandbox(randomUUID(), { ...options, docker: stubborn, readyTimeoutMs: 3_000 })).rejects.toThrow(/not ready within/u);
+  const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(() => process.kill(pid, 0)).toThrow(); // ESRCH: no such process
 });
 
 test("a sandbox that runs but never answers is given up at the deadline, not polled for ever", async () => {
   const id = newDocument();
   const started = Date.now();
-  await expect(startSandbox(id, { ...options, image: SILENT, readyTimeoutMs: 3_000 })).rejects.toThrow();
+  await expect(startSandbox(id, { ...options, image: SILENT, readyTimeoutMs: 3_000 })).rejects.toThrow(/not ready within 3000 ms/u);
   expect(Date.now() - started).toBeLessThan(8_000);
 }, 30_000);
+
+test("a sandbox removed while it is starting fails the start at once, by name, instead of polling out the deadline", async () => {
+  const id = newDocument();
+  const started = Date.now();
+  const start = startSandbox(id, { ...options, image: SILENT, readyTimeoutMs: 30_000 });
+  setTimeout(() => void docker("rm", "--force", sandboxName(id)).catch(() => undefined), 1500);
+  await expect(start).rejects.toThrow(/No such container|is not running|exited before it was ready/u);
+  expect(Date.now() - started).toBeLessThan(8_000);
+}, 60_000);
 
 test("a sandbox whose dev server can never start says so at once, with its logs, instead of waiting out the deadline", async () => {
   const id = newDocument();
   const started = Date.now();
-  await expect(startSandbox(id, { ...options, image: BROKEN, readyTimeoutMs: 30_000 })).rejects.toThrow(/exited before it was ready/u);
+  // Its last words are git's, on STDERR: "fatal: '/nowhere.git' does not appear to be a git repository".
+  await expect(startSandbox(id, { ...options, image: BROKEN, readyTimeoutMs: 30_000 })).rejects.toThrow(/exited before it was ready: .*nowhere\.git/su);
   expect(Date.now() - started).toBeLessThan(10_000);
 }, 60_000);

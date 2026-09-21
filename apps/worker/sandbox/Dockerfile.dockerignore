@@ -1,3 +1,11 @@
+# The build context is the sample app. Nothing a developer might drop into it that is secret may
+# reach the image: the seed is committed into a bare repo INSIDE the image and cloned into every
+# sandbox, where customer code can read it. (Honoured by BuildKit only, which Docker uses by default.)
 node_modules
 dist
 src/pages/*.tmp.tsx
+.git
+.env
+.env.*
+*.pem
+*.key
