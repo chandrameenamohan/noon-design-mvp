@@ -1,5 +1,5 @@
 import type { Doc, Manifest } from "@noon/contracts";
-import { checkProp, nodeOf, type PropProblem } from "@noon/doc-model";
+import { checkDoc, checkProp, nodeOf, type PropProblem } from "@noon/doc-model";
 
 /**
  * Keystone 8: one document becomes ONE generated TSX file of a fixed shape, and the same document
@@ -16,7 +16,12 @@ import { checkProp, nodeOf, type PropProblem } from "@noon/doc-model";
 
 const BANNER = "// Generated from the document by @noon/codegen. Do not edit: the sandbox overwrites it.";
 const DESIGN_SYSTEM = "../design-system/index.ts";
-/** The root node is the page itself: it is never placed, moved, removed or given props (doc-model). */
+/**
+ * The root node is the page itself: it is never placed, moved, removed or given props (doc-model).
+ * The name is RESERVED for everyone else too, because the generated file declares `export function
+ * Page()`: a design system that exported its own `Page` would put an import of that name beside the
+ * declaration, which is TS2440. `validate()` refuses to place one; this refuses to generate one.
+ */
 const ROOT_COMPONENT = "Page";
 const INDENT = "  ";
 // ponytail: indentation stops stepping right at the room's own depth cap (64), so a pathological
@@ -33,23 +38,53 @@ const isIdentifier = (name: string): boolean => /^[A-Za-z_$][A-Za-z0-9_$]*$/u.te
 const isNodeId = (id: string): boolean => /^[A-Za-z0-9_-]+$/u.test(id);
 
 // ponytail: not exported until a caller needs to switch on it; Generated carries it either way.
-type CodegenReason = PropProblem | "malformed_doc" | "unknown_component" | "parent_takes_no_children";
+type CodegenReason = PropProblem | "malformed_doc" | "unknown_component" | "reserved_component" | "parent_takes_no_children";
 /**
  * Either the file or the reason there is none. Refusing is the point: a document whose design
  * system has changed under it (a prop that no longer exists, a component that was dropped) must not
  * be quietly generated WITHOUT that prop. Epic 5 reads the file back into a tree, so a silent drop
  * here is a deletion from the document on the round trip.
+ *
+ * It never throws. The caller is a queue handler: an exception there is a job that fails as
+ * `internal`, while a reason is something the user can be shown.
  */
 export type Generated = { ok: true; tsx: string } | { ok: false; reason: CodegenReason; detail: string };
 
 type Frame = { open: string; depth: number } | { close: string; depth: number };
+type Refuse = (reason: CodegenReason, detail: string) => Generated;
 
 export function generate(doc: Doc, manifest: Manifest): Generated {
-  const no = (reason: CodegenReason, detail: string): Generated => ({ ok: false, reason, detail });
+  const no: Refuse = (reason, detail) => ({ ok: false, reason, detail });
+  // The safety net. checkDoc below names every malformed shape it knows; this is what makes
+  // "it returns a reason" true of ANY input rather than only of the inputs somebody listed —
+  // a `nodes` that is null, a `props` that is null, a props bag whose getter throws. Writing
+  // those three as named guards instead was two more lines that no test could tell apart from
+  // this one, so they are gone: the net is the promise, and checkDoc is the diagnosis.
+  try {
+    return project(doc, manifest, no);
+  } catch (err) {
+    // `detail` is for the log; the user only ever sees the reason.
+    return no("malformed_doc", err instanceof Error ? err.message : String(err));
+  }
+}
+
+function project(doc: Doc, manifest: Manifest, no: Refuse): Generated {
+  // doc-model already answers "every way a document could be malformed", and it is fuzzed: a
+  // missing root, a root with a parent, a node stored under the wrong key, a `children` that is not
+  // an array, a dangling child, a shared child, a cycle, a node nothing points at. Asking it is
+  // cheaper AND stronger than a second opinion written here, and it runs before the walk, so the
+  // walk can be about code rather than about shapes.
+  const problems = checkDoc(doc);
+  if (problems.length > 0) return no("malformed_doc", problems.slice(0, 3).join("; "));
+
   const spec = new Map(manifest.components.map((component) => [component.name, component]));
   const used = new Set<string>();
   const lines: string[] = [];
-  // A document from outside may hold a cycle or a shared child; this walk must end either way.
+  // Three things below are belt and braces behind checkDoc, and a mutation test cannot tell them
+  // apart from nothing: this `seen` set, the "no such node" refusal, and reaching for `nodeOf`
+  // rather than `doc.nodes[id]`. checkDoc has already refused every cycle, shared child, dangling
+  // id and prototype-shadowed key by the time the walk starts. They stay because this loop must
+  // END and must read the document, not Object.prototype, even on the day checkDoc is wrong.
   const seen = new Set<string>();
   // An explicit stack, not recursion: `maxDepth` is the room's rule, not this function's, and a
   // document restored from a snapshot can be deeper than any call stack.
@@ -77,20 +112,27 @@ export function generate(doc: Doc, manifest: Manifest): Generated {
       if (node.component !== ROOT_COMPONENT) return no("malformed_doc", `${id}: the root must be ${ROOT_COMPONENT}, not ${node.component}`);
       if (Object.keys(node.props).length > 0) return no("malformed_doc", `${id}: the root cannot have props`);
     } else {
+      if (node.component === ROOT_COMPONENT) return no("reserved_component", `${id}: ${ROOT_COMPONENT} is the generated page component's own name`);
       const component = spec.get(node.component);
       if (!component) return no("unknown_component", `${id}: the design system has no ${node.component}`);
       if (!isIdentifier(node.component)) return no("malformed_doc", `${node.component}: not a usable component name`);
       if (node.children.length > 0 && !component.acceptsChildren) return no("parent_takes_no_children", `${id}: ${node.component} takes no children`);
       for (const key of Object.keys(node.props).sort()) {
         const value = node.props[key];
-        if (value === undefined) continue;
+        // `Object.hasOwn` says this prop is present and reading it says it is not. Leaving it out
+        // would be the silent drop this module exists to prevent: for a required prop the file
+        // would not compile, and for an optional one it WOULD compile, and epic 5 would read the
+        // file back as a document with the prop deleted.
+        if (value === undefined) return no("malformed_doc", `${id}: ${node.component}.${key} holds no value`);
         const problem = checkProp(component, key, value);
         if (problem) return no(problem, `${id}: ${node.component}.${key}`);
         if (!isIdentifier(key)) return no("malformed_doc", `${key}: not a usable prop name`);
-        // Every value is a JSX EXPRESSION, never a quoted attribute: JSX string attributes have no
-        // backslash escapes, so `label="a \n b"` would put the two characters in the page. A
-        // JSON literal is legal JavaScript for every string the contract allows.
-        attrs.push(`${key}={${typeof value === "string" ? JSON.stringify(value) : String(value)}}`);
+        // The literal is chosen from the VALUE, never from what the manifest says the value is.
+        // Asking checkProp and believing it turns a prop type nobody wrote a case for into a way to
+        // write arbitrary source: `String(anObjectWithAToString)` would land in the file verbatim.
+        const literal = jsLiteral(value);
+        if (literal === undefined) return no("malformed_doc", `${id}: ${node.component}.${key} is not a value this generator can write`);
+        attrs.push(`${key}={${literal}}`);
       }
       const missing = component.props.find((prop) => prop.required && !Object.hasOwn(node.props, prop.name));
       if (missing) return no("missing_required_prop", `${id}: ${node.component}.${missing.name}`);
@@ -114,4 +156,24 @@ export function generate(doc: Doc, manifest: Manifest): Generated {
   // a module exports components alone; one extra export turns every edit into a full page reload,
   // which is the mechanism E4.3's "an edit shows within 3 s without a full reload" rests on.
   return { ok: true, tsx: [BANNER, "", ...importLine, "export function Page() {", "  return (", ...lines, "  );", "}", ""].join("\n") };
+}
+
+/**
+ * One prop value as JavaScript source, or `undefined` when there is no honest way to write it.
+ *
+ * Every value is a JSX EXPRESSION, never a quoted attribute: JSX string attributes have no
+ * backslash escapes, so `label="a \n b"` would put those two characters in the page. A JSON literal
+ * is legal JavaScript for every string the contract allows. A number that is not finite is refused
+ * rather than written, because `String(NaN)` is the bare identifier `NaN`: it compiles, and it is
+ * not the document's value.
+ *
+ * The final `return undefined` is belt and braces behind checkProp, which already refuses every
+ * value that is not a string, number or boolean: a mutation test cannot reach it. It stays because
+ * the alternative fallback, `String(value)`, is how an object's `toString` becomes source code.
+ */
+function jsLiteral(value: unknown): string | undefined {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
+  if (typeof value === "boolean") return String(value);
+  return undefined;
 }

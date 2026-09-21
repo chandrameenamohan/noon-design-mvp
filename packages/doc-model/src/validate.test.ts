@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { Doc, Op } from "@noon/contracts";
+import type { Doc, Manifest, Op } from "@noon/contracts";
 import { applyOp, emptyDoc, ROOT_ID, validate } from "./index.ts";
 import { testManifest as manifest } from "./fixtures.ts";
 
@@ -34,6 +34,22 @@ test.each<[string, Op, string]>([
   ["a prop on the root", { type: "set_prop", nodeId: ROOT_ID, key: "gap", value: 1 }, "root_is_fixed"],
 ])("%s is rejected as %s", (_label, op, reason) => {
   expect(verdict(doc, op)).toEqual({ ok: false, reason });
+});
+
+test("the page component's own name is reserved even when the design system exports one", () => {
+  // The existing "reserved root component" case only proves the fixture has no Page. This one puts
+  // a Page IN the manifest: without the reservation, validate would find it and accept the node,
+  // and codegen would then emit `import { Page }` beside `export function Page()`, which is TS2440.
+  const withPage: Manifest = { version: 1, components: [...manifest.components, { name: "Page", acceptsChildren: true, props: [] }] };
+  expect(validate(doc, add("x", ROOT_ID, "Page"), withPage)).toEqual({ ok: false, reason: "unknown_component" });
+});
+
+test("a prop type nothing here can judge is refused, never silently accepted", () => {
+  // A manifest that skipped Manifest.parse. checkProp must not fall off the end of its switch as
+  // `undefined`: every caller reads that as "this value is fine", and codegen writes values it has
+  // been told are fine straight into source code.
+  const exotic = { version: 1, components: [{ name: "Widget", acceptsChildren: false, props: [{ name: "size", type: { kind: "int" }, required: false }] }] } as unknown as Manifest;
+  expect(validate(doc, add("x", ROOT_ID, "Widget", { size: 3 }), exotic)).toEqual({ ok: false, reason: "wrong_prop_type" });
 });
 
 test("remove beats a concurrent edit: ops on a removed node or its descendants are 'gone'", () => {

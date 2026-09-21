@@ -28,8 +28,13 @@ export function validate(doc: Doc, op: Op, manifest: Manifest): Verdict {
       if (nodeOf(doc, op.nodeId)) return no("duplicate_node");
       const parent = nodeOf(doc, op.parentId);
       if (!parent) return no("gone");
+      // The root component's name is reserved for EVERYONE, not just the root: codegen declares
+      // `export function Page()`, so a design system that exported its own `Page` would generate a
+      // file whose import collides with that declaration. Refused here, before the manifest is even
+      // consulted, so the name cannot enter a document whatever the design system happens to export.
+      if (op.component === ROOT_COMPONENT) return no("unknown_component");
       const spec = component(op.component);
-      if (!spec) return no("unknown_component"); // also covers the reserved "Page"
+      if (!spec) return no("unknown_component");
       // A parent whose component has since left the design system is not "takes no children".
       if (parent.component !== ROOT_COMPONENT && !component(parent.component)) return no("unknown_component");
       if (!acceptsChildren(op.parentId)) return no("parent_takes_no_children");
@@ -91,5 +96,14 @@ export function checkProp(spec: Manifest["components"][number], key: string, val
       return typeof value === "boolean" ? undefined : "wrong_prop_type";
     case "enum":
       return typeof value === "string" && prop.type.options.includes(value) ? undefined : "wrong_prop_type";
+    default:
+      // Two guarantees, one for the compiler and one for the runtime. `satisfies never` means a
+      // FIFTH PropType kind fails to compile here rather than falling off the end of the switch:
+      // without it TypeScript stays silent, because the declared return type already allows
+      // `undefined`. And a manifest that skipped Manifest.parse and got here anyway is answered
+      // with a NAME, never `undefined`, which every caller reads as "this value is fine" and
+      // codegen turns into source code on nothing but trust.
+      prop.type satisfies never;
+      return "wrong_prop_type";
   }
 }
