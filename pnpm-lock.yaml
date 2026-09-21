@@ -185,6 +185,19 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/codegen:
+    dependencies:
+      '@noon/contracts':
+        specifier: workspace:^
+        version: link:../contracts
+      '@noon/doc-model':
+        specifier: workspace:^
+        version: link:../doc-model
+    devDependencies:
+      '@noon/design-system':
+        specifier: workspace:^
+        version: link:../design-system
+
   packages/contracts:
     dependencies:
       zod:

@@ -1,6 +1,6 @@
 import type { Doc, DocNode, Op } from "@noon/contracts";
 
-export { validate } from "./validate.ts";
+export { checkProp, validate, type PropProblem } from "./validate.ts";
 
 export const ROOT_ID = "root";
 

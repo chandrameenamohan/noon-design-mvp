@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./random-ops": "./src/random-ops.ts"
+    "./random-ops": "./src/random-ops.ts",
+    "./fixtures": "./src/fixtures.ts"
   },
   "dependencies": {
     "@noon/contracts": "workspace:^"

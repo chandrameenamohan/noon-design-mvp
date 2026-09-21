@@ -5,9 +5,14 @@ import { expect, test } from "vitest";
 import { describeDrift, DESIGN_SYSTEM_ENTRY, manifest } from "./index.ts";
 import { extractManifest } from "./extract.ts";
 
+// extractManifest builds a real TypeScript Program over the sample app: seconds, not milliseconds.
+// Vitest's 5 s unit budget fits it alone and not under a loaded `make check`, which is a flaky test,
+// which is a bug report. The assertions are untouched; only the clock they run against is honest now.
+const COMPILER = 60_000;
+
 test("the committed manifest matches the sample app's components (run `make manifest` if this fails)", () => {
   expect(describeDrift(manifest, extractManifest(DESIGN_SYSTEM_ENTRY))).toEqual([]);
-});
+}, COMPILER);
 
 test("changing a component's props without regenerating is reported BY NAME (F14)", () => {
   // The mutation runs on a throwaway copy, so the working tree is never touched.
@@ -27,7 +32,7 @@ test("changing a component's props without regenerating is reported BY NAME (F14
   } finally {
     rmSync(copy, { recursive: true, force: true });
   }
-});
+}, COMPILER);
 
 test("added and removed components are reported too", () => {
   const without = { ...manifest, components: manifest.components.filter((c) => c.name !== "Card") };

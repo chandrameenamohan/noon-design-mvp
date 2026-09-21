@@ -1,14 +1,8 @@
 import { expect, test } from "vitest";
-import type { Doc, Manifest, Op } from "@noon/contracts";
+import type { Doc, Op } from "@noon/contracts";
 import { applyOp, emptyDoc, ROOT_ID, validate } from "./index.ts";
+import { testManifest as manifest } from "./fixtures.ts";
 
-const manifest: Manifest = {
-  version: 1,
-  components: [
-    { name: "Stack", acceptsChildren: true, props: [{ name: "gap", type: { kind: "number" }, required: false, default: 8 }, { name: "direction", type: { kind: "enum", options: ["column", "row"] }, required: false, default: "column" }] },
-    { name: "Button", acceptsChildren: false, props: [{ name: "label", type: { kind: "string" }, required: true }, { name: "disabled", type: { kind: "boolean" }, required: false, default: false }] },
-  ],
-};
 const add = (nodeId: string, parentId: string, component = "Stack", props: Record<string, string | number | boolean> = {}, index = 0): Op => ({ type: "add_node", nodeId, parentId, index, component, props });
 const build = (...ops: Op[]): Doc => ops.reduce(applyOp, emptyDoc());
 const verdict = (doc: Doc, op: Op) => validate(doc, op, manifest);

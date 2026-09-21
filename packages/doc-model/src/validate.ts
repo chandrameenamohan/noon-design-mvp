@@ -2,6 +2,8 @@ import type { Doc, Manifest, Op, PropValue, RejectReason } from "@noon/contracts
 import { nodeOf } from "./index.ts";
 
 type Verdict = { ok: true } | { ok: false; reason: RejectReason };
+/** The reasons a single prop can be wrong. A subset of RejectReason, so validate() can return one unchanged. */
+export type PropProblem = Extract<RejectReason, "unknown_prop" | "wrong_prop_type" | "missing_required_prop">;
 
 const OK: Verdict = { ok: true };
 const no = (reason: RejectReason): Verdict => ({ ok: false, reason });
@@ -71,7 +73,12 @@ export function validate(doc: Doc, op: Op, manifest: Manifest): Verdict {
   }
 }
 
-function checkProp(spec: Manifest["components"][number], key: string, value: PropValue | null): RejectReason | undefined {
+/**
+ * Whether a value fits a component's prop. Exported because @noon/codegen must agree with this
+ * EXACTLY: what validate() accepts into a document is what codegen has to turn into type-checking
+ * TSX, and a second copy of these rules would drift the day the manifest grows a kind.
+ */
+export function checkProp(spec: Manifest["components"][number], key: string, value: PropValue | null): PropProblem | undefined {
   const prop = spec.props.find((p) => p.name === key);
   if (!prop) return "unknown_prop";
   if (value === null) return prop.required ? "missing_required_prop" : undefined;
