@@ -24,6 +24,11 @@ drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh && sh drill
 .PHONY: clean-clone
 clean-clone: ; sh scripts/clean-clone.sh
 
+# The sandbox image (E4.2a): the sample app's dev server with node_modules baked in. Minutes the first
+# time, cached after. The sandbox integration test builds it too, so `make check` never runs a stale one.
+.PHONY: sandbox-image
+sandbox-image: ; docker build --tag noon-sandbox:dev --file apps/worker/sandbox/Dockerfile seed/sample-app
+
 # Regenerates the component manifest from the sample app's types. `make check` fails when it is stale.
 .PHONY: manifest
 manifest: ; pnpm --filter @noon/design-system generate
