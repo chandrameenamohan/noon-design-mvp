@@ -2,6 +2,9 @@
 # No build step: Node 24 runs the TypeScript source directly, so the image is source + production deps.
 FROM node:24-slim
 RUN corepack enable
+# The docker CLI, for the sandbox worker (E4.2b). Only `worker-sandbox` is given the daemon's socket;
+# in every other role this binary has nothing to talk to. ponytail: one image for every role.
+COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 WORKDIR /repo
 
 # Manifests first (one line per workspace package: add yours here, or the frozen install fails),
@@ -11,6 +14,7 @@ COPY apps/api/package.json apps/api/
 COPY apps/sync/package.json apps/sync/
 COPY apps/web/package.json apps/web/
 COPY apps/worker/package.json apps/worker/
+COPY packages/codegen/package.json packages/codegen/
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/db/package.json packages/db/
 COPY packages/design-system/package.json packages/design-system/

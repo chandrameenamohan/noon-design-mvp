@@ -56,6 +56,13 @@ export const Run = z.object({
 });
 export type Run = z.infer<typeof Run>;
 
+/**
+ * What a running `sandbox` job reports: where the document's preview answers. Only http(s): the
+ * canvas puts this in an iframe's src, and a `javascript:` URL there runs in the canvas's origin.
+ */
+export const PreviewOutput = z.strictObject({ url: z.url({ protocol: /^https?$/u }) });
+export type PreviewOutput = z.infer<typeof PreviewOutput>;
+
 // --- Usage (F12) -----------------------------------------------------------------------------------
 // The upper bound is not taste: it is what the system BEHIND this schema can hold. Cost is a
 // numeric(12,6) column, whose largest value is 999999.999999 and whose scale is a millionth of a dollar

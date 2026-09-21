@@ -111,5 +111,35 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # E4.2b: the sandbox queue, one container per open document's preview. The ONLY service that holds
+  # the Docker socket, which is root on the host: it runs no model and no customer code, only docker
+  # commands for sandboxes (the sandboxes themselves run on their own network, never this one).
+  # Never merge it with `worker`: that one runs the Agent SDK's subprocess (E4.2a security review).
+  # ponytail: the raw socket; a socket proxy allowing only the sandbox's calls narrows it (noon-9gz).
+  worker-sandbox:
+    build: .
+    command: ["node", "apps/worker/src/main.ts"]
+    user: root # the socket inside the VM belongs to root
+    environment:
+      WORKER_QUEUE: sandbox
+      DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      # It follows each document as a silent peer: its own session, signed with the sync server's secret.
+      SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+      SYNC_URL: "ws://sync:3001"
+      SANDBOX_IMAGE: noon-sandbox:dev # built on the host by ./init.sh (or `make sandbox-image`)
+      # This stack's sandboxes, and the only ones its reaper removes: `make clean-clone` and the test
+      # suites run their own sandboxes on the same Docker daemon.
+      SANDBOX_POOL: "${COMPOSE_PROJECT_NAME:-noon-design-mvp}"
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      sync: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 volumes:
   pgdata:

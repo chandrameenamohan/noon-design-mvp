@@ -29,9 +29,10 @@ docker compose up -d --wait postgres redis
 # POSTGRES_PASSWORD only applies when the data volume is first created. Setting it here as well keeps an
 # existing volume (and one created with an older password) in step with .env. Local socket, no password needed.
 docker compose exec -T postgres psql -U noon -d noon -qc "alter role noon password '$POSTGRES_PASSWORD'" >/dev/null
-docker compose up -d --build --wait api sync worker
-# The per-document preview sandbox (epic 4). Minutes on a first run: it installs the sample app's dependencies.
+# The per-document preview sandbox (epic 4), BEFORE the worker that starts it. Minutes on a first run:
+# it installs the sample app's dependencies.
 docker build --quiet --tag noon-sandbox:dev --file apps/worker/sandbox/Dockerfile seed/sample-app >/dev/null
+docker compose up -d --build --wait api sync worker worker-sandbox
 
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")

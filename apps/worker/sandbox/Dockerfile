@@ -30,7 +30,35 @@ ENV SEED_REPO=/home/node/seed.git
 # chain except its last command, so a clone that failed went on to start a dev server with no
 # source (caught by the sandbox integration test). "Cloned" means HEAD resolves, not ".git exists":
 # a clone killed halfway leaves a .git behind, and the next start must try again, not serve it.
-# BRANCH is set by the worker, which has already checked it is a plain `noon/<uuid>`.
+# BRANCH and PAGE are set by the worker, which has already checked the uuid inside them.
+#
+# Then the PREVIEW, on every start: an entry of our own that renders the document's page (the
+# customer's own main.tsx renders their app, not our page). It lives in noon-preview/, which is
+# git-excluded, so it is never part of the working branch that ship pushes. The page file itself IS
+# part of it: that is the one file the document owns (keystone 8). Until the first push it holds a
+# page that renders nothing, so the entry never imports a file that is not there.
+COPY <<'EOF' /home/node/preview/index.html
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>Preview</title></head>
+  <body><div id="root"></div><script type="module" src="./main.tsx"></script></body>
+</html>
+EOF
+COPY <<'EOF' /home/node/preview/main.tsx
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import "../src/design-system/tokens.css";
+import { Page } from "@PAGE@";
+
+const root = document.getElementById("root");
+if (!root) throw new Error("the preview is missing #root");
+createRoot(root).render(<StrictMode><Page /></StrictMode>);
+EOF
+COPY <<'EOF' /home/node/preview/placeholder.tsx
+export function Page() {
+  return null;
+}
+EOF
 COPY --chmod=755 <<'EOF' /home/node/start.sh
 #!/bin/sh
 set -eu
@@ -41,6 +69,11 @@ if ! git rev-parse --quiet --verify HEAD >/dev/null 2>&1; then
   git fetch --quiet origin main
   git checkout --quiet --force -B "$BRANCH" origin/main
 fi
+mkdir -p noon-preview
+cp /home/node/preview/index.html noon-preview/index.html
+sed "s|@PAGE@|../$PAGE|" /home/node/preview/main.tsx > noon-preview/main.tsx
+[ -f "$PAGE" ] || cp /home/node/preview/placeholder.tsx "$PAGE"
+grep -qx 'noon-preview/' .git/info/exclude || echo 'noon-preview/' >> .git/info/exclude
 exec pnpm exec vite
 EOF
 CMD ["/home/node/start.sh"]

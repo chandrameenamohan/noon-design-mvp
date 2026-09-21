@@ -6,7 +6,8 @@ import { connection, createProducer, describeError, JobRef, QUEUES, type QueueNa
 /** One function per queue. It gets the job as Postgres has it, never what the queue message claims. */
 /** `cancelled` is aborted when the user asks for the job to stop (F10): end quickly, keep what was done. */
 /** A handler may return what the job CONSUMED (F12); the worker records it against the job's org. */
-export type Handlers = Record<QueueName, (job: Job, cancelled: AbortSignal) => Promise<UsageAmount | undefined>>;
+/** A process drains ONLY the queues it has a handler for: the AI worker never holds the Docker socket the sandbox needs. */
+export type Handlers = Partial<Record<QueueName, (job: Job, cancelled: AbortSignal) => Promise<UsageAmount | undefined>>>;
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */
@@ -22,11 +23,17 @@ export class JobFailure extends Error {
 const log = (level: "warn" | "error", message: string, extra: Record<string, unknown> = {}) =>
   process.stderr.write(`${JSON.stringify({ level, source: "worker", message, ...extra })}\n`);
 
-export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30_000, cancelPollMs = 1000, onAlive }: {
+export async function startWorker({ db, redisUrl, prefix, handlers, concurrency = {}, sweepMs = 30_000, cancelPollMs = 1000, onAlive }: {
   db: Db;
   redisUrl: string;
   prefix?: string;
   handlers: Handlers;
+  /**
+   * Jobs of each queue at once (default 4). Per queue, because they cost different things: an AI run
+   * is a model call, a sandbox job holds a container for as long as someone has the document open.
+   * One shared pool would let a burst of either starve the other.
+   */
+  concurrency?: Partial<Record<QueueName, number>>;
   sweepMs?: number;
   /** How often a running job's row is asked "has someone cancelled you?". F10 allows 3 s in all. */
   cancelPollMs?: number;
@@ -50,7 +57,9 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
       jobs.cancelRequested(ref).then((asked) => { if (asked) cancel.abort(); }, () => undefined); // a failed look is tried again in a second
     }, cancelPollMs);
     try {
-      const consumed = await handlers[job.queue](job, cancel.signal); // the row's queue, not the message's
+      const handler = handlers[job.queue]; // the row's queue, not the message's
+      if (!handler) throw new Error(`no handler for the ${job.queue} queue`); // unreachable: only handled queues are drained
+      const consumed = await handler(job, cancel.signal);
       // ponytail: only a run that reached its end reports what it consumed; a cancelled or timed-out run has
       // spent tokens too, which the SDK only totals in its final message. Per-turn accounting is E9.5.
       if (consumed) await jobs.recordUsage(ref, consumed).catch((err: unknown) => log("error", `usage not recorded: ${describeError(err)}`, { jobId: ref.jobId })); // a run that worked is not failed over its bookkeeping
@@ -72,8 +81,8 @@ export async function startWorker({ db, redisUrl, prefix, handlers, sweepMs = 30
 
   // ponytail: one attempt, no retries, and a job left `running` by a killed worker stays there.
   // Retries, heartbeats and resuming stale jobs are E9 (F28).
-  const workers = QUEUES.map((name) => {
-    const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: 4, ...scoped });
+  const workers = QUEUES.filter((name) => handlers[name] !== undefined).map((name) => {
+    const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: concurrency[name] ?? 4, ...scoped });
     worker.on("error", (err) => log("warn", describeError(err), { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
     return worker;
   });

@@ -17,6 +17,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const CONTAINER_PORT = 5173;
 const LABEL = "noon.sandbox";
+/** Goes into a `key=value` label and a `--filter`: nothing that could end the value early. */
+const POOL = /^[a-z0-9][a-z0-9-]{0,39}$/u;
+const checkPool = (pool: string): void => {
+  if (!POOL.test(pool)) throw new Error(`not a sandbox pool name: ${JSON.stringify(pool)}`);
+};
 /** Sandboxes live here, not on the default bridge: inter-container traffic off, so one cannot read another's dev server. */
 const NETWORK = "noon-sandboxes";
 /** What Docker says when the host port is taken: by another container, or (Docker Desktop: "Ports are not available") by a host process. */
@@ -25,6 +30,12 @@ const PORT_TAKEN = /port is already allocated|address already in use|ports are n
 export type Sandbox = { container: string; url: string };
 export type SandboxOptions = {
   image: string;
+  /**
+   * Whose sandboxes these are: the label every container carries, and the only ones a reaper with
+   * the same pool may remove. The compose stack, `make clean-clone` and each test file share one
+   * Docker daemon; without this, one stack's reaper removed another's sandboxes (it happened).
+   */
+  pool: string;
   /** The docker CLI. Docker Desktop does not always put it on PATH. */
   docker?: string;
   /** Host ports to choose from, inclusive. */
@@ -37,6 +48,10 @@ export type SandboxOptions = {
 type Run = (...args: string[]) => Promise<string>;
 
 export const sandboxName = (documentId: string): string => `noon-sandbox-${documentId}`;
+/** Where the generated page lives in the document's clone: the one file the document owns (keystone 8). */
+export const pagePath = (documentId: string): string => `src/pages/noon-${documentId}.tsx`;
+/** The sandbox's own entry that renders that page, relative to the sandbox's URL (the Dockerfile writes it). */
+export const PREVIEW_PATH = "noon-preview/";
 
 const starting = new Map<string, Promise<Sandbox>>();
 let network: Promise<void> | undefined;
@@ -58,6 +73,7 @@ export function startSandbox(documentId: string, options: SandboxOptions): Promi
   // The id becomes a container name, a label and a git branch. execFile has no shell, but a
   // branch called `--upload-pack=...` is still an argument. Only a plain uuid gets past here.
   if (!UUID.test(documentId)) return Promise.reject(new Error(`not a document id: ${JSON.stringify(documentId)}`));
+  if (!POOL.test(options.pool)) return Promise.reject(new Error(`not a sandbox pool name: ${JSON.stringify(options.pool)}`));
   // ponytail: a caller that joins an attempt in flight gets THAT attempt's deadline and signal. Fine
   // while the only caller per document is its one sandbox job (E4.2b).
   let attempt = starting.get(documentId);
@@ -75,7 +91,7 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
   const name = sandboxName(documentId);
   try {
     await ensureNetwork(run);
-    await create(run, name, documentId, image, ports);
+    await create(run, name, documentId, image, ports, options.pool);
     await ready(run, name, deadline);
     // The port is read AFTER the dev server answered, from the container that answered: never a
     // number remembered from before a restart that somebody else may have finished differently.
@@ -89,7 +105,7 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
 }
 
 /** Makes sure the container exists and is running: started again if stopped, created if missing. */
-async function create(run: Run, name: string, documentId: string, image: string, ports: readonly [number, number]): Promise<void> {
+async function create(run: Run, name: string, documentId: string, image: string, ports: readonly [number, number], pool: string): Promise<void> {
   // Candidates step through the range from a start taken from the document id: spread, so two
   // documents rarely want the same port, and stepping, so a taken port is never tried twice.
   const size = ports[1] - ports[0] + 1;
@@ -99,8 +115,8 @@ async function create(run: Run, name: string, documentId: string, image: string,
     const candidate = ports[0] + ((offset + attempt) % size);
     try {
       await run("run", "--detach", "--name", name,
-        "--label", `${LABEL}=1`, "--label", `noon.document=${documentId}`,
-        "--env", `BRANCH=noon/${documentId}`,
+        "--label", `${LABEL}=${pool}`, "--label", `noon.document=${documentId}`,
+        "--env", `BRANCH=noon/${documentId}`, "--env", `PAGE=${pagePath(documentId)}`,
         // Loopback only: a laptop on a shared network must not serve its previews to the room.
         "--publish", `127.0.0.1:${String(candidate)}:${String(CONTAINER_PORT)}`,
         "--network", NETWORK,
@@ -143,6 +159,47 @@ async function restarted(run: Run, name: string): Promise<boolean> {
     await run("rm", "--force", name);
     return false;
   }
+}
+
+/**
+ * Puts the generated file into the running sandbox: `docker exec`, measured the fastest and the most
+ * reliable way (learning-tests/sandbox FINDINGS 2: `cat >` itself, zero missed updates once pushes
+ * are paced; no bind mount). The target is the container's own PAGE, set when it was created, so
+ * nothing from the caller reaches the shell.
+ */
+export async function pushPage(documentId: string, tsx: string, options: SandboxOptions): Promise<void> {
+  if (!UUID.test(documentId)) throw new Error(`not a document id: ${JSON.stringify(documentId)}`);
+  const deadline = AbortSignal.any([AbortSignal.timeout(options.readyTimeoutMs ?? 10_000), ...(options.signal ? [options.signal] : [])]);
+  await dockerCli(options.docker ?? "docker", ["exec", "--interactive", sandboxName(documentId), "sh", "-c", `cat > "$PAGE"`], deadline, tsx);
+}
+
+/** Is the document's container running? False when it exited, was stopped, or does not exist. */
+export async function isRunning(documentId: string, options: SandboxOptions): Promise<boolean> {
+  if (!UUID.test(documentId)) throw new Error(`not a document id: ${JSON.stringify(documentId)}`);
+  const deadline = AbortSignal.any([AbortSignal.timeout(options.readyTimeoutMs ?? 10_000), ...(options.signal ? [options.signal] : [])]);
+  try {
+    return (await dockerCli(options.docker ?? "docker", ["container", "inspect", "--format", "{{.State.Running}}", sandboxName(documentId)], deadline)).trim() === "true";
+  } catch (err) {
+    if (String(err).includes("No such container")) return false;
+    throw err;
+  }
+}
+
+/**
+ * The reaper: removes every sandbox whose document is not in `inUse`, running or not, and returns
+ * those documents. Only its own pool's. The caller asks Postgres which documents are in use: the truth is there, and a
+ * container is only a cache of it. Removed, never merely stopped: a stopped container gives up its
+ * port, and a sandbox restarted on a different port breaks the open iframe's self-healing.
+ */
+export async function reapSandboxes(inUse: ReadonlySet<string>, options: SandboxOptions): Promise<string[]> {
+  checkPool(options.pool);
+  const deadline = AbortSignal.any([AbortSignal.timeout(options.readyTimeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
+  const docker = options.docker ?? "docker";
+  const listed = await dockerCli(docker, ["ps", "--all", "--filter", `label=${LABEL}=${options.pool}`, "--format", `{{.Label "noon.document"}}`], deadline);
+  // Only names this code made: a label that is not a uuid is left alone, never interpolated.
+  const idle = listed.split("\n").filter((id) => UUID.test(id) && !inUse.has(id));
+  if (idle.length > 0) await dockerCli(docker, ["rm", "--force", ...idle.map(sandboxName)], deadline);
+  return idle;
 }
 
 async function portOf(run: Run, name: string): Promise<number> {
@@ -204,7 +261,7 @@ async function ready(run: Run, name: string, deadline: AbortSignal): Promise<voi
  * whatever `killSignal` says, and a CLI that ignores SIGTERM then outlives the call and keeps this
  * process's event loop alive.
  */
-function dockerCli(docker: string, args: string[], deadline: AbortSignal): Promise<string> {
+function dockerCli(docker: string, args: string[], deadline: AbortSignal, input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (deadline.aborted) {
       reject(deadline.reason as Error);
@@ -219,5 +276,7 @@ function dockerCli(docker: string, args: string[], deadline: AbortSignal): Promi
       else resolve(args[0] === "logs" ? stdout + stderr : stdout);
     });
     deadline.addEventListener("abort", kill, { once: true });
+    child.stdin?.end(input);
   });
 }
+

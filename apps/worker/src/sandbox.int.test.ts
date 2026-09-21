@@ -1,24 +1,24 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
+import { chromium } from "@playwright/test";
+import type { Doc, Op, PropValue } from "@noon/contracts";
+import { generate } from "@noon/codegen";
+import { manifest } from "@noon/design-system";
+import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
+import { buildImage, DOCKER, docker, dockerEnv, IMAGE, testPool } from "./sandbox-testing.ts";
+import { isRunning, PREVIEW_PATH, pagePath, pushPage, reapSandboxes, sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
 
 // E4.2a, integration:sandbox-start-ready. Real Docker, the real image, the real sample app.
-const DOCKER = existsSync("/Applications/Docker.app/Contents/Resources/bin/docker") ? "/Applications/Docker.app/Contents/Resources/bin/docker" : "docker";
-// `docker build` pulls the base image through a credential helper that lives next to the CLI.
-const env = { ...process.env, PATH: `${process.env["PATH"] ?? ""}:${dirname(DOCKER)}` };
-const exec = (file: string, args: string[], options: { cwd?: string; timeout: number }) => promisify(execFile)(file, args, { ...options, env });
-const IMAGE = "noon-sandbox:dev";
 const BROKEN = "noon-sandbox:broken";
 const SILENT = "noon-sandbox:silent";
-const REPO = new URL("../../../", import.meta.url).pathname;
-const docker = async (...args: string[]): Promise<string> => (await exec(DOCKER, args, { timeout: 60_000 })).stdout.trim();
-const options: SandboxOptions = { image: IMAGE, docker: DOCKER, ports: [21000, 21999] };
+const pool = testPool();
+const options: SandboxOptions = { image: IMAGE, docker: DOCKER, pool, ports: [21000, 21999] };
 const made: string[] = [];
 const newDocument = (): string => {
   const id = randomUUID();
@@ -27,8 +27,7 @@ const newDocument = (): string => {
 };
 
 beforeAll(async () => {
-  // Cached after the first build (which takes minutes: it installs the sample app's dependencies).
-  await exec(DOCKER, ["build", "--quiet", "--tag", IMAGE, "--file", "apps/worker/sandbox/Dockerfile", "seed/sample-app"], { cwd: REPO, timeout: 900_000 });
+  await buildImage();
   // The same image, pointed at a seed repo that does not exist: its clone fails and it exits.
   await variant(BROKEN, "ENV SEED_REPO=/nowhere.git");
   // The same image, running but with no dev server: it never answers.
@@ -36,7 +35,7 @@ beforeAll(async () => {
 }, 900_000);
 
 async function variant(tag: string, line: string): Promise<void> {
-  const build = promisify(execFile)(DOCKER, ["build", "--quiet", "--tag", tag, "-"], { timeout: 60_000, env });
+  const build = promisify(execFile)(DOCKER, ["build", "--quiet", "--tag", tag, "-"], { timeout: 60_000, env: dockerEnv });
   build.child.stdin?.end(`FROM ${IMAGE}\n${line}\n`);
   await build;
 }
@@ -68,7 +67,8 @@ test("the sandbox works in ITS OWN clone of the seed repo, on the document's wor
   const git = (id: string, ...args: string[]): Promise<string> => docker("exec", sandboxName(id), "git", ...args);
   expect(await git(a, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`noon/${a}`);
   expect(await git(a, "log", "--format=%s", "-1")).toBe("seed");
-  expect(await git(a, "status", "--porcelain")).toBe(""); // baked node_modules is not a change
+  // Baked node_modules and the preview entry are not changes; the document's own page is the one new file.
+  expect(await git(a, "status", "--porcelain")).toBe(`?? ${pagePath(a)}`);
   // Own clone: a file written in one sandbox is not in the other.
   await docker("exec", sandboxName(a), "sh", "-c", "echo x > only-in-a.txt");
   await expect(docker("exec", sandboxName(b), "test", "-e", "only-in-a.txt")).rejects.toThrow();
@@ -178,7 +178,10 @@ test("docker stop takes a sandbox down at once, not after the 10 s grace (Vite h
 }, 60_000);
 
 test.each(["not-a-uuid", "--upload-pack=touch /tmp/pwned", `${randomUUID()} `, randomUUID().toUpperCase()])("a document id that is not a plain uuid never reaches docker: %j", async (id) => {
-  await expect(startSandbox(id, { ...options, docker: "/nonexistent/docker" })).rejects.toThrow(/not a document id/u);
+  const nowhere = { ...options, docker: "/nonexistent/docker" };
+  await expect(startSandbox(id, nowhere)).rejects.toThrow(/not a document id/u);
+  await expect(pushPage(id, "export function Page() { return null; }", nowhere)).rejects.toThrow(/not a document id/u);
+  await expect(isRunning(id, nowhere)).rejects.toThrow(/not a document id/u);
 });
 
 test("a docker that never answers is abandoned at the deadline, and a cancelled start ends at once", async () => {
@@ -227,3 +230,89 @@ test("a sandbox whose dev server can never start says so at once, with its logs,
   await expect(startSandbox(id, { ...options, image: BROKEN, readyTimeoutMs: 30_000 })).rejects.toThrow(/exited before it was ready: .*nowhere\.git/su);
   expect(Date.now() - started).toBeLessThan(10_000);
 }, 60_000);
+
+// --- E4.2b: integration:sandbox-push-hot-update, integration:sandbox-reap -------------------------
+
+const add = (nodeId: string, parentId: string, component: string, props: Record<string, PropValue> = {}, index = 0): Op => ({ type: "add_node", nodeId, parentId, index, component, props });
+/** The file codegen makes for a small form whose Text says `text`. Same tree every time, only the words differ. */
+function page(text: string): string {
+  const doc: Doc = [add("s", ROOT_ID, "Stack"), add("i", "s", "Input", { label: "Name" }), add("t", "s", "Text", { value: text }, 1)].reduce(applyOp, emptyDoc());
+  const result = generate(doc, manifest);
+  if (!result.ok) throw new Error(result.reason);
+  return result.tsx;
+}
+
+test("a pushed page hot-updates in the browser within 3 s: no reload, and what the user typed is still there", async () => {
+  const id = newDocument();
+  const sandbox = await startSandbox(id, options);
+  await pushPage(id, page("first"), options);
+  const browser = await chromium.launch();
+  try {
+    const tab = await browser.newPage();
+    await tab.goto(new URL(PREVIEW_PATH, sandbox.url).href);
+    await tab.getByText("first").waitFor();
+    // Two witnesses that the page was NOT reloaded: a value only this page load holds, and a
+    // navigation event that a reload would fire. Plus the state a user would lose: typed text.
+    await tab.evaluate(() => { (globalThis as { marker?: number }).marker = 42; });
+    await tab.getByLabel("Name").fill("typed by a person");
+    let navigated = false;
+    tab.on("framenavigated", (frame) => { if (frame === tab.mainFrame()) navigated = true; });
+
+    const pushed = Date.now();
+    await pushPage(id, page("second"), options);
+    await tab.getByText("second").waitFor({ timeout: 3_000 });
+    expect(Date.now() - pushed).toBeLessThan(3_000);
+    expect(await tab.evaluate(() => (globalThis as { marker?: number }).marker)).toBe(42);
+    expect(navigated).toBe(false);
+    expect(await tab.getByLabel("Name").inputValue()).toBe("typed by a person");
+    // Fast Refresh, not a fresh file: the document's page in the clone is exactly what was pushed.
+    expect(await docker("exec", sandboxName(id), "cat", pagePath(id))).toBe(page("second").trimEnd());
+  } finally {
+    await browser.close();
+  }
+}, 90_000);
+
+test("a sandbox that was never started is simply not running: an answer, not an error", async () => {
+  expect(await isRunning(randomUUID(), options)).toBe(false);
+});
+
+test("a push to a sandbox that is not running fails by name, never silently", async () => {
+  await expect(pushPage(newDocument(), page("x"), options)).rejects.toThrow(/No such container|is not running/u);
+});
+
+test("the reaper sweeps only its own pool: another stack's sandbox, not in use HERE, is left alone", async () => {
+  // The compose stack's reaper once removed the test suite's sandboxes: same daemon, same label.
+  const theirs = newDocument();
+  await startSandbox(theirs, { ...options, pool: testPool() });
+  expect(await reapSandboxes(new Set(), options)).not.toContain(theirs);
+  expect(await isRunning(theirs, options)).toBe(true);
+}, 60_000);
+
+test.each(["", "Has Space", "a".repeat(41), "x=y"])("a pool name that could escape its label is refused: %j", async (bad) => {
+  await expect(startSandbox(randomUUID(), { ...options, pool: bad })).rejects.toThrow(/pool/u);
+  await expect(reapSandboxes(new Set(), { ...options, pool: bad })).rejects.toThrow(/pool/u);
+});
+
+// Last on purpose: the reaper removes EVERY sandbox of its pool not in use, the other tests' ones too.
+test("the reaper removes every sandbox whose document is not in use, and only those", async () => {
+  const [inUse, idle] = [newDocument(), newDocument()];
+  await Promise.all([startSandbox(inUse, options), startSandbox(idle, options)]);
+  const removed = await reapSandboxes(new Set([inUse]), options);
+  expect(removed).toContain(idle);
+  expect(removed).not.toContain(inUse);
+  const left = (await docker("ps", "--all", "--filter", `label=noon.sandbox=${pool}`, "--format", `{{.Label "noon.document"}}`)).split("\n").filter(Boolean);
+  expect(left).toEqual([inUse]);
+  // A second sweep with nothing idle removes nothing.
+  expect(await reapSandboxes(new Set([inUse]), options)).toEqual([]);
+}, 90_000);
+
+test("the reaper leaves alone a container it did not name, even one wearing the sandbox label", async () => {
+  const stranger = `stranger-${randomUUID()}`;
+  await docker("run", "--detach", "--name", stranger, "--label", `noon.sandbox=${pool}`, "--label", "noon.document=not-a-uuid", SILENT);
+  try {
+    expect(await reapSandboxes(new Set(), options)).not.toContain("not-a-uuid");
+    expect(await docker("container", "inspect", "--format", "{{.Name}}", stranger)).toBe(`/${stranger}`);
+  } finally {
+    await docker("rm", "--force", stranger);
+  }
+}, 90_000);

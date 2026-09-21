@@ -9,16 +9,18 @@ import { startServer, type RunningServer } from "../../api/src/server.ts";
 import { TEST_SESSIONS } from "../../api/src/testing.ts";
 import { JobFailure, startWorker, type Handlers, type RunningWorker } from "./worker.ts";
 
+type AiHandler = NonNullable<Handlers["ai"]>;
+
 // integration:run-create-to-terminal. The real api, the real worker, real Postgres and real Redis;
 // each test file gets its own Postgres schema and its own BullMQ key prefix.
 const prefix = `test-${randomBytes(6).toString("hex")}`;
 let db: TestDb, producer: Producer, api: RunningServer, worker: RunningWorker | undefined;
 let aiCalls: unknown[] = [];
-const record: Handlers["ai"] = (job) => {
+const record: AiHandler = (job) => {
   aiCalls.push(job.input["instruction"]);
   return Promise.resolve(undefined);
 };
-let ai: Handlers["ai"] = record;
+let ai: AiHandler = record;
 
 beforeAll(async () => {
   db = await createTestDb();
@@ -214,6 +216,60 @@ test("a job of another queue neither stops the sweep nor can be started by a mes
   await producer.enqueue({ queue: "ai", jobId: git, orgId: doc.orgId });
   await new Promise((r) => setTimeout(r, 200));
   expect(await count("select count(*)::int as n from jobs where id = $1 and status = 'queued' and started_at is null", [git])).toBe(1);
+});
+
+// --- E4.2b: the sandbox queue has its own concurrency, and a process drains only what it handles ---
+
+const sandboxJob = async (doc: Document): Promise<string> =>
+  ((await db.rawQuery("insert into jobs (org_id, document_id, queue, input) values ($1, $2, 'sandbox', '{}') returning id", [doc.orgId, doc.id])) as { rows: { id: string }[] }).rows[0]?.id ?? "";
+
+test("a full ai queue does not hold up a sandbox job: each queue has its own concurrency", async () => {
+  await worker?.close();
+  const release = new AbortController();
+  // An AI run that holds its only slot until the test lets go.
+  const holding: AiHandler = (_job, cancelled) => new Promise((resolve) => {
+    const done = (): void => { resolve(undefined); };
+    release.signal.addEventListener("abort", done);
+    cancelled.addEventListener("abort", done);
+  });
+  let sandboxStarted = 0;
+  worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, sweepMs: 50, cancelPollMs: 100, concurrency: { ai: 1, sandbox: 2 }, handlers: {
+    ai: holding,
+    sandbox: () => { sandboxStarted++; return Promise.resolve(undefined); },
+  } });
+  try {
+    const [a, b, c] = [await aDocument("ann@example.com"), await aDocument("ann@example.com"), await aDocument("ann@example.com")];
+    const first = await startRun("ann@example.com", a, "hold the slot");
+    const second = await startRun("ann@example.com", b, "wait behind it");
+    for (let i = 0; i < 100 && (await readRun("ann@example.com", first)).status !== "running"; i++) await new Promise((r) => setTimeout(r, 20));
+    const job = await sandboxJob(c);
+    for (let i = 0; i < 100 && sandboxStarted === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(sandboxStarted).toBe(1);
+    // The handler has been CALLED; the worker writes the outcome after it resolves. Wait for the row.
+    const succeeded = async (): Promise<number | undefined> => count("select count(*)::int as n from jobs where id = $1 and status = 'succeeded'", [job]);
+    for (let i = 0; i < 100 && (await succeeded()) !== 1; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(await succeeded()).toBe(1);
+    expect((await readRun("ann@example.com", second)).status).toBe("queued"); // the ai slot really was full
+  } finally {
+    release.abort();
+    await worker.close();
+    worker = undefined;
+  }
+});
+
+test("a worker drains only the queues it has handlers for: the AI worker never claims a sandbox job", async () => {
+  await worker?.close();
+  worker = undefined;
+  ai = record;
+  const doc = await aDocument("ann@example.com");
+  const job = await sandboxJob(doc);
+  const aiOnly = await work(50); // handlers: ai only
+  await producer.enqueue({ queue: "sandbox", jobId: job, orgId: doc.orgId });
+  await new Promise((r) => setTimeout(r, 300)); // several sweeps
+  expect(await count("select count(*)::int as n from jobs where id = $1 and status = 'queued' and started_at is null", [job])).toBe(1);
+  await aiOnly.close();
+  worker = undefined;
+  await db.rawQuery("update jobs set status = 'cancelled', finished_at = now() where id = $1", [job]);
 });
 
 // --- E3.3: cancel (F10) ---------------------------------------------------------------------------

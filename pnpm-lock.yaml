@@ -154,6 +154,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.278
         version: 0.3.278(@anthropic-ai/sdk@0.127.0(zod@4.6.5))(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(zod@4.6.5)
+      '@noon/codegen':
+        specifier: workspace:^
+        version: link:../../packages/codegen
       '@noon/contracts':
         specifier: workspace:^
         version: link:../../packages/contracts

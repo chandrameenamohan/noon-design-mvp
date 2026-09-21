@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Run, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, PreviewOutput, Run, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -36,9 +36,10 @@ export type DocumentStore = {
   save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
 };
 
-type JobKey = { queue: "ai"; jobId: string; orgId: string };
+const QUEUES = ["ai", "sandbox"] as const;
+type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string };
 /** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
-export type Job = { id: string; orgId: string; documentId: string; queue: "ai"; input: Record<string, unknown>; /** Undefined once that user has been deleted. */ createdBy: string | undefined };
+export type Job = { id: string; orgId: string; documentId: string; queue: JobKey["queue"]; input: Record<string, unknown>; /** Undefined once that user has been deleted. */ createdBy: string | undefined };
 type JobStore = {
   /** queued -> running, atomically. Undefined when there is nothing to claim: unknown, already claimed, finished, or a job of ANOTHER queue. */
   claim(key: JobKey): Promise<Job | undefined>;
@@ -50,6 +51,13 @@ type JobStore = {
   cancelRequested(key: JobKey): Promise<boolean>;
   /** What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per job. */
   recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
+  /** What a RUNNING job has to say before it ends (a sandbox's preview URL). Validated; a job that is not running is left as it is. */
+  report(key: JobKey, output: PreviewOutput): Promise<void>;
+  /**
+   * Documents whose sandbox must stay, across ALL orgs: a sandbox job queued or running, or finished
+   * less than `graceMs` ago (a quick reopen finds it warm). The reaper removes every other sandbox.
+   */
+  sandboxesInUse(graceMs: number): Promise<string[]>;
 };
 
 type PageInput = { limit?: number; cursor?: string | undefined };
@@ -101,7 +109,7 @@ const UsageTotalsRow = z
   .object({ runs: count, input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money })
   .transform((r): UsageReport["totals"] => ({ runs: r.runs, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd }));
 const JobRow = z
-  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.literal("ai"), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
+  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.enum(QUEUES), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
   .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
@@ -296,10 +304,21 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       },
       queued: (limit) =>
         rows(
-          z.object({ id: z.string(), org_id: z.string(), queue: z.literal("ai") }).transform((r) => ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
-          // Only the queues this code knows: the day `git` jobs exist, one of them must not stop the AI sweep for every org.
-          "select id, org_id, queue from jobs where status = 'queued' and queue = 'ai' order by created_at, id limit $1",
-          [limit],
+          z.object({ id: z.string(), org_id: z.string(), queue: z.enum(QUEUES) }).transform((r) => ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
+          // Only the queues this code knows: the day `git` jobs exist, one of them must not stop the sweep for every org.
+          "select id, org_id, queue from jobs where status = 'queued' and queue = any($2) order by created_at, id limit $1",
+          [limit, QUEUES],
+        ),
+      async report({ jobId, orgId }, output) {
+        const valid = PreviewOutput.parse(output); // the contract the reader will use, BEFORE the write
+        if (!isId(jobId) || !isId(orgId)) return;
+        await pool.query("update jobs set output = $3 where org_id = $1 and id = $2 and status = 'running'", [orgId, jobId, JSON.stringify(valid)]);
+      },
+      sandboxesInUse: (graceMs) =>
+        rows(
+          z.object({ document_id: z.string() }).transform((r) => r.document_id),
+          "select distinct document_id from jobs where queue = 'sandbox' and (status in ('queued', 'running') or finished_at > now() - make_interval(secs => $1::float8 / 1000))",
+          [graceMs],
         ),
     }),
 

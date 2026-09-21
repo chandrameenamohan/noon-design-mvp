@@ -2,8 +2,8 @@ import { Queue, type ConnectionOptions } from "bullmq";
 import { Id } from "@noon/contracts";
 import { z } from "zod";
 
-// ponytail: only the queue an epic already needs. `git`, `ship` and `sandbox` arrive with their epics.
-export const QUEUES = ["ai"] as const;
+// ponytail: only the queues an epic already needs. `git` and `ship` arrive with epic 5.
+export const QUEUES = ["ai", "sandbox"] as const;
 export type QueueName = (typeof QUEUES)[number];
 
 /**
