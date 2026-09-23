@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { Job } from "@noon/db";
 import { manifest } from "@noon/design-system";
@@ -9,6 +12,8 @@ import { buildImage, DOCKER, docker, IMAGE, testPool } from "./sandbox-testing.t
 
 // E4.2b: the `sandbox` queue's handler. The REAL sync server, the REAL peer-client, a REAL container.
 const ctx = useSyncServer();
+// A sync server that knows no document: every peer, the handler's included, is closed for good (4404).
+const nowhere = useSyncServer({ store: { load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
 const sandbox: Omit<SandboxOptions, "signal"> = { image: IMAGE, docker: DOCKER, pool: testPool(), ports: [24000, 24999] };
 const made: string[] = [];
 const job = (createdBy: string | undefined = randomUUID()): Job => {
@@ -65,13 +70,18 @@ test("the preview follows the CONFIRMED document into the sandbox within 3 s, re
   const ended = handle(run, never);
 
   await eventually(() => Promise.resolve(urls.length > 0), 30_000);
-  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:\\d+/${PREVIEW_PATH}$`, "u"));
+  // The document is named IN the URL: a stale iframe that reconnects to a port another document took
+  // meanwhile asks that document's entry for the wrong page, and is refused (sandbox.int.test.ts).
+  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:\\d+/${PREVIEW_PATH}\\?doc=${run.documentId}$`, "u"));
   expect((await fetch(urls[0] ?? "")).status).toBe(200);
 
   human.send(add("s", "root", "Stack"));
   human.send(add("t", "s", "Text", { value: "hello from the canvas" }));
   const took = await eventually(async () => (await pageIn(run.documentId)).includes(`value={"hello from the canvas"}`), 3_000);
   expect(took).toBeLessThan(3_000);
+  // Someone is here: the job stays, well past idleMs.
+  const stillRunning = await Promise.race([ended.then(() => false), new Promise((r) => setTimeout(() => { r(true); }, 2_500))]);
+  expect(stillRunning).toBe(true);
 
   human.stop();
   // Presence is forgotten after 5 s, then 1 s of nobody: the job ends by itself, as `succeeded`.
@@ -115,6 +125,7 @@ test("cancel and a stopping worker each end the job within a second, and its pee
     if (which === "cancelled") await expect(ended).resolves.toBeUndefined();
     else await expect(ended).rejects.toMatchObject({ reason: "worker_stopped" });
     expect(Date.now() - asked).toBeLessThan(1_000);
+    await eventually(() => Promise.resolve(ctx.server.peerCount(run.documentId) === 1), 2_000); // only the human is left
     human.stop();
   }
 }, 90_000);
@@ -143,4 +154,34 @@ test("a sandbox that cannot start fails the job by name", async () => {
   const failed = handle(job(), never);
   await expect(failed).rejects.toMatchObject({ reason: "sandbox_unavailable" });
   await expect(failed).rejects.toThrow(/does-not-exist/u); // the detail, for the log
+}, 60_000);
+
+test("a container that dies DURING a push is started again and given the page, not failed", async () => {
+  // A docker whose first push finds the container gone: the death lands between the liveness check and the push.
+  const dir = mkdtempSync(join(tmpdir(), "dying-docker-"));
+  const dying = join(dir, "docker");
+  writeFileSync(dying, `#!/bin/sh\nif [ "$1" = exec ] && [ "$2" = --interactive ] && [ ! -f ${dir}/died ]; then touch ${dir}/died; "${DOCKER}" rm --force "$3" >/dev/null; fi\nexec "${DOCKER}" "$@"\n`, { mode: 0o755 });
+  const run = job();
+  const human = await person(run.documentId);
+  const { handle } = handler({ sandbox: { ...sandbox, docker: dying }, aliveEveryMs: 200 });
+  const stop = new AbortController();
+  const ended = handle(run, stop.signal);
+  let failed: unknown;
+  ended.catch((err: unknown) => { failed = err; });
+  try {
+    human.send(add("t", "root", "Text", { value: "after the death" }));
+    await eventually(async () => {
+      if (failed !== undefined) throw new Error("the job failed");
+      return (await pageIn(run.documentId)).includes("after the death");
+    }, 30_000);
+  } finally {
+    stop.abort();
+    human.stop();
+  }
+  await expect(ended).resolves.toBeUndefined();
+}, 60_000);
+
+test("a handler whose peer is closed for good fails the job by name instead of idling out or running for ever", async () => {
+  const { handle } = handler({ sessions: { secret: TEST_SECRET, syncUrl: nowhere.server.url } });
+  await expect(handle(job(), never)).rejects.toMatchObject({ reason: "sync_unreachable" });
 }, 60_000);

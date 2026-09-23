@@ -52,6 +52,13 @@ export const sandboxName = (documentId: string): string => `noon-sandbox-${docum
 export const pagePath = (documentId: string): string => `src/pages/noon-${documentId}.tsx`;
 /** The sandbox's own entry that renders that page, relative to the sandbox's URL (the Dockerfile writes it). */
 export const PREVIEW_PATH = "noon-preview/";
+/**
+ * The address the canvas frames. It NAMES the document, and the sandbox's entry renders nothing for
+ * another one: a stale iframe whose Vite client reconnects to a port another document's sandbox took
+ * meanwhile must not show that document (possibly another org's). ponytail: until noon-9gz gives each
+ * document its own hostname.
+ */
+export const previewUrl = (sandboxUrl: string, documentId: string): string => new URL(`${PREVIEW_PATH}?doc=${documentId}`, sandboxUrl).href;
 
 const starting = new Map<string, Promise<Sandbox>>();
 let network: Promise<void> | undefined;
@@ -186,18 +193,23 @@ export async function isRunning(documentId: string, options: SandboxOptions): Pr
 }
 
 /**
- * The reaper: removes every sandbox whose document is not in `inUse`, running or not, and returns
- * those documents. Only its own pool's. The caller asks Postgres which documents are in use: the truth is there, and a
- * container is only a cache of it. Removed, never merely stopped: a stopped container gives up its
- * port, and a sandbox restarted on a different port breaks the open iframe's self-healing.
+ * The reaper: removes every sandbox whose document is not in use, running or not, and returns those
+ * documents. Only its own pool's. `inUse` asks Postgres: the truth is there, and a container is only a
+ * cache of it. Removed, never merely stopped: a stopped container gives up its port, and a sandbox
+ * restarted on a different port breaks the open iframe's self-healing.
+ *
+ * The containers are listed FIRST, then Postgres is asked. The other order races a start: "not in
+ * use" is read, a job starts the document's sandbox, the list then includes it, and it is removed
+ * mid-start. This way a listed container was there before the answer, which covers any job that made it.
  */
-export async function reapSandboxes(inUse: ReadonlySet<string>, options: SandboxOptions): Promise<string[]> {
+export async function reapSandboxes(inUse: () => Promise<ReadonlySet<string>>, options: SandboxOptions): Promise<string[]> {
   checkPool(options.pool);
   const deadline = AbortSignal.any([AbortSignal.timeout(options.readyTimeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
   const docker = options.docker ?? "docker";
   const listed = await dockerCli(docker, ["ps", "--all", "--filter", `label=${LABEL}=${options.pool}`, "--format", `{{.Label "noon.document"}}`], deadline);
+  const used = await inUse();
   // Only names this code made: a label that is not a uuid is left alone, never interpolated.
-  const idle = listed.split("\n").filter((id) => UUID.test(id) && !inUse.has(id));
+  const idle = listed.split("\n").filter((id) => UUID.test(id) && !used.has(id));
   if (idle.length > 0) await dockerCli(docker, ["rm", "--force", ...idle.map(sandboxName)], deadline);
   return idle;
 }
@@ -276,6 +288,9 @@ function dockerCli(docker: string, args: string[], deadline: AbortSignal, input?
       else resolve(args[0] === "logs" ? stdout + stderr : stdout);
     });
     deadline.addEventListener("abort", kill, { once: true });
+    // A CLI that exits (or is killed) before reading all of `input` makes the write fail with EPIPE.
+    // Unheard, that is an uncaught exception and the whole worker dies; the exit code already says it.
+    child.stdin?.on("error", () => undefined);
     child.stdin?.end(input);
   });
 }

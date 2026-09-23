@@ -45,6 +45,9 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
 
   async function run(data: unknown): Promise<void> {
     const ref = JobRef.parse(data);
+    // A ref for a queue this process does not handle (misrouted, or forged by someone with the Redis
+    // password) is left for its own worker: claiming it first would fail someone else's job as `internal`.
+    if (handlers[ref.queue] === undefined) return;
     // Claiming is the ONLY way to start: queued -> running, in one statement. A duplicate or stale
     // message finds nothing to claim and ends here, so a job runs at most once per claim.
     const job = await jobs.claim(ref);

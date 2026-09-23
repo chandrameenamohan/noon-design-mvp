@@ -4,7 +4,7 @@ import type { Job } from "@noon/db";
 import { generate } from "@noon/codegen";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
-import { isRunning, PREVIEW_PATH, pushPage, startSandbox, type SandboxOptions } from "./sandbox.ts";
+import { isRunning, previewUrl, pushPage, startSandbox, type SandboxOptions } from "./sandbox.ts";
 import { JobFailure } from "./worker.ts";
 
 /**
@@ -53,7 +53,7 @@ export function createPreviewHandler({ sessions, manifest, sandbox, stopping, st
         // A stop during the start lands here too; the catch around the loop turns it into what it was.
         throw new JobFailure("sandbox_unavailable", err instanceof Error ? err.message : String(err));
       }
-      await reportUrl(job, new URL(PREVIEW_PATH, url).href);
+      await reportUrl(job, previewUrl(url, job.documentId));
     };
     const peer = connectPeer({
       manifest,
@@ -80,6 +80,9 @@ export function createPreviewHandler({ sessions, manifest, sandbox, stopping, st
           failIfStopping();
           return undefined;
         }
+        // Closed for good (the room refused it: 4404, 4500, a protocol error): `others` would stay frozen
+        // as it was, and a job that still "sees" someone would hold its container for ever.
+        if (peer.status === "closed") throw new JobFailure("sync_unreachable");
         const now = Date.now();
         if (peer.others.length > 0) lastSeenSomeone = now;
         if (now - lastSeenSomeone >= idleMs) return undefined;
@@ -97,7 +100,17 @@ export function createPreviewHandler({ sessions, manifest, sandbox, stopping, st
           const generated = generate(peer.confirmed, manifest);
           // ponytail: a document that does not generate keeps the last good page on screen, and the
           // canvas is not told why. The reason is in `generated.reason` for when it should be.
-          if (generated.ok) await pushPage(job.documentId, generated.tsx, options);
+          if (generated.ok) {
+            try {
+              await pushPage(job.documentId, generated.tsx, options);
+            } catch (err) {
+              // It died between the liveness check and the push (OOM, say): next tick brings it back,
+              // and the push after that brings the page. Any other failure is a real one.
+              if (await isRunning(job.documentId, options)) throw err; // a stop meanwhile throws here, and the catch below says which
+              checkedAt = 0;
+              continue;
+            }
+          }
           pushedSeq = seq;
           pushedAt = Date.now();
         }

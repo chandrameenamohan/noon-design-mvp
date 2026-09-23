@@ -30,7 +30,7 @@ ENV SEED_REPO=/home/node/seed.git
 # chain except its last command, so a clone that failed went on to start a dev server with no
 # source (caught by the sandbox integration test). "Cloned" means HEAD resolves, not ".git exists":
 # a clone killed halfway leaves a .git behind, and the next start must try again, not serve it.
-# BRANCH and PAGE are set by the worker, which has already checked the uuid inside them.
+# BRANCH (noon/<document id>) and PAGE are set by the worker, which has already checked the uuid inside them.
 #
 # Then the PREVIEW, on every start: an entry of our own that renders the document's page (the
 # customer's own main.tsx renders their app, not our page). It lives in noon-preview/, which is
@@ -52,7 +52,10 @@ import { Page } from "@PAGE@";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("the preview is missing #root");
-createRoot(root).render(<StrictMode><Page /></StrictMode>);
+// The canvas names the document it expects (?doc=). A stale iframe reconnecting to a port another
+// document's sandbox took meanwhile asks for the wrong one, and gets nothing of it.
+if (new URLSearchParams(location.search).get("doc") === "@DOC@") createRoot(root).render(<StrictMode><Page /></StrictMode>);
+else root.textContent = "This preview belongs to another document. Reload the canvas.";
 EOF
 COPY <<'EOF' /home/node/preview/placeholder.tsx
 export function Page() {
@@ -71,7 +74,7 @@ if ! git rev-parse --quiet --verify HEAD >/dev/null 2>&1; then
 fi
 mkdir -p noon-preview
 cp /home/node/preview/index.html noon-preview/index.html
-sed "s|@PAGE@|../$PAGE|" /home/node/preview/main.tsx > noon-preview/main.tsx
+sed -e "s|@PAGE@|../$PAGE|" -e "s|@DOC@|${BRANCH#noon/}|" /home/node/preview/main.tsx > noon-preview/main.tsx
 [ -f "$PAGE" ] || cp /home/node/preview/placeholder.tsx "$PAGE"
 grep -qx 'noon-preview/' .git/info/exclude || echo 'noon-preview/' >> .git/info/exclude
 exec pnpm exec vite

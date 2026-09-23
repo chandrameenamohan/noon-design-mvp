@@ -37,8 +37,7 @@ function sandboxHandlers(): Handlers {
   reaper = setInterval(() => {
     if (reaping) return;
     reaping = true;
-    db.jobStore().sandboxesInUse(5 * 60_000)
-      .then((inUse) => reapSandboxes(new Set(inUse), sandbox))
+    reapSandboxes(async () => new Set(await db.jobStore().sandboxesInUse(5 * 60_000)), sandbox)
       .catch((err: unknown) => { log(`reap failed: ${describeError(err)}`); })
       .finally(() => { reaping = false; });
   }, 30_000);

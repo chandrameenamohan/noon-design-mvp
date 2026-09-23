@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { Document, ErrorBody, Org, Run, UsageReport, Workspace } from "@noon/contracts";
-import { createProducer, type Producer } from "@noon/queue";
+import { Queue } from "bullmq";
+import { connection, createProducer, type Producer } from "@noon/queue";
 import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { devHeaderIdentity } from "../../api/src/identity.ts";
@@ -266,6 +267,13 @@ test("a worker drains only the queues it has handlers for: the AI worker never c
   const aiOnly = await work(50); // handlers: ai only
   await producer.enqueue({ queue: "sandbox", jobId: job, orgId: doc.orgId });
   await new Promise((r) => setTimeout(r, 300)); // several sweeps
+  expect(await count("select count(*)::int as n from jobs where id = $1 and status = 'queued' and started_at is null", [job])).toBe(1);
+  // A sandbox ref delivered on the AI queue (misrouted, or forged by someone holding the Redis
+  // password) must not be claimed and then failed for want of a handler: it stays queued for its own worker.
+  const aiQueue = new Queue("ai", { connection: connection(TEST_REDIS_URL), prefix });
+  await aiQueue.add("sandbox", { queue: "sandbox", jobId: job, orgId: doc.orgId });
+  await aiQueue.close();
+  await new Promise((r) => setTimeout(r, 300));
   expect(await count("select count(*)::int as n from jobs where id = $1 and status = 'queued' and started_at is null", [job])).toBe(1);
   await aiOnly.close();
   worker = undefined;

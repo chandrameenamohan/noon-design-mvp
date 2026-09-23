@@ -12,7 +12,7 @@ import { generate } from "@noon/codegen";
 import { manifest } from "@noon/design-system";
 import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
 import { buildImage, DOCKER, docker, dockerEnv, IMAGE, testPool } from "./sandbox-testing.ts";
-import { isRunning, PREVIEW_PATH, pagePath, pushPage, reapSandboxes, sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
+import { isRunning, pagePath, previewUrl, pushPage, reapSandboxes, sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
 
 // E4.2a, integration:sandbox-start-ready. Real Docker, the real image, the real sample app.
 const BROKEN = "noon-sandbox:broken";
@@ -249,7 +249,12 @@ test("a pushed page hot-updates in the browser within 3 s: no reload, and what t
   const browser = await chromium.launch();
   try {
     const tab = await browser.newPage();
-    await tab.goto(new URL(PREVIEW_PATH, sandbox.url).href);
+    // A URL naming ANOTHER document (a stale iframe, reconnected to a port this sandbox took over)
+    // gets no page: one document's preview never shows another's.
+    await tab.goto(previewUrl(sandbox.url, randomUUID()));
+    await tab.getByText("This preview belongs to another document").waitFor();
+    expect(await tab.getByText("first").count()).toBe(0);
+    await tab.goto(previewUrl(sandbox.url, id));
     await tab.getByText("first").waitFor();
     // Two witnesses that the page was NOT reloaded: a value only this page load holds, and a
     // navigation event that a reload would fire. Plus the state a user would lose: typed text.
@@ -276,6 +281,14 @@ test("a sandbox that was never started is simply not running: an answer, not an 
   expect(await isRunning(randomUUID(), options)).toBe(false);
 });
 
+test("a docker that exits without reading the page fails the push, and cannot crash the process (EPIPE)", async () => {
+  // Bigger than a pipe's buffer: the write is still in flight when the CLI is gone.
+  const quitter = join(mkdtempSync(join(tmpdir(), "quitting-docker-")), "docker");
+  writeFileSync(quitter, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  await expect(pushPage(randomUUID(), "x".repeat(4 * 1024 * 1024), { ...options, docker: quitter })).rejects.toThrow(/docker exec/u);
+  await new Promise((r) => setTimeout(r, 200)); // an unhandled EPIPE would surface here and fail the file
+});
+
 test("a push to a sandbox that is not running fails by name, never silently", async () => {
   await expect(pushPage(newDocument(), page("x"), options)).rejects.toThrow(/No such container|is not running/u);
 });
@@ -284,33 +297,45 @@ test("the reaper sweeps only its own pool: another stack's sandbox, not in use H
   // The compose stack's reaper once removed the test suite's sandboxes: same daemon, same label.
   const theirs = newDocument();
   await startSandbox(theirs, { ...options, pool: testPool() });
-  expect(await reapSandboxes(new Set(), options)).not.toContain(theirs);
+  expect(await reapSandboxes(() => Promise.resolve(new Set()), options)).not.toContain(theirs);
   expect(await isRunning(theirs, options)).toBe(true);
+}, 60_000);
+
+test("the reaper lists the containers BEFORE it asks what is in use: a sandbox started in between is never removed", async () => {
+  // The race: Postgres answers "not in use", a job starts the document's sandbox, THEN docker ps lists it.
+  const own = { ...options, pool: testPool() };
+  const late = newDocument();
+  const removed = await reapSandboxes(async () => {
+    await startSandbox(late, own); // started after the list, so it is not in it
+    return new Set<string>(); // ...and the in-use answer predates its job
+  }, own);
+  expect(removed).not.toContain(late);
+  expect(await isRunning(late, own)).toBe(true);
 }, 60_000);
 
 test.each(["", "Has Space", "a".repeat(41), "x=y"])("a pool name that could escape its label is refused: %j", async (bad) => {
   await expect(startSandbox(randomUUID(), { ...options, pool: bad })).rejects.toThrow(/pool/u);
-  await expect(reapSandboxes(new Set(), { ...options, pool: bad })).rejects.toThrow(/pool/u);
+  await expect(reapSandboxes(() => Promise.resolve(new Set()), { ...options, pool: bad })).rejects.toThrow(/pool/u);
 });
 
 // Last on purpose: the reaper removes EVERY sandbox of its pool not in use, the other tests' ones too.
 test("the reaper removes every sandbox whose document is not in use, and only those", async () => {
   const [inUse, idle] = [newDocument(), newDocument()];
   await Promise.all([startSandbox(inUse, options), startSandbox(idle, options)]);
-  const removed = await reapSandboxes(new Set([inUse]), options);
+  const removed = await reapSandboxes(() => Promise.resolve(new Set([inUse])), options);
   expect(removed).toContain(idle);
   expect(removed).not.toContain(inUse);
   const left = (await docker("ps", "--all", "--filter", `label=noon.sandbox=${pool}`, "--format", `{{.Label "noon.document"}}`)).split("\n").filter(Boolean);
   expect(left).toEqual([inUse]);
   // A second sweep with nothing idle removes nothing.
-  expect(await reapSandboxes(new Set([inUse]), options)).toEqual([]);
+  expect(await reapSandboxes(() => Promise.resolve(new Set([inUse])), options)).toEqual([]);
 }, 90_000);
 
 test("the reaper leaves alone a container it did not name, even one wearing the sandbox label", async () => {
   const stranger = `stranger-${randomUUID()}`;
   await docker("run", "--detach", "--name", stranger, "--label", `noon.sandbox=${pool}`, "--label", "noon.document=not-a-uuid", SILENT);
   try {
-    expect(await reapSandboxes(new Set(), options)).not.toContain("not-a-uuid");
+    expect(await reapSandboxes(() => Promise.resolve(new Set()), options)).not.toContain("not-a-uuid");
     expect(await docker("container", "inspect", "--format", "{{.Name}}", stranger)).toBe(`/${stranger}`);
   } finally {
     await docker("rm", "--force", stranger);
