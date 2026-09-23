@@ -55,10 +55,10 @@ test("a document's sandbox starts from the baked image and reports a URL that se
   expect(await page.text()).toContain(`<div id="root">`);
   // The dev server really transforms the app's code, not only serves index.html.
   expect(await (await fetch(new URL("src/pages/Showcase.tsx", sandbox.url))).text()).toContain("Showcase");
-  // Baked: nothing is installed at start. Installing took 10.6-17.7 s in the learning test; a clone
-  // plus a cold Vite took about 1 s. The bound sits between the two, where it tells them apart.
-  expect(took).toBeLessThan(8_000);
-  await docker("exec", sandboxName(id), "test", "-d", "node_modules/vite"); // throws when it is not there
+  // Baked: node_modules is IN THE IMAGE, before any container starts (a structural fact, not a
+  // timing guess: an 8 s bound between "about 1 s" and "10.6 s to install" failed once under load).
+  await docker("run", "--rm", "--entrypoint", "test", IMAGE, "-d", "/app/node_modules/vite"); // throws when it is not there
+  expect(took).toBeLessThan(30_000); // a smoke bound only
 }, 60_000);
 
 test("the sandbox works in ITS OWN clone of the seed repo, on the document's working branch", async () => {

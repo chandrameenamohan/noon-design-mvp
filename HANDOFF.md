@@ -1,10 +1,11 @@
 # HANDOFF: Noon-like MVP
 
-Updated 2026-09-21, end of epic 3 (commit `e034cd7`). **Read this first, then run `bd prime`.**
+Updated 2026-09-21, mid epic 4 (commit `c429f2b`). **Read this first, then run `bd prime`.**
 Everything here is either a decision the owner made or a fact about the repo; where a file is the
 source of truth, this points at it instead of repeating it.
 
-**Next session's job: epic 4, code projection and the sandbox preview.** Jump to section 6.
+**Next session's job: finish epic 4.** E4.2b's verifier + review panel, then E4.3, then E4.H
+(Lesson 4). Jump to section 6.
 
 ## 1. Who and what
 
@@ -64,26 +65,30 @@ written. The owner reads lessons at their own pace and has said so explicitly:
 Helper used every session:
 `K() { python3 -c "import json;print(json.load(open('.beads/key-map.json'))['$1'])"; }` then `bd show $(K E4.1)`.
 
-## 4. State: epics 0, 1, 2 and 3 are BUILT
+## 4. State: epics 0-3 closed; epic 4 half built
 
-`make check` is green at HEAD (`e034cd7`), the tree is clean, and the docker stack is healthy.
+`make check` was green at HEAD (`c429f2b`). The docker stack is up, including the new
+`worker-sandbox` service.
 
-**One thing is outstanding, and it needs the owner.** E3.2, E3.3, E3.4 and E3.H are finished,
-reviewed and verified, but they are still open in bd for a single reason: the live check
-`node scripts/live-agent.ts` cannot pass, because `CLAUDE_CODE_OAUTH_TOKEN` in `.env` is rejected
-by the provider (401, on the host as well as inside the container). Every real AI run ends
-`failed / token_invalid`, which is the designed answer, not a bug. Ask the owner to run
-`claude setup-token` and put the value in `.env`, then:
+**FIRST THING NEXT SESSION: commit what is staged.** This file, `scripts/preview.sh`, and a test fix in
+`apps/worker/src/sandbox.int.test.ts` (proves "baked" by node_modules in the image instead of an 8 s
+bound) are STAGED, not committed: the pre-commit gate failed twice with the host at load average 117
+(opencode, Dia and git processes outside this project), each time with DIFFERENT failures. Check
+`uptime` first; with a quiet machine, `git commit` (never `--no-verify`). If the sandbox test "a
+sandbox removed while it is starting" fails again, the daemon printed a message the regex does not
+list (seen once under load: "docker exec: Error response from daemon: ..."): assert on the SPEED
+and the absence of "not ready within", not on the daemon's words.
 
-```
-docker compose up -d worker && node scripts/live-agent.ts   # expect: outcome ok
-# then close, in this order: E3.2, E3.3, E3.4, E3.H, and the epic
-```
-
-This does NOT block epic 4: E4.1 depends only on E2.2b, and E4.2a's other dependencies are done.
-
-Each epic-3 bead carries a STATUS note saying it is done; `bd memories e3-` holds the lessons
-(`e3-1-jobs-queue-worker`, `e3-2-ai-peer`, `e3-3-instruction-cancel`, `e3-4-usage`, `e3-h-lesson-3`).
+- **Epic 3 is CLOSED** (2026-09-21). The 401 was never the token's fault: it had been pasted into
+  `.env` with a line break (line 2 held its last 18 characters). Joined; `node scripts/live-agent.ts`
+  printed `outcome ok`. `bd memories env-token` has the diagnosis recipe (keys and lengths only).
+- **E4.1 closed** (codegen), **E4.2a closed** (sandbox start). **E4.2b built and committed, NOT closed:**
+  it still needs its verifier and review panel (`needsReview=true`). `bd show noon-3rh.3` NOTES has
+  the exact status. E4.3 and E4.H are open.
+- **The owner can see it running**: `sh scripts/preview.sh` creates a document, opens its sandbox
+  job and prints a canvas URL and a preview URL; edits on the canvas appear in the preview in about
+  200 ms, without a reload. The canvas needs `pnpm --filter @noon/web dev` (port 5173). This script
+  is a stopgap (it inserts the job with psql): E4.3 replaces it with api routes and an iframe.
 
 Published for the owner (private artifacts):
 - 0001 HLD: https://claude.ai/artifact/J2DVNLFHkKrLPwLyghFBc4
@@ -93,21 +98,26 @@ Published for the owner (private artifacts):
 - Lesson 3 (epic 3): https://claude.ai/artifact/Qio1tZn6jkECjtZop15Uq7
 - Note, not a lesson: multiplayer approaches compared,
   https://claude.ai/artifact/DNmGqNoLDGLtJBNEGaoFEF
-- PDFs: `docs/handbook/lesson-{0,1,2,3}.pdf`, `notes-multiplayer-approaches.pdf`.
+- PDFs: `docs/handbook/lesson-{0,1,2,3}.pdf`, `notes-multiplayer-approaches.pdf`. (Lesson 4: not yet.)
   Drills for lessons 1, 2 and 3 are RED on purpose.
 
 ### What exists (one line each)
 
 - `packages/contracts`: Zod schemas = the wire and HTTP contracts. Op (4 kinds, discriminated
   union), ClientMessage, ServerMessage, RejectReason, Actor, Presence, Manifest, Run, UsageAmount,
-  UsageReport, FailureReason, MAX_COST_USD.
+  UsageReport, FailureReason, MAX_COST_USD, **PreviewOutput** (`{url}`, http(s) only: it becomes an iframe src).
 - `packages/db`: `createDb` (pool private in a closure), org-scoped `forOrg(orgId)`, migrations
-  0001-0007, `documentStore()`, `jobStore()` (claim / finish / queued / cancelRequested /
-  recordUsage), runs (createRun / getRun / cancelRun), `usage()`, `provisionAppRole`.
+  0001-0008, `documentStore()`, `jobStore()` (claim / finish / queued / cancelRequested /
+  recordUsage / **report** (a running job's output, PreviewOutput-validated) / **sandboxesInUse**),
+  runs (createRun / getRun / cancelRun), `usage()`, `provisionAppRole`. 0008: one unfinished
+  `sandbox` job per document (partial unique index) + `jobs.output jsonb`.
   `testing.ts` = throwaway schemas.
 - `packages/session-token`: HMAC session tokens (claims: user, org, doc, aud "sync", knd, run, nam).
 - `packages/process`: `createShutdown`, env schemas.
-- `packages/queue`: BullMQ producer. A message carries ONLY `{queue, jobId, orgId}`; `enqueue` and
+- `packages/codegen` (E4.1): `generate(doc, manifest)` -> `{ok, tsx}` or `{ok:false, reason, detail}`.
+  Total (never throws), deterministic, one file whose ONLY export is `Page`, `data-node-id` on
+  every element; literals chosen from the value, never from what the manifest claims.
+- `packages/queue`: BullMQ producer. `QUEUES = ["ai", "sandbox"]`. A message carries ONLY `{queue, jobId, orgId}`; `enqueue` and
   `ping` have deadlines (with Redis away ioredis reconnects for ever and nothing settles).
 - `packages/design-system`: manifest GENERATED from `seed/sample-app` types with the TS compiler
   API (`make manifest`; drift fails the gate). Components: Stack, Card, Button, Text, Image, Input.
@@ -123,12 +133,22 @@ Published for the owner (private artifacts):
 - `apps/sync`: `room.ts` is pure (no sockets); `server.ts` is the wire. `sim.ts` + `sim-seeds.ts` +
   `sim-cli.ts`: the reconcile simulator (`make sim`).
 - `apps/worker`: `worker.ts` (claim -> cancel poll -> handler -> recordUsage -> finish; plus the
-  sweep that re-offers `queued` rows), `ai.ts` (one run, raced against a single `ended` promise:
+  sweep that re-offers `queued` rows; handlers are a PARTIAL map: a process drains only the queues
+  it handles, each with its own concurrency). **One queue per process** (`WORKER_QUEUE=ai|sandbox`,
+  config.ts): the AI worker runs the Agent SDK's subprocess and must never hold the Docker socket.
+  `sandbox.ts` (E4.2a/b: `startSandbox`, `pushPage`, `isRunning`, `reapSandboxes`, `pagePath`,
+  `PREVIEW_PATH`), `preview.ts` (the `sandbox` queue's handler: silent peer, projects from
+  `peer.confirmed`, restarts a dead container, idles out), `sandbox/Dockerfile` (the sandbox image,
+  context = `seed/sample-app`; `make sandbox-image`), `sandbox-testing.ts` (shared test helpers).
+  Also `ai.ts` (one run, raced against a single `ended` promise:
   `timed_out` / `sync_unreachable` / `worker_stopped` / `cancelled`), `sdk.ts` (the Agent SDK with a
   capability ceiling, `checkInit`, `wrapInstruction`, `usageOf`, `failureReason`), `tools.ts` (six
   tools, each `peer.submit` then `await settled`).
 - `apps/web`: React 19 + Vite. `?doc=<id>` canvas (wireframe from the manifest), inspector,
   presence, refusal sentences, and `AiPanel.tsx`. Vite proxies `/api`.
+- `docker-compose.yml`: new `worker-sandbox` service (`WORKER_QUEUE=sandbox`, the ONLY service with
+  `/var/run/docker.sock`, runs as root, `SANDBOX_POOL=${COMPOSE_PROJECT_NAME}`). The app image now
+  carries the docker CLI (copied from `docker:27-cli`).
 - `e2e/`: Playwright. Runs api:3100 + sync:3101 + vite:5174 + `stub-worker.ts`:3102 FROM SOURCE.
   `setup.ts` stops the compose worker and migrates from source; `teardown.ts` cleans up and starts
   the worker again. Fixture: console-clean + axe after every test.
@@ -163,82 +183,87 @@ Published for the owner (private artifacts):
     with the Artifact tool, SendUserFile the PDF, update `docs/handbook/index.md` and the `drills`
     Makefile target, close the epic.
 
-Environment facts: `docker` is not on PATH (use `/Applications/Docker.app/Contents/Resources/bin`);
+Environment facts (epic 4 additions first):
+- Sandboxes: image `noon-sandbox:dev` (built by `./init.sh`, `make sandbox-image`, and every sandbox
+  test's `beforeAll`; first build ~6 min, cached after). Network `noon-sandboxes` (ICC off), ports
+  127.0.0.1 only, container name `noon-sandbox-<documentId>`, labels `noon.sandbox=<pool>` and
+  `noon.document=<id>`. **A reaper only sweeps its own pool**: compose, clean-clone and every test file
+  share one daemon (the compose reaper once deleted the test suite's sandboxes).
+- **Never run two Docker-using suites at once** (a mutation run and a test run, say): each one's
+  cleanup removes the other's containers and turns results into noise. It happened this session.
+- Node 24: `execFile`'s `signal` option sends SIGTERM on abort WHATEVER `killSignal` says (measured);
+  `sandbox.ts` kills explicitly with SIGKILL. macOS scans a brand-new executable on its first run
+  (>300 ms): a test stub needs a generous window.
+- Mutation runs of the Docker suites take 1-3 min per mutant: run them in the background with
+  `run_in_background`, never alongside another Docker suite.
+
+Older facts: `docker` is not on PATH (use `/Applications/Docker.app/Contents/Resources/bin`);
 Postgres and Redis run in compose and integration + e2e tests need them (`./init.sh` boots
 everything); the project's Redis is on host port **6380**, because the owner's machine runs its own
 on 6379; `pnpm exec` runs from the repo root; `tsc` with file args needs `--ignoreConfig`.
 
-## 6. NEXT: epic 4, code projection and the sandbox preview
+## 6. NEXT: finish epic 4
 
-The document becomes code. One document maps to one generated TSX file, that file runs in a
-container, and the canvas shows it live. Keystone 8 (SPEC §2): **one document ↔ one generated TSX
-file of a fixed shape; doc → TSX is deterministic; all other repo code is read-only to the canvas.**
-Reading TSX back into ops is epic 5, not this one.
+Keystone 8 (SPEC §2): **one document <-> one generated TSX file of a fixed shape; doc -> TSX is
+deterministic; all other repo code is read-only to the canvas.** Reading TSX back is epic 5.
 
-Order, with each bead's own checks (`bd show $(K E4.1)` etc.; BEADS.md has the full rows):
+### Step 1: E4.2b verification (the bead is built; do NOT rebuild it)
 
-| Bead | Acceptance | Checks |
-|---|---|---|
-| **E4.1** | The same document always generates byte-identical TSX: one file, **exports only the page component**, every element carries `data-node-id`; it type-checks inside the sample app (F13) | `unit:codegen-deterministic`, `integration:codegen-typechecks-in-sample-app` |
-| **E4.2a** | An image with baked `node_modules` starts one container per document working branch (its own clone of the seed repo until Gitea exists) and reports a ready URL | `integration:sandbox-start-ready` |
-| **E4.2b** | The generated file is pushed with `docker exec` and hot-updates (state preserved); driven by a `sandbox` queue with its own concurrency; idle containers are reaped | `integration:sandbox-push-hot-update`, `integration:sandbox-reap` |
-| **E4.3** | The canvas shows the running page in an iframe; an edit shows within 3 s without a full reload; if the container dies the iframe shows "rebuilding" and recovers unaided (F15) | `e2e:preview-follows-edit-within-3s`, `e2e:preview-self-heals` |
-| **E4.H** | Chapter 4 + drills | `check:drills-red`, `check:chapter-recorded` |
+Commit `c429f2b`. Run the per-bead loop from step 6: a verifier told to REFUTE by running code, and
+the review panel ((a) spec + correctness, (b) security), all three in parallel, read-only, with the
+"YOU are the only one... do not spawn sub-agents" line. Claims worth giving the verifier:
+the preview follows only CONFIRMED ops, within 3 s, no reload, state kept; one unfinished sandbox job
+per document; a dead container is restarted and the URL re-reported; the job ends when nobody is
+present for `idleMs`; cancel ends quietly, a stopping worker fails `worker_stopped`; the reaper
+removes only its own pool's idle sandboxes and never a document in use; the AI worker can never
+claim a sandbox job; `WORKER_QUEUE` refuses anything but exactly one queue. Tell it to use its own
+pool and a port range outside 20000-24999, and that the compose `worker-sandbox` is running.
+Then fix findings test-first, mutation-check, commit (include `scripts/preview.sh`), close.
 
-E4.2a and E4.2b are `needsReview=true`. E4.1 touches only `packages/codegen` (new).
+### Step 2: E4.3 (the canvas shows the preview)
 
-### What the sandbox learning test already measured (do not re-derive)
+Acceptance: an iframe of the running page; an edit shows within 3 s without a full reload; if the
+container dies the iframe shows "rebuilding" and recovers unaided (F15). Checks:
+`e2e:preview-follows-edit-within-3s`, `e2e:preview-self-heals`. Its NOTES (`bd show noon-3rh.4`)
+hold binding findings from the E4.2a reviews. The shape they imply:
+- api: `POST /documents/:id/preview` (member only; insert the sandbox job `on conflict do nothing`,
+  enqueue; return the job) and `GET /documents/:id/preview` (`{status, url | null}` from `jobs.output`
+  through `PreviewOutput`). This replaces `scripts/preview.sh`.
+- web: iframe `sandbox="allow-scripts"` and NOT `allow-same-origin` (every preview shares host
+  127.0.0.1: without an opaque origin a preview could read cookies/storage and survive port reuse).
+  Re-read the URL, never cache it: a restarted sandbox can come back on another port, and then the
+  iframe must be pointed at it (Vite's own self-heal only covers the SAME origin). "Rebuilding" =
+  the preview is unreachable or the job restarted it.
+- Lock Vite `server.cors` to the canvas origin, injected so it survives a customer vite.config.
+- e2e: setup.ts stops the compose `worker` today; it must also stop `worker-sandbox` (or give e2e its
+  own pool and DB) or the compose worker will claim e2e's sandbox jobs. The self-heal test must not
+  be vacuous: push something a fresh container would NOT show before killing it (FINDINGS 7).
 
-`learning-tests/sandbox/test.ts` ran all of this for real. Its header is the source; the short form:
+### Step 3: E4.H (Lesson 4 + drills), then close the epic
 
-- **Vite in a container** needs `server.host: true` plus a published port, or the host-side request
-  hangs. `hmr.clientPort` was NOT needed with a single port mapping: Vite's client computes the
-  websocket URL from the page's own `location.port`.
-- **Pushing the file**: `docker exec` (`cat > file`) is the pick. Median about 20 ms to the DOM
-  change, tied with `docker cp`, roughly twice as fast as a bind mount, and strictly more reliable.
-  Bind-mount pushes failed to propagate at all in 2 of 10 and 3 of 10 trials in separate runs.
-  Space pushes about 300 ms apart, or the harness outruns the dev server's own watch pipeline.
-- **Fast Refresh keeps React state only if the edited module exports ONLY components.** Adding one
-  non-component export (a `BUILD_ID` constant, say) turns every edit into a full page reload. This
-  is why E4.1's acceptance says "exports only the page component": it is not style, it is the
-  mechanism E4.3's three-second promise rests on.
-- **Cold start**: a baked-`node_modules` image reached its first HTTP 200 in 338-350 ms. Installing
-  at container start took 10.6-17.7 s. That is the whole reason E4.2a says "baked".
-- **A syntax error** shows Vite's error overlay, the container survives, and writing valid content
-  back recovers it with no restart.
-- **Cross-origin iframe embedding works** with Vite's default dev server: no `X-Frame-Options`, no
-  CSP `frame-ancestors`.
-- **Killing the container** makes Vite's client log "server connection lost. Polling for restart",
-  and the existing tab self-heals about 1.2 s after a new container comes up, with no reload call
-  from the page. E4.3's "recovers unaided" is therefore achievable, but the test must not fake it:
-  the earlier version of that learning test was vacuous because it matched on a value the page
-  already showed.
+Built from source by anchor like lesson 3 (`docs/handbook/build-lesson-3.py` + template), PDF via
+`node docs/handbook/make-pdf.mjs lesson-4`, publish with the Artifact tool, send the PDF, drills in
+`drills/lesson-4/` that start RED on an assertion, `make drills` target, `docs/handbook/index.md`.
+Material the lesson should teach (all real, all in `bd memories e4-`): the lying-toString injection
+and "choose the literal from the value"; `-0`, NaN, hidden props; push(...arr) overflow; the
+start race where losers removed the winner's container (name uniqueness is not ownership); the
+`set -e` + `&&` trap; execFile's SIGTERM; one queue per process and why; pools; why the port is
+chosen once and why the URL can still change.
 
-### Rules this epic must respect
+### What the sandbox learning test measured (still the source for E4.3)
 
-- **Project from `peer.confirmed`, never from the optimistic document.** The optimistic tree
-  contains ops the server has not accepted and may refuse. Codegen that runs on a guess would push
-  code for a document that never existed. `confirmed` and `seq` were exposed in epic 3 for exactly
-  this.
-- **Determinism means byte-identical**, so: a fixed key order, no `Date`, no `Math.random`, no
-  `Object.keys` iteration over a map whose order can vary, and a stable order for props. Test it by
-  generating twice from the same document and comparing bytes, and by generating from two documents
-  built by different op orders that end in the same state.
-- The sandbox is a **new queue on the existing worker** (`packages/queue`'s `QUEUES` is
-  `["ai"]` today and carries a `ponytail:` comment saying the others arrive with their epics).
-  A handler for a new queue must race its work against the cancel and stop signals the way `ai.ts`
-  does: the worker only ASKS, and epic 3's note in `worker.ts` says so where you will read it.
-- Anything a program awaits needs an end from outside. That was epic 3's theme and it applies
-  double here: `docker` commands, container readiness polls, and HTTP probes all need deadlines.
-- A container per document is a resource. The reaper in E4.2b is not optional bookkeeping; without
-  it a laptop runs out of containers.
+`learning-tests/sandbox/test.ts` FINDINGS header. Short form: `server.host: true` + one published
+port serves HTTP and HMR; `docker exec` push ~20 ms; Fast Refresh keeps state only if the module
+exports only components; baked node_modules ~0.35 s cold start; a syntax error shows an overlay and
+recovers; cross-origin iframe embedding works; after a container restart Vite's client polls and
+does a full `location.reload()` ~1.2 s after a server answers on the SAME origin.
 
-### Notes already waiting on later beads
+### Beads waiting, with notes
 
-`bd show` these before you touch them: E9.5 (usage only for finished runs; token and cost scopes
-differ; no periods), E8.2 (a viewer can start a run and read the org's costs), E9.6 (per-org
-fairness, a reaper for jobs left `running`), E3.2 (a run that hits the budget cap reports
-`agent_failed`, should be `budget_exceeded`), E6.1a, E7.1, E8.1.
+`noon-9gz` (NEW, security, blocks E5.1): per-document hostname proxy, `--internal` sandbox network,
+disk quota, pinned base image, no credentials in SEED_REPO. A low-priority bug bead: one e2e run saw
+canvas p95 3072 ms (never reproduced). Older: E9.5, E8.2, E9.6 (add: per-org cap on sandboxes),
+E3.2's budget_exceeded naming, E6.1a, E7.1, E8.1.
 
 Then epics 5 (git peer + ship), 6 (journal + snapshots), 7 (multi-node with fencing), 8 (auth,
 RBAC, audit), 9 (job hardening), Z (SPEC §8 scenario + the local Antithesis-style harness). Each
@@ -272,6 +297,16 @@ with its lesson, PDF and drills.
 - Forward compatibility must cover new VALUES inside known message types, not only new types.
 - React: open connections in an effect, never in render/useMemo; a library that defers its start
   must check "was I closed meanwhile?".
+- **Uniqueness is not ownership.** Docker refused a second container with the same name, and ten
+  racing starters still removed each other's: a loser read "port taken" (taken by the WINNER) and
+  deleted it. One starter per resource: single-flight in-process, a unique job across processes.
+- A number remembered before an await can be stale after it: read the port AFTER ready.
+- Ask the system, don't parse its prose: an exec that raced a container's death had an EMPTY stderr.
+- `set -e` does not stop a script on a failure inside `a && b && c` (except the last): one command
+  per line.
+- Every resource needs an owner label before it gets a reaper, or one environment's cleanup eats
+  another's.
+- A test that holds a port must use a range nobody else in the file uses.
 - When a subagent writes something you will publish, read the AUTHORED surface and prove the
   generated artifact is exactly its product (rebuild, compare bytes). Cheaper and stronger than
   skimming the output.
