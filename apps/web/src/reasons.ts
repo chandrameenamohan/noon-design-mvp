@@ -5,7 +5,7 @@ import type { Rejection } from "@noon/peer-client";
  * the contract and this file stops compiling until someone has written its sentence (the same
  * trick as the `never` check in doc-model's switch, for data instead of control flow).
  */
-const SENTENCES: Record<Rejection["reason"] | "not_ready" | "invalid_op" | "too_many_pending", string> = {
+const SENTENCES: Record<Rejection["reason"] | "not_ready" | "invalid_op" | "too_many_pending" | "read_only", string> = {
   gone: "That element no longer exists.",
   cycle: "An element cannot be moved inside itself.",
   duplicate_node: "That element already exists.",
@@ -23,5 +23,6 @@ const SENTENCES: Record<Rejection["reason"] | "not_ready" | "invalid_op" | "too_
   not_ready: "The document has not loaded yet.",
   invalid_op: "That value is too large or contains characters that cannot be stored.",
   too_many_pending: "Too many unsaved edits: wait for the connection to return.",
+  read_only: "The document is read-only for now: the server cannot save edits.",
 };
 export const sentenceFor = (reason: keyof typeof SENTENCES): string => SENTENCES[reason];

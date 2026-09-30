@@ -46,6 +46,8 @@ export type Journal = {
   find(actorId: string, opId: string): Promise<SequencedOp | undefined>;
   /** Was this node id ever added (keystone 4: a removed id is never added again)? */
   everAdded(nodeId: string): Promise<boolean>;
+  /** Every op journaled after `seq`, in order: how a room that went read-only catches up before it writes again. */
+  since(seq: number): Promise<SequencedOp[]>;
 };
 
 export type RoomLimits = {
@@ -73,6 +75,8 @@ type Options = {
   now?: () => number;
   /** How a connection gets its presence id. Injected, like the clock, so that a test can predict it. */
   mintPeerId?: () => string;
+  /** The room just went read-only. It never retries by itself (no clock): the caller calls recover() until it answers true. */
+  onReadOnly?: () => void;
 };
 
 /**
@@ -84,7 +88,7 @@ type Options = {
  * the journal is awaited, and without the queue a second op would be validated against a document
  * the first has not changed yet: two peers could both "successfully" add the same node id.
  */
-export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID() }: Options) {
+export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID(), onReadOnly }: Options) {
   const limits: RoomLimits = { ...DEFAULT_LIMITS, ...overrides };
   const rate: RateLimit = { ...DEFAULT_RATE, ...rateOverrides };
   const peers = new Set<Peer>();
@@ -106,6 +110,10 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
   // here: it remembers nothing about the ops that built the document it was given.
   let forgottenUpTo = seq;
   let tail: Promise<void> = Promise.resolve();
+  // E6.1b (SPEC §4): the journal failed, so nothing more can be made durable. Until recover() has caught up
+  // with the journal, EVERY op is refused and none is acknowledged, and every peer has been told why.
+  // Any journal failure counts, a lost reply included: whether that append landed is only known by reading.
+  let readOnly = false;
 
   // Budgets are kept per ACTOR (kind + id + run), not per connection: otherwise reconnecting would be
   // a free refill. An agent run gets its own, so that it cannot spend the budget of the person who started it.
@@ -206,12 +214,34 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
     }
   }
 
+  /** An op the journal holds and the room does not yet: applied, remembered and announced like a fresh one. */
+  function accept(sequenced: SequencedOp): void {
+    applyOpInto(doc, sequenced.op);
+    seq = sequenced.seq;
+    nodeCount = sequenced.op.type === "add_node" ? nodeCount + 1 : sequenced.op.type === "remove_node" ? Object.keys(doc.nodes).length : nodeCount;
+    remember(`${sequenced.actor.id}:${sequenced.opId}`, sequenced);
+    broadcast({ type: "op", ...sequenced }); // the sender's copy is its acknowledgement
+  }
+
+  function storageFailed(): void {
+    if (readOnly) return;
+    readOnly = true;
+    broadcast({ type: "status", readOnly: true }); // to everyone, and BEFORE the refusal that caused it
+    onReadOnly?.();
+  }
+
   async function handle(peer: Peer, { opId, baseSeq, op }: ClientOp): Promise<void> {
     const refuse = (reason: Extract<ServerMessage, { type: "rejected" }>["reason"]): void => {
+      if (reason === "unavailable") storageFailed();
       peer.send({ type: "rejected", opId, reason });
     };
 
     if (!peers.has(peer)) return; // dropped while this op waited in the queue
+    // Before the dedupe: even an answer from memory is an acknowledgement, and a read-only room gives none.
+    if (readOnly) {
+      refuse("unavailable");
+      return;
+    }
 
     // 1. Dedupe FIRST. A client that never saw its acknowledgement sends the op again and must get
     //    the original answer; validating first would turn an ordinary retry into "duplicate_node".
@@ -298,17 +328,14 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
       peer.send({ type: "op", ...original });
       return;
     }
-    applyOpInto(doc, op);
-    seq = sequenced.seq;
-    nodeCount = op.type === "add_node" ? nodeCount + 1 : op.type === "remove_node" ? Object.keys(doc.nodes).length : nodeCount;
-    remember(key, sequenced);
-    broadcast({ type: "op", ...sequenced }); // the sender's copy is its acknowledgement
+    accept(sequenced);
   }
 
   return {
     get peerCount() { return peers.size; },
     get peers(): ReadonlySet<Peer> { return peers; },
     get seq() { return seq; },
+    get readOnly() { return readOnly; },
     /** The live document. The room edits it in place: read it, never keep or change it. */
     get doc() { return doc; },
 
@@ -320,7 +347,7 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
       peers.add(peer);
       present.set(peer, { entry: { ...entryOf(peer), peerId }, at: -Infinity });
       // A COPY: the room goes on editing `doc` in place, and a message must not change after it is sent.
-      peer.send({ type: "welcome", doc: structuredClone(doc), seq, you: peerId, peers: others });
+      peer.send({ type: "welcome", doc: structuredClone(doc), seq, you: peerId, peers: others, ...(readOnly ? { readOnly } : {}) });
     },
 
     leave(peer: Peer): void {
@@ -348,6 +375,30 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
       const done = tail.then(() => handle(peer, clientOp));
       tail = done.catch(() => undefined); // one failure must not jam the queue for every later op
       return tail;
+    },
+
+    /**
+     * Leaves read-only if the journal answers again. It first REPLAYS whatever the journal holds past the
+     * room's seq (an append whose reply was lost, or a rival's row) and announces it, then tells every peer
+     * "writable": a held op that did land is thus confirmed before its sender sends it again. Takes its turn
+     * in the op queue, so no op is judged halfway through. True = writable. Never rejects.
+     */
+    recover(): Promise<boolean> {
+      const done = tail.then(async () => {
+        if (!readOnly || !journal) return true;
+        let missed;
+        try {
+          missed = await journal.since(seq);
+        } catch {
+          return false;
+        }
+        for (const row of missed) accept(row);
+        readOnly = false;
+        broadcast({ type: "status", readOnly: false });
+        return true;
+      });
+      tail = done.then(() => undefined, () => undefined);
+      return done.catch(() => false);
     },
 
     /** Resolves when every op submitted so far has been handled. */

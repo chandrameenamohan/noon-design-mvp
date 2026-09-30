@@ -19,6 +19,8 @@ export type ChangedPage = { documentId: string; path: string } & ({ tsx: string 
 /** The page before the push, for E5.3b's three-way diff: its text at the base commit (when a regular file within the cap), and every node id it held up to there. */
 export type PageBase = { tsx: string | undefined; earlierIds: ReadonlySet<string> };
 export type Apply = (event: GitEvent, page: ChangedPage, base: () => Promise<PageBase>) => Promise<unknown>;
+/** Thrown by `apply` when the push cannot be applied YET (the document's room is read-only, E6.1b): the event waits, it does not fail. */
+export class WaitAgain extends Error {}
 type Moved = { ref: string; before: string; after: string };
 
 const PAGE = /^src\/pages\/noon-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tsx$/u; // sandbox.ts's pagePath
@@ -64,7 +66,7 @@ export function moved(mirror: ReadonlyMap<string, string>, recorded: ReadonlyMap
 export type GitPeer = {
   /** Fetches the mirror and records each branch that moved without an event. Resolves with how many it recorded. */
   reconcile(): Promise<number>;
-  /** Works on the oldest waiting event. False when there was none, or Gitea was away and the event went back to wait. */
+  /** Works on the oldest waiting event. False when there was none, or Gitea (or the document's room) was away and the event went back to wait. */
   processNext(): Promise<boolean>;
   /** Every `pollMs`: reconcile if a document was opened or `reconcileMs` passed, then drain the inbox. One tick at a time. */
   start(options: { pollMs: number; reconcileMs: number; onAlive?: () => void }): Promise<{ stop(): Promise<void> }>;
@@ -167,6 +169,13 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
       for (const page of await changedPages(event, worktree)) await apply(event, page, async () => pageBase(await (base ??= baseCommit(event)), page.path));
       await store.finish(event.id, "done");
     } catch (err) {
+      if (err instanceof WaitAgain) {
+        // ponytail: the whole event waits, pages already applied included (applying again diffs against the room
+        // as it is then). Ceiling: one retry per poll tick while the room stays read-only.
+        await store.finish(event.id, "pending");
+        log(`${event.ref} ${event.after} waits: ${err.message}`);
+        return false;
+      }
       log(`${event.ref} ${event.after} failed: ${describeError(err)}`);
       await store.finish(event.id, "failed");
     } finally {

@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { generate } from "@noon/codegen";
 import { manifest } from "@noon/design-system";
 import { emptyDoc } from "@noon/doc-model";
+import { WaitAgain } from "./git.ts";
 import { createPushApplier, keepConflict, type PushOutcome } from "./push.ts";
 
 // E5.4 (F16b), the pure half: a page out of shape is refused BEFORE anything is opened, and the refusal is
@@ -46,6 +47,30 @@ test("a commit Ship made is skipped before anything is read or opened: the room 
   // Another branch is not asked about at all: only the document's own branch speaks for it.
   expect(await toOps({ ...event, ref: "refs/heads/main" }, { documentId: DOC, path, tsx: inShape.tsx }, noBase)).toEqual({ kind: "skipped", why: "other_branch" });
   expect(asked).toHaveLength(1);
+});
+
+test("E6.1b: a document whose room is read-only is not edited and not failed: the event waits (WaitAgain)", async () => {
+  const sent: string[] = [];
+  class ReadOnlyRoom extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => { this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify({ type: "welcome", doc: emptyDoc(), seq: 0, readOnly: true }) })); });
+    }
+    send(frame: string): void { sent.push(frame); }
+    close(): void { /* the peer closes it when done */ }
+  }
+  const toOps = createPushApplier({
+    sessions: { secret: "s".repeat(32), syncUrl: "ws://127.0.0.1:1" },
+    manifest,
+    documentOrg: () => Promise.resolve("0f9c7a0e-1b2c-4d3e-8f00-0000000000aa"),
+    shippedCommit: () => Promise.resolve(false),
+    WebSocketImpl: ReadOnlyRoom as unknown as typeof WebSocket,
+  });
+  const withStack = generate({ rootId: "root", nodes: { root: { id: "root", component: "Page", props: {}, parentId: null, children: ["n1"] }, n1: { id: "n1", component: "Stack", props: {}, parentId: "root", children: [] } } }, manifest);
+  if (!withStack.ok) throw new Error(withStack.reason);
+  const page = toOps(event, { documentId: DOC, path, tsx: withStack.tsx }, () => Promise.resolve({ tsx: undefined, earlierIds: new Set<string>() }));
+  await expect(page).rejects.toBeInstanceOf(WaitAgain);
+  expect(sent.filter((frame) => frame.includes('"type":"op"'))).toEqual([]);
 });
 
 test("a refused page becomes the document's conflict, naming commit and file; an applied one clears it; a skipped one changes nothing", async () => {

@@ -82,6 +82,7 @@ export function Canvas({ documentId }: { documentId: string }) {
     return <main><h1>Noon MVP</h1><p role="alert">This document cannot be opened ({peer.closedBecause ?? "closed"}). <a href="/">Back to start</a></p></main>;
   }
   const doc = peer.doc;
+  const readOnly = peer.status === "live" && peer.readOnly;
   const root = doc.nodes[doc.rootId];
   if (!root) return null;
   // DERIVED, not stored: if someone else removes the selected node, the selection is simply the page again.
@@ -106,10 +107,12 @@ export function Canvas({ documentId }: { documentId: string }) {
     <main>
       <h1>Noon MVP</h1>
       <p>
-        <span role="status">{peer.status}</span> · <span>{peer.pendingCount === 0 ? "saved" : `saving ${String(peer.pendingCount)}…`}</span>
+        <span role="status" data-read-only={readOnly}>{readOnly ? "read-only" : peer.status}</span> · <span>{peer.pendingCount === 0 ? "saved" : `${readOnly ? "waiting to save" : "saving"} ${String(peer.pendingCount)}…`}</span>
       </p>
+      {/* E6.1b: the room's storage is down. An alert, so a screen reader says it the moment it happens. */}
+      {readOnly && <p role="alert" className="read-only">Read-only: the server cannot save edits right now. Edits you already made are kept and will be saved when it can; new edits are paused.</p>}
       <div role="toolbar" aria-label="Add a component">
-        {manifest.components.map((component) => <button key={component.name} type="button" onClick={() => { add(component); }}>Add {component.name}</button>)}
+        {manifest.components.map((component) => <button key={component.name} type="button" disabled={readOnly} onClick={() => { add(component); }}>Add {component.name}</button>)}
       </div>
       <ConflictBanner documentId={documentId} />
       <ShipPanel documentId={documentId} />

@@ -149,7 +149,7 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
   }
   function deliverToClient(client: Client): void {
     const message = client.toClient.shift();
-    if (!message || message.type === "presence" || message.type === "presence_left") return;
+    if (!message || message.type === "presence" || message.type === "presence_left" || message.type === "status") return;
     trace.push(`room -> ${client.name}  ${message.type}${message.type === "op" ? ` seq ${String(message.seq)} ${short(message.opId)}` : message.type === "rejected" ? ` ${short(message.opId)} ${message.reason}` : message.type === "welcome" ? ` seq ${String(message.seq)}` : ` ${short(message.opId)}`}`);
     const effects = client.replica.receive(message satisfies DocMessage);
     // INVARIANT (E3.2): an op of ours is settled exactly once, ever. A program waits on that answer (the AI

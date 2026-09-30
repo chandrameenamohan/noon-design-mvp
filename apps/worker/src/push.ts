@@ -3,7 +3,7 @@ import type { ConflictReason, Manifest } from "@noon/contracts";
 import type { GitEvent, GitStore } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
-import type { ChangedPage, PageBase } from "./git.ts";
+import { WaitAgain, type ChangedPage, type PageBase } from "./git.ts";
 import { whenLive, within } from "./live.ts";
 import { pushOps } from "./push-ops.ts";
 
@@ -66,6 +66,9 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
       const settled = [];
       for (const op of result.ops) {
         const submitted = peer.submit(op);
+        // E6.1b: the room cannot save. Not a conflict (the page is fine) and not a failure (the push would be
+        // lost): the event waits. Ops of this page already sent die with the peer below, unapplied.
+        if (!submitted.ok && submitted.reason === "read_only") throw new WaitAgain("document_read_only");
         // The replica refused it locally: the whole page was checked against this very document, so this is a bug; say so.
         if (!submitted.ok) throw new Error(`the git peer's own op was refused: ${submitted.reason}`);
         settled.push(submitted.settled);

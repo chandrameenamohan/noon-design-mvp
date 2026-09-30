@@ -24,6 +24,7 @@ const persisting = (persist: (op: SequencedOp) => Promise<void>): Journal => ({
   append: async (op) => { await persist(op); return undefined; },
   find: () => Promise.resolve(undefined),
   everAdded: () => Promise.resolve(false),
+  since: () => Promise.resolve([]),
 });
 /** A journal in memory with the table's two unique keys, outliving any room built on it: a stand-in for op_journal. */
 function memoryJournal(): Journal & { rows: SequencedOp[] } {
@@ -40,6 +41,7 @@ function memoryJournal(): Journal & { rows: SequencedOp[] } {
     },
     find: (actorId, opId) => Promise.resolve(find(actorId, opId)),
     everAdded: (nodeId) => Promise.resolve(rows.some((r) => r.op.type === "add_node" && r.op.nodeId === nodeId)),
+    since: (seq) => Promise.resolve(rows.filter((r) => r.seq > seq).sort((x, y) => x.seq - y.seq)),
   };
 }
 
@@ -128,6 +130,7 @@ test("if an op cannot be persisted nobody receives it, the document is untouched
   expect(ops(b)).toEqual([]);
   expect(room.doc.nodes["n1"]).toBeUndefined();
   fail = false;
+  expect(await room.recover()).toBe(true); // E6.1b: the room refuses everything until storage answers again
   await room.submit(a, op); // the client retries the same op
   expect(ops(b).map((m) => m.seq)).toEqual([1]); // no gap in the numbering
 });
@@ -209,7 +212,7 @@ test("journal: a node id that was added and removed is never added again, even a
 
 test("journal: if the journal cannot be read, the op is refused as unavailable and nobody receives it", async () => {
   const down = (): Promise<never> => Promise.reject(new Error("db down"));
-  const room = createRoom({ doc: emptyDoc(), seq: 5, manifest, journal: { append: down, find: down, everAdded: down } });
+  const room = createRoom({ doc: emptyDoc(), seq: 5, manifest, journal: { append: down, find: down, everAdded: down, since: down } });
   const [a, b] = [peer("a"), peer("b")];
   room.join(a); room.join(b);
   const old = clientOp(add("n1"), 0); // behind what the room remembers: the journal is asked
@@ -219,6 +222,186 @@ test("journal: if the journal cannot be read, the op is refused as unavailable a
   expect(rejects(a).map((r) => r.reason)).toEqual(["unavailable", "unavailable"]);
   expect(ops(b)).toEqual([]);
   expect(room.seq).toBe(5);
+});
+
+// --- E6.1b: with its storage unavailable the room is read-only, says so to every peer, and recovers ---
+/** memoryJournal behind a switch: while `down`, every call rejects; `committedAnyway` makes the next append land AND reject (a lost reply). */
+function flakyJournal() {
+  const inner = memoryJournal();
+  const state = { down: false, committedAnyway: false, appends: 0 };
+  const guard = <A extends unknown[], R>(call: (...args: A) => Promise<R>) => (...args: A): Promise<R> => (state.down ? Promise.reject(new Error("db down")) : call(...args));
+  const journal: Journal = {
+    append: async (op) => {
+      state.appends++;
+      if (state.committedAnyway) {
+        state.committedAnyway = false;
+        await inner.append(op);
+        throw new Error("connection lost after commit");
+      }
+      return guard((each: SequencedOp) => inner.append(each))(op);
+    },
+    find: guard((actorId: string, opId: string) => inner.find(actorId, opId)),
+    everAdded: guard((nodeId: string) => inner.everAdded(nodeId)),
+    since: guard((seq: number) => inner.since(seq)),
+  };
+  return { journal, state, rows: inner.rows };
+}
+const statuses = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m) => m.type === "status");
+
+test("read-only: a failed append tells EVERY peer the room is read-only, before the sender hears its refusal", async () => {
+  const { journal, state } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const [a, b, ai] = [peer("a"), peer("b"), peer("run", "agent")];
+  room.join(a); room.join(b); room.join(ai);
+  state.down = true;
+  const op = clientOp(add("n1"));
+  await room.submit(a, op);
+  expect(room.readOnly).toBe(true);
+  expect(a.inbox.slice(1)).toEqual([{ type: "status", readOnly: true }, { type: "rejected", opId: op.opId, reason: "unavailable" }]);
+  for (const other of [b, ai]) expect(other.inbox.slice(1)).toEqual([{ type: "status", readOnly: true }]);
+});
+
+test("read-only: every op is refused and NONE is acknowledged: not a fresh one, not a no-op, not a resend the room remembers; the journal is not even asked", async () => {
+  const { journal, state } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  room.join(a);
+  const first = clientOp(add("n1"));
+  await room.submit(a, first); // seq 1, remembered
+  await room.submit(a, clientOp(setGap("n1", 8), 1)); // seq 2
+  state.down = true;
+  await room.submit(a, clientOp(setGap("n1", 9), 2)); // fails: read-only from here
+  const appendsBefore = state.appends;
+  const inbox = a.inbox.length;
+  await room.submit(a, clientOp(setGap("n1", 10), 2)); // fresh
+  await room.submit(a, clientOp(setGap("n1", 8), 2)); // a no-op (gap is already 8)
+  await room.submit(a, first); // a resend the room still remembers
+  state.down = false; // storage is back, but nobody has told the room: it must stay read-only until recover()
+  await room.submit(a, clientOp(setGap("n1", 11), 2));
+  expect(a.inbox.slice(inbox).map((m) => m.type === "rejected" ? m.reason : m.type)).toEqual(["unavailable", "unavailable", "unavailable", "unavailable"]);
+  expect(state.appends).toBe(appendsBefore);
+  expect(room.seq).toBe(2);
+  expect(room.doc.nodes["n1"]?.props["gap"]).toBe(8);
+});
+
+test("read-only: ops already queued behind the failing append are refused, not written", async () => {
+  const { journal, state } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const [a, b] = [peer("a"), peer("b")];
+  room.join(a); room.join(b);
+  await room.submit(a, clientOp(add("n1")));
+  state.down = true;
+  const appendsBefore = state.appends;
+  await Promise.all([room.submit(a, clientOp(setGap("n1", 1), 1)), room.submit(b, clientOp(setGap("n1", 2), 1)), room.submit(a, clientOp(setGap("n1", 3), 1))]);
+  expect(state.appends - appendsBefore).toBe(1);
+  expect(rejects(a).map((r) => r.reason)).toEqual(["unavailable", "unavailable"]);
+  expect(rejects(b).map((r) => r.reason)).toEqual(["unavailable"]);
+  expect(statuses(b)).toEqual([{ type: "status", readOnly: true }]); // said once, not once per refusal
+});
+
+test("read-only: a peer that joins while the room is read-only is told so in its welcome", async () => {
+  const { journal, state } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal, mintPeerId: () => "p" });
+  const a = peer("a");
+  room.join(a);
+  expect(a.inbox[0]).not.toHaveProperty("readOnly"); // a writable room's welcome is unchanged
+  state.down = true;
+  await room.submit(a, clientOp(add("n1")));
+  const late = peer("late", "git");
+  room.join(late);
+  expect(late.inbox[0]).toMatchObject({ type: "welcome", readOnly: true });
+});
+
+test("recover: while storage is still down it changes nothing and says nothing; once it answers, every peer hears 'writable' and numbering goes on with no gap", async () => {
+  const { journal, state, rows } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const [a, b] = [peer("a"), peer("b")];
+  room.join(a); room.join(b);
+  expect(await room.recover()).toBe(true); // a writable room: nothing to do, nothing said
+  expect(statuses(b)).toEqual([]);
+  const n1 = clientOp(add("n1"));
+  await room.submit(a, n1); // seq 1
+  state.down = true;
+  const refused = clientOp(add("n2"), 1);
+  await room.submit(a, refused);
+  expect(await room.recover()).toBe(false);
+  expect(room.readOnly).toBe(true);
+  expect(statuses(b)).toEqual([{ type: "status", readOnly: true }]);
+  state.down = false;
+  expect(await room.recover()).toBe(true);
+  expect(room.readOnly).toBe(false);
+  expect(statuses(b)).toEqual([{ type: "status", readOnly: true }, { type: "status", readOnly: false }]);
+  await room.submit(a, refused); // the held op goes out again, as peer-client does on "writable"
+  expect(ops(b).map((m) => [m.seq, m.opId])).toEqual([[1, n1.opId], [2, refused.opId]]);
+  expect(rows.map((r) => r.seq)).toEqual([1, 2]);
+});
+
+test("recover: an append that LANDED although its reply was lost is replayed to everyone with its seq, so the resend is answered, not applied twice", async () => {
+  const { journal, state, rows } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const [a, b] = [peer("a"), peer("b")];
+  room.join(a); room.join(b);
+  state.committedAnyway = true;
+  const op = clientOp(add("n1"));
+  await room.submit(a, op);
+  expect(rejects(a).map((r) => r.reason)).toEqual(["unavailable"]);
+  expect(ops(b)).toEqual([]); // nobody heard of it: it was not KNOWN to be durable
+  expect(await room.recover()).toBe(true);
+  // The journal is the truth: the op is in it, so the room applies it and everyone hears it, BEFORE "writable".
+  expect(b.inbox.slice(-2)).toMatchObject([{ type: "op", seq: 1, opId: op.opId, actor: { id: "a" } }, { type: "status", readOnly: false }]);
+  expect(room.doc.nodes["n1"]).toBeDefined();
+  await room.submit(a, op); // the sender's held copy comes back
+  expect(ops(a).filter((m) => m.opId === op.opId).map((m) => m.seq)).toEqual([1, 1]);
+  expect(rows).toHaveLength(1);
+  const next = clientOp(add("n2"), 1);
+  await room.submit(a, next);
+  expect(ops(b).at(-1)).toMatchObject({ seq: 2, opId: next.opId });
+});
+
+test("recover: a rival's row at the room's next seq does not keep the room refusing until a restart: it is replayed, and the room goes on after it", async () => {
+  const { journal, rows } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  room.join(a);
+  rows.push({ seq: 1, opId: uuid(), actor: { kind: "user", id: "rival" }, op: add("rival") }); // written behind the room's back
+  const mine = clientOp(add("mine"));
+  await room.submit(a, mine);
+  expect(room.readOnly).toBe(true);
+  expect(await room.recover()).toBe(true);
+  expect(room.doc.nodes["rival"]).toBeDefined();
+  await room.submit(a, mine);
+  expect(ops(a).map((m) => [m.seq, m.actor.id])).toEqual([[1, "rival"], [2, "a"]]);
+  expect(room.seq).toBe(2);
+});
+
+test("recover: takes its turn in the op queue: an op submitted before it is refused, one submitted after it is accepted", async () => {
+  const { journal, state } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  room.join(a);
+  state.down = true;
+  await room.submit(a, clientOp(add("n1")));
+  state.down = false;
+  const [before, after] = [clientOp(add("n2")), clientOp(add("n3"))];
+  await Promise.all([room.submit(a, before), room.recover(), room.submit(a, after)]);
+  expect(a.inbox.slice(1).map((m) => m.type === "rejected" ? `rejected ${m.opId === before.opId ? "before" : "n1"}` : m.type === "op" ? `op ${m.opId === after.opId ? "after" : "?"}` : m.type)).toEqual(["status", "rejected n1", "rejected before", "status", "op after"]);
+});
+
+test("onReadOnly is called once per fall, so the caller can start retrying recover()", async () => {
+  const { journal, state } = flakyJournal();
+  const onReadOnly = vi.fn();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal, onReadOnly });
+  const a = peer("a");
+  room.join(a);
+  state.down = true;
+  await room.submit(a, clientOp(add("n1")));
+  await room.submit(a, clientOp(add("n2")));
+  expect(onReadOnly).toHaveBeenCalledTimes(1);
+  state.down = false;
+  await room.recover();
+  state.down = true;
+  await room.submit(a, clientOp(add("n3")));
+  expect(onReadOnly).toHaveBeenCalledTimes(2);
 });
 
 test("the room knows who is in it, for presence and for cutting off a revoked user", () => {

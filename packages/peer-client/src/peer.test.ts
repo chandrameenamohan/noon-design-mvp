@@ -345,3 +345,85 @@ test("a closed peer accepts nothing: submit() after close() is refused at once, 
   expect(peer.doc.nodes["late"]).toBeUndefined();
   expect(peer.pendingCount).toBe(0);
 });
+
+// --- E6.1b: a room whose storage is down is read-only; the peer holds its edits until it is writable --------
+const readOnlyPeer = async (extra: Partial<PeerOptions> = {}) => {
+  const net = fakeNet((socket) => { socket.say(welcome); });
+  const peer = connectPeer(options(net, extra));
+  await until(() => peer.status === "live", "live");
+  const socket = net.sockets[0];
+  const frames = (): { opId: string; op: { nodeId: string } }[] => (socket?.sent ?? []).map((f) => JSON.parse(f) as { opId: string; op: { nodeId: string } }).filter((f) => "op" in f);
+  return { net, peer, socket, frames };
+};
+
+test("read-only: ops the room refused are HELD (no reconnect, nothing lost), new edits are refused 'read_only', and 'writable' sends the held ones again, in order, with the same opIds", async () => {
+  let changes = 0;
+  const { net, peer, socket, frames } = await readOnlyPeer({ onChange: () => { changes++; } });
+  peer.submit(add("a"));
+  peer.submit(add("b"));
+  const [a, b] = frames();
+  const before = changes;
+  socket?.say({ type: "status", readOnly: true });
+  expect(peer.readOnly).toBe(true);
+  expect(changes).toBeGreaterThan(before); // a UI hears of it
+  socket?.say({ type: "rejected", opId: a?.opId, reason: "unavailable" });
+  socket?.say({ type: "rejected", opId: b?.opId, reason: "unavailable" });
+  expect(peer.submit(add("c"))).toEqual({ ok: false, reason: "read_only" });
+  await sleep(50);
+  expect(net.sockets).toHaveLength(1); // no resync: the room said why, and will say when
+  expect(peer.pendingCount).toBe(2);
+  expect(peer.doc.nodes["a"]).toBeDefined(); // the user still sees what they made
+  expect(frames()).toHaveLength(2); // nothing is sent into a read-only room
+  socket?.say({ type: "status", readOnly: false });
+  expect(peer.readOnly).toBe(false);
+  expect(frames().slice(2).map((f) => f.opId)).toEqual([a?.opId, b?.opId]);
+  peer.close();
+});
+
+test("read-only: a held op the room REPLAYS on recovery (its append had landed) is confirmed, not sent again", async () => {
+  const { peer, socket, frames } = await readOnlyPeer();
+  const submitted = peer.submit(add("a"));
+  const [a] = frames();
+  socket?.say({ type: "status", readOnly: true });
+  socket?.say({ type: "rejected", opId: a?.opId, reason: "unavailable" });
+  socket?.say({ type: "op", seq: 1, opId: a?.opId, actor: { kind: "user", id: "me" }, op: add("a") });
+  socket?.say({ type: "status", readOnly: false });
+  expect(frames()).toHaveLength(1);
+  expect(peer.pendingCount).toBe(0);
+  expect(submitted.ok && (await submitted.settled)).toEqual({ ok: true, seq: 1 });
+  peer.close();
+});
+
+test("read-only: a welcome that says so starts the peer read-only, and edits are refused until 'writable'", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, readOnly: true }); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.status === "live", "live");
+  expect(peer.readOnly).toBe(true);
+  expect(peer.submit(add("x"))).toEqual({ ok: false, reason: "read_only" });
+  net.sockets[0]?.say({ type: "status", readOnly: false });
+  expect(peer.submit(add("a")).ok).toBe(true);
+  expect(net.sockets[0]?.sent.filter((f) => f.includes('"add_node"'))).toHaveLength(1);
+  peer.close();
+});
+
+test("read-only: the watchdog leaves held ops alone: a room that said it is read-only is not a dead connection", async () => {
+  const { net, peer, socket, frames } = await readOnlyPeer({ ackTimeoutMs: 40 });
+  peer.submit(add("a"));
+  socket?.say({ type: "status", readOnly: true });
+  socket?.say({ type: "rejected", opId: frames()[0]?.opId, reason: "unavailable" });
+  await sleep(200);
+  expect(net.sockets).toHaveLength(1);
+  peer.close();
+});
+
+test("read-only ends with the connection: offline, an edit is queued as usual, and a new welcome without the flag is writable", async () => {
+  const net = fakeNet((socket, nth) => { socket.say(nth === 1 ? { ...welcome, readOnly: true } : welcome); });
+  const peer = connectPeer(options(net));
+  await until(() => peer.readOnly, "read-only");
+  net.sockets[0]?.close(1006);
+  expect(peer.readOnly).toBe(false);
+  expect(peer.submit(add("a")).ok).toBe(true); // it belonged to that room: offline edits wait for the next one
+  await until(() => net.sockets.length === 2 && peer.status === "live", "live again");
+  expect(peer.readOnly).toBe(false);
+  peer.close();
+});

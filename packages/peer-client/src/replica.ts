@@ -19,14 +19,14 @@ export type Outcome = { ok: true; seq?: number } | { ok: false; reason: Rejectio
  */
 export type Effects = { rejected: Rejection[]; settled: { opId: string; outcome: Outcome }[]; resync: boolean; fatal?: "document_corrupt"; pauseMs?: number };
 
-export type LocalResult = { ok: true; opId: string; /** False: it changes nothing, so it was never queued and nobody will answer it. */ queued: boolean } | { ok: false; reason: RejectReason | "not_ready" | "invalid_op" | "too_many_pending" };
+export type LocalResult = { ok: true; opId: string; /** False: it changes nothing, so it was never queued and nobody will answer it. */ queued: boolean } | { ok: false; reason: RejectReason | "not_ready" | "invalid_op" | "too_many_pending" | "read_only" };
 
 /**
  * `inFlight`: on the wire of the CURRENT connection, not answered yet.
  * `maybeApplied`: it was on the wire of an EARLIER connection, so a room we no longer talk to may have applied it.
  */
 /** Everything the server says about the DOCUMENT. Presence is not the replica's business (peer.ts keeps it). */
-export type DocMessage = Exclude<ServerMessage, { type: "presence" | "presence_left" }>;
+export type DocMessage = Exclude<ServerMessage, { type: "presence" | "presence_left" | "status" }>;
 
 type Pending = ClientOp & { staleCount: number; inFlight: boolean; maybeApplied: boolean };
 
@@ -140,9 +140,17 @@ export function createReplica({ manifest, maxPending = 2000, window = 50, mintOp
       return { ...effects, pauseMs: Math.min(retryAfterMs ?? 1000, MAX_PAUSE_MS) };
     }
 
-    // Not applied, and nothing wrong with the op: keep it and come back through a fresh welcome,
-    // after a pause that GROWS (peer.ts), which resends everything pending.
-    if (reason === RejectReason.enum.unavailable) return { ...effects, resync: true };
+    // Not applied, and nothing wrong with the op: keep it, and everything after it, unsent again. A room
+    // that said it is read-only (E6.1b) says when it is writable, and peer.ts sends them then; otherwise
+    // come back through a fresh welcome, after a pause that GROWS (peer.ts). `maybeApplied`: an append
+    // whose reply was lost did land, and the journal replays it on recovery.
+    if (reason === RejectReason.enum.unavailable) {
+      for (const each of pending.slice(pending.indexOf(mine))) {
+        each.maybeApplied ||= each.inFlight;
+        each.inFlight = false;
+      }
+      return { ...effects, resync: true };
+    }
 
     if (reason === RejectReason.enum.stale) {
       // The room no longer remembers whether it applied this op. If the op would change nothing, it

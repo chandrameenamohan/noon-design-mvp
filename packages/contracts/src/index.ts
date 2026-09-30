@@ -344,7 +344,8 @@ export type ClientMessage = z.infer<typeof ClientMessage>;
 export const ServerMessage = z.discriminatedUnion("type", [
   // `you`: this connection's own peerId. `peers`: who was already here. Optional, so that a welcome
   // from a server that predates presence still parses: absent means "nobody else is here".
-  z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0), you: z.string().optional(), peers: z.array(Presence).optional() }),
+  // `readOnly`: the room cannot make ops durable right now (E6.1b); absent means it can.
+  z.object({ type: z.literal("welcome"), doc: Doc, seq: z.number().int().min(0), you: z.string().optional(), peers: z.array(Presence).optional(), readOnly: z.boolean().optional() }),
   Presence.extend({ type: z.literal("presence") }),
   z.object({ type: z.literal("presence_left"), peerId: z.string() }),
   SequencedOp.extend({ type: z.literal("op") }),
@@ -352,5 +353,9 @@ export const ServerMessage = z.discriminatedUnion("type", [
   // "Received, and it changed nothing" (the value was already that, the node already there). It gets
   // no seq and nobody else hears of it: a no-op must not cost every peer a message and a journal row.
   z.object({ type: z.literal("ack"), opId: z.uuid() }),
+  // To EVERY peer when the room's storage fails or comes back (E6.1b, SPEC §4). While read-only the room
+  // refuses every op as "unavailable" and acknowledges none: a peer holds its edits and sends them again
+  // once it hears `readOnly: false`. An older client skips this type and falls back on the refusals.
+  z.object({ type: z.literal("status"), readOnly: z.boolean() }),
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

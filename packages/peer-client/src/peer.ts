@@ -52,6 +52,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let lastHeard = 0;
   let liveSince = 0;
+  // E6.1b: the room cannot make edits durable. What we sent is held, new edits are refused, until it says otherwise.
+  let readOnly = false;
   let pauseTimer: ReturnType<typeof setTimeout> | undefined;
   const endPause = (): void => {
     clearTimeout(pauseTimer);
@@ -74,7 +76,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
 
   /** Writes whatever the replica says may go out now. Not live, or told to slow down: it all stays pending. */
   function flush(): void {
-    if (status !== "live" || pauseTimer !== undefined) return;
+    if (status !== "live" || pauseTimer !== undefined || readOnly) return;
     for (const op of replica.takeSendable()) socket?.send(JSON.stringify({ type: "op", ...op } satisfies ClientMessage));
   }
 
@@ -131,6 +133,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
 
   function retryLater(): void {
     if (status === "closed") return;
+    readOnly = false; // it belonged to that room; the next welcome says again
     setStatus("offline");
     // The pause starts over only after a connection that LASTED. Resetting it on every welcome made
     // "welcome, then drop" (a crash-looping server, a failing database) a reconnect every 250 ms, for ever,
@@ -185,12 +188,19 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
       if (others.has(message.peerId)) changePresence(() => others.delete(message.peerId));
       return;
     }
+    if (message.type === "status") {
+      readOnly = message.readOnly;
+      onChange?.();
+      flush(); // writable again: the held edits go out, in order
+      return;
+    }
 
     const [revisionBefore, pendingBefore] = [replica.revision, replica.pendingCount];
     const effects = replica.receive(message);
     for (const { opId, outcome } of effects.settled) settle(opId, outcome); // BEFORE a fatal end: these ops have left `pending`, so abandon() could not report them
     if (effects.fatal) { finish(effects.fatal); return; }
     if (message.type === "welcome") {
+      readOnly = message.readOnly ?? false;
       if (message.you !== undefined) mine.add(message.you);
       const here = (message.peers ?? []).filter((entry) => !mine.has(entry.peerId));
       // The room's list replaces ours: whoever we knew on the old connection may be long gone.
@@ -204,7 +214,9 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     for (const rejection of effects.rejected) onRejected?.(rejection);
     // The picture changed, or what is still unsaved did (an acknowledgement changes only that).
     if (replica.revision !== revisionBefore || replica.pendingCount !== pendingBefore) onChange?.();
-    if (effects.resync) { resync(); return; }
+    // A refusal from a room that said it is read-only: held, not a reason to reconnect. It says when it is writable.
+    const held = readOnly && message.type === "rejected" && message.reason === "unavailable";
+    if (effects.resync && !held) { resync(); return; }
     // The room's budget is spent: say nothing until it has refilled (+ jitter, so that the peers of a
     // busy room do not all return at once). The refused ops are unsent again and go out first.
     if (effects.pauseMs !== undefined && pauseTimer === undefined) pauseTimer = setTimeout(() => { endPause(); flush(); }, effects.pauseMs * (1 + Math.random() / 4));
@@ -251,7 +263,9 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
   // so silence while we WAIT for something (the welcome, or an answer to an op) is the only sign of a
   // half-open connection. A peer that only reads has nothing to time: E2.6's presence traffic fixes that.
   const watchdog = setInterval(() => {
-    const waiting = (status === "connecting" && socket !== undefined) || (status === "live" && replica.pendingCount > 0 && pauseTimer === undefined);
+    // ponytail: while read-only nothing is timed, so a connection that dies half-open then is noticed only by
+    // the next edit after "writable" (or by presence going quiet); upgrade: an application-level ping.
+    const waiting = (status === "connecting" && socket !== undefined) || (status === "live" && replica.pendingCount > 0 && pauseTimer === undefined && !readOnly);
     if (waiting && Date.now() - lastHeard > ackTimeoutMs) resync();
   }, ackTimeoutMs / 2);
   (watchdog as { unref?: () => void }).unref?.(); // in Node, a timer must not keep a finished script alive
@@ -270,6 +284,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     /** What the user sees: confirmed edits plus our own unconfirmed ones. Read only. */
     get doc(): Doc { return replica.doc; },
     get status(): PeerStatus { return status; },
+    /** The room cannot save edits right now (its storage is down): submit() refuses, and edits already made wait. */
+    get readOnly(): boolean { return readOnly; },
     /** Why the peer ended for good: a close code, "protocol", "no_session" or "closed_by_caller". */
     get closedBecause(): string | undefined { return closedBecause; },
     get pendingCount(): number { return replica.pendingCount; },
@@ -290,6 +306,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
       // A peer that has ended accepts nothing: finish() has already reported what was lost, and nothing
       // would ever answer (or even send) this op, so its `settled` would hang for ever.
       if (closedBecause !== undefined) return { ok: false, reason: "not_ready" };
+      // Said at once, not queued behind a room that cannot save: a person sees why, a program (the AI, the git peer) stops or waits.
+      if (readOnly) return { ok: false, reason: "read_only" };
       const waitingBefore = replica.pendingCount;
       const result = replica.local(op);
       if (!result.ok) return result;

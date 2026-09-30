@@ -26,6 +26,13 @@ test("messages are told apart by `type`, and an unknown or malformed one is refu
   expect(ServerMessage.parse({ type: "welcome", seq: 0, doc: { rootId: "root", nodes: {} } }).type).toBe("welcome");
 });
 
+test("E6.1b: the room's read-only status is a message of its own, and a welcome may carry it", () => {
+  expect(ServerMessage.parse({ type: "status", readOnly: true })).toEqual({ type: "status", readOnly: true });
+  expect(ServerMessage.safeParse({ type: "status" }).success).toBe(false);
+  expect(ServerMessage.safeParse({ type: "status", readOnly: "yes" }).success).toBe(false);
+  expect(ServerMessage.parse({ type: "welcome", seq: 0, doc: { rootId: "root", nodes: {} }, readOnly: true })).toMatchObject({ readOnly: true });
+});
+
 test("an op with an unknown type, an extra field or a bad id is refused", () => {
   for (const bad of [{ type: "rename_node", nodeId: "n1" }, { ...op, extra: 1 }, { ...op, nodeId: "has spaces" }, { ...op, nodeId: "" }]) {
     expect(ClientOp.safeParse({ opId, baseSeq: 0, op: bad }).success, JSON.stringify(bad)).toBe(false);

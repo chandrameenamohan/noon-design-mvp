@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 import type { GitEvent } from "@noon/db";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
-import { createGitPeer, type Apply, type ChangedPage } from "./git.ts";
+import { createGitPeer, WaitAgain, type Apply, type ChangedPage } from "./git.ts";
 import { exec, git, localOrigin } from "./git-testing.ts";
 import { pagePath } from "./sandbox.ts";
 
@@ -154,6 +154,30 @@ test("while Gitea is away an event waits instead of being lost, and is worked on
   await exec("mv", [moved, origin]);
   expect(await p.processNext()).toBe(true);
   expect(seen.map((s) => s.page)).toEqual([{ documentId: DOC, path: pagePath(DOC), tsx: "v2\n" }]);
+});
+
+test("E6.1b: a page whose document is read-only waits instead of failing, and is worked on once the room can save", async () => {
+  let readOnly = true;
+  const seen: string[] = [];
+  const { peer: p, logs } = peer((_event, page) => {
+    if (readOnly) return Promise.reject(new WaitAgain("document_read_only"));
+    seen.push(page.path);
+    return Promise.resolve();
+  });
+  await p.reconcile();
+  while (await p.processNext());
+  seen.length = 0;
+  readOnly = true;
+  await commit({ [pagePath(DOC)]: "v2\n" }, "pushed while Postgres was away from the room");
+  await p.reconcile();
+  expect(await p.processNext()).toBe(false);
+  expect((await events()).at(-1)?.status).toBe("pending");
+  expect(logs.join("\n")).toMatch(/document_read_only/);
+  readOnly = false;
+  expect(await p.processNext()).toBe(true);
+  expect((await events()).at(-1)?.status).toBe("done");
+  expect(seen).toEqual([pagePath(DOC)]);
+  onlyTheMirror(await worktreesLeft());
 });
 
 // --- integration:worktree-cleaned ---------------------------------------------------------------------

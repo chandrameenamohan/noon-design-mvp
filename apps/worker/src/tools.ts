@@ -40,6 +40,7 @@ export function buildTools(peer: AgentPeer, manifest: Manifest): AgentTool[] {
     gone: "That node (or parent) does not exist now: call read_tree; someone may have removed it.",
     document_limit: "The document is full or too deep. Do not add more nodes; finish with what is there.",
     connection_closed: "The connection to the document is gone. Stop: no further edit can be applied.",
+    read_only: "The document is read-only: the server cannot save edits right now. Stop and report that the edit could not be made.",
   }));
 
   /** One op, start to finish: the replica's verdict, then the ROOM's. Either refusal is a tool error (F11). */

@@ -40,9 +40,13 @@ type Options = {
   maxBufferedBytes?: number;
   /** How long to wait before trying a failed save again. */
   saveRetryMs?: number;
+  /** A journal call that has not answered by then counts as failed: a paused or partitioned database hangs rather than refuses. */
+  journalTimeoutMs?: number;
+  /** How often a read-only room asks the journal whether it can write again (E6.1b). */
+  recoverMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, saveRetryMs = 5000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, saveRetryMs = 5000, journalTimeoutMs = 5000, recoverMs = 1000 }: Options): Promise<RunningSyncServer> {
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
   // the REASON when a document cannot be opened, so every peer waiting on it is told the same thing.
@@ -107,12 +111,36 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
     } catch {
       return { closeCode: CLOSE.unavailable };
     }
+    // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
     const journal = {
-      append: (op: SequencedOp) => store.append(orgId, documentId, op),
-      find: (actorId: string, opId: string) => store.find(orgId, documentId, actorId, opId),
-      everAdded: (nodeId: string) => store.everAdded(orgId, documentId, nodeId),
+      append: (op: SequencedOp) => bounded(store.append(orgId, documentId, op)),
+      find: (actorId: string, opId: string) => bounded(store.find(orgId, documentId, actorId, opId)),
+      everAdded: (nodeId: string) => bounded(store.everAdded(orgId, documentId, nodeId)),
+      since: (after: number) => bounded(store.since(orgId, documentId, after)),
     };
-    return { room: createRoom({ doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}) }), orgId };
+    const room: Room = createRoom({ doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}), onReadOnly: () => { heal(room); } });
+    return { room, orgId };
+  }
+
+  function bounded<T>(work: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error("journal timed out")); }, journalTimeoutMs); });
+    return Promise.race([work, late]).finally(() => { clearTimeout(timer); });
+  }
+
+  /**
+   * The room went read-only (E6.1b): ask it to recover every `recoverMs` until the journal answers.
+   * ponytail: a read-only room that was dropped meanwhile keeps asking too, one cheap read a tick, until
+   * the database is back; ceiling: one timer per such room. It cannot be dropped without a successful save,
+   * which means the database answered, so in practice the next tick ends it.
+   */
+  function heal(room: Room): void {
+    void (async () => {
+      while (room.readOnly && !closing) {
+        await new Promise((resolve) => setTimeout(resolve, recoverMs).unref());
+        await room.recover();
+      }
+    })();
   }
 
   async function serve(ws: WebSocket, documentId: string, claims: { userId: string; orgId: string; expiresAt: number; actor: { kind: "user" | "agent" | "git"; runId?: string }; name?: string }): Promise<void> {
