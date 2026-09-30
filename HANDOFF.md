@@ -1,312 +1,140 @@
 # HANDOFF: Noon-like MVP
 
-Updated 2026-09-21, mid epic 4 (commit `c429f2b`). **Read this first, then run `bd prime`.**
-Everything here is either a decision the owner made or a fact about the repo; where a file is the
-source of truth, this points at it instead of repeating it.
+Updated 2026-09-30 ~22:30, branch **`build/epics`** (HEAD `07189cc` + Lesson 10 if it landed).
+**Read this first, then run `bd prime`.** Facts and owner decisions only; where a file is the
+source of truth, this points at it.
 
-**Next session's job: finish epic 4.** E4.2b's verifier + review panel, then E4.3, then E4.H
-(Lesson 4). Jump to section 6.
+## 0. First five minutes of the next session
+
+1. `git branch --show-current` must say `build/epics`. `git log --oneline -3`. Check whether
+   **Lesson 10 (`noon-2h1.9`)** landed (a commit starting `noon-2h1.9`). If not, re-run it (§6).
+2. `cat .claude/settings.local.json` must allow `Bash(git commit --no-verify:*)` (owner-created;
+   `--no-verify` is allowed on `build/epics` ONLY, never on `main`).
+3. `uptime`. Before any Docker suite, follow §5 (list heavy processes for the owner to stop).
+4. Recreate the builder rules file from §7 in the new session's scratchpad.
 
 ## 1. Who and what
 
-The owner (chandrameenamohan@gmail.com) is a Java/Python backend engineer preparing for Noon's
-"Fullstack Backend Architect" role. They are learning TypeScript from zero, and want
-principal-engineer depth: TS/Node internals, design choices, trade-offs versus Java and Python.
+Owner (chandrameenamohan@gmail.com): Java/Python backend engineer preparing for Noon's "Fullstack
+Backend Architect" role, learning TypeScript from zero, wants principal-engineer depth.
+Project: multiplayer design canvas where a user, an AI agent, git and a sandbox preview all edit or
+render one document. Claude writes ALL code; each epic ships a handbook lesson (artifact + PDF) and
+drills that start RED. Owner reads lessons at their own pace: **do not pause for them.**
 
-The project: a Noon-like MVP. A multi-user design canvas where a **user, an AI agent, git and a
-sandbox preview** all edit or render the same document. TypeScript monorepo, distributed backend,
-every datastore added in the epic that needs it.
+## 2. Locked decisions
 
-**Claude writes ALL the code.** Each epic ships with a handbook lesson explaining how it was
-written. The owner reads lessons at their own pace and has said so explicitly:
-**"continue on the completion of it. I can go through lessons on my own pace."** Do not pause for them.
+- Process: owner's `software_development_workflow_v6.md`, FULL tier, W3 BUILD. **Never use the
+  Workflow tool.** Orchestrate with Agent-tool subagents.
+- **Owner 2026-09-29/30:** main session only orchestrates (spawn, record bd, publish); **one
+  separate subagent per bead**, one at a time (serial). Builders: `opus`; **E10 and lessons: `fable`**;
+  routine verification: `sonnet`; review panels / hard refutation: `fable`. Tell every agent "YOU
+  are the only one on this bead; do not spawn sub-agents".
+- **Verification is parked:** every bead since E4.3 was built with lint + typecheck + unit + its own
+  unit tests only, committed with `--no-verify` on `build/epics`. Integration, e2e and chaos tests
+  are WRITTEN BUT NEVER RUN. Beads stay OPEN until verified (each has a "Built on build/epics
+  <hash> ... Verify parked" comment). Merge `build/epics` into `main` only after verification.
+- Node 24, TS ~6.0, native type stripping (no enums/param properties), own sync (not Yjs), Claude
+  Agent SDK with `CLAUDE_CODE_OAUTH_TOKEN` (never `ANTHROPIC_API_KEY`).
+- Ponytail mode: laziest working thing, `ponytail:` comments with ceiling + upgrade path; never
+  simplify away validation at trust boundaries, data-loss prevention, security, accessibility.
+- Web browsing: gstack `/browse` only. Secrets: `.env` git-ignored, never print it.
+- Tracking: `bd` only (never TodoWrite, never `bd edit`). Memories: `bd remember`.
+- **SPEC §5 changed 2026-09-30** (commit `ccfea2c`): E10 polished Figma-feel editor in scope
+  (no freeform/freehand drawing); E11 laptop hosting via tunnel in scope; x-dev-user stays,
+  development only.
+- **Order (owner):** E9 → E10 → parked verification + Z → E11.
 
-## 2. Decisions that are locked (do not re-litigate)
+## 3. What is built on `build/epics` (verify parked)
 
-- Process: the owner's own `software_development_workflow_v6.md`, FULL tier. We are in **W3 BUILD**.
-- **NEVER use the Workflow tool** (the owner reserves dynamic workflows for other work). Use
-  Agent-tool subagents plus in-session work.
-- Runtime Node.js 24 (Bun rejected). TypeScript pinned `~6.0.0` (typescript-eslint lacks TS 7).
-  Native type stripping, no build step: `.ts` import extensions, `erasableSyntaxOnly`
-  (no enums, no parameter properties), `verbatimModuleSyntax`.
-- Sync: our own server-authoritative, Figma-style design (one room per document orders ops). Not Yjs.
-- Git and sandbox: local first (local git server, Docker sandbox).
-- AI agent: **Claude Agent SDK for TypeScript, authenticated with `CLAUDE_CODE_OAUTH_TOKEN`**
-  (a `claude setup-token` value in `.env`). NOT an Anthropic API key; `ANTHROPIC_API_KEY` must be
-  UNSET in the worker (it outranks the OAuth token, and the worker refuses to start if it is set).
-- Final verification (epic Z): a LOCAL Antithesis-style harness, the same method as the owner's
-  `~/repos/ai-engine/deploy/antithesis` (SPEC §4a). Bugs it finds get fixed.
-- Lessons: one artifact page per epic + a printable **PDF sent with SendUserFile** + drills that
-  start RED for the owner to solve alone.
-- Ponytail mode is active (laziest working solution; mark shortcuts with `ponytail:` comments naming
-  the ceiling and the upgrade path). Never simplify away validation at trust boundaries, data-loss
-  prevention, security, accessibility.
-- Web browsing: the gstack `/browse` skill only; never `mcp__claude-in-chrome__*`.
-- Secrets: `.env` is git-ignored. **Never print, log or copy its contents.**
-- Commits: never `--no-verify` (the pre-commit hook runs `make check`). Use the `Co-Authored-By:`
-  and `Claude-Session:` trailers the session's own attribution reminder gives you.
-- Task tracking: `bd` (beads) only. No TodoWrite. Never `bd edit`. `bd prime` after compaction.
-- **Subagent models** (owner, 2026-09-20): choose by the task. `fable` JUDICIOUSLY, for genuinely
-  deep work (review panels, hard refutation with races, writing lessons). `sonnet` is fine for what
-  sonnet does well (routine verification, running suites, searches). `opus` in between.
+| Epic | Beads | Lesson |
+|---|---|---|
+| E4 | 4.3 `f992425`, 4.H `1ed5e4d` | https://claude.ai/artifact/TuhCaR764R39h3siAMvbXD |
+| E5 (+ `noon-l96` public preview `d708bd8`/`560ee27`, `noon-9gz` sandbox isolation `5c741fc`) | 5.1 `3a516fb`, 5.2 `8e97ae9`, 5.3a `90a51cc`, 5.3b `b6eb0dc`, 5.4 `cb2b399`, 5.5 `48ac4f6`, 5.H `cbdb35b` | https://claude.ai/artifact/1XtuLMnTdVKjQyAhH5RxgH |
+| E6 | 6.1a `eb42cec`, 6.1b `bb7e8a9`, 6.2 `06302b8`, 6.3 `e72665c`, 6.H `0dfe1b2` | https://claude.ai/artifact/EK2C6s3ak4VfzqSnCsmAT8 |
+| E7 | 7.1 `3048ff8`, 7.2 `b89cfd9`, 7.3 `b702dcd`, 7.H `d53f8f4` | https://claude.ai/artifact/VjAqznb7ssT5JZKRHax4wh |
+| E8 | 8.1 `9615ec7`, 8.2 `220eb88`, 8.3 `90819fc`, 8.4 `ad00176`, 8.H `a99c7d3` | https://claude.ai/artifact/LHfrnyrc7yfzAYqjYCmPL1 |
+| E9 | 9.1 `4c52308`, 9.2a `0ff6a0e`, 9.2b `a3beda8`, 9.4 `d88146e`, 9.5 `ee59857`, 9.6 `1c9db7c`, 9.H `e1f0402` | https://claude.ai/artifact/MBmUZdhQLJChGmbH7LpZcH |
+| E10 (`noon-2h1.*`, fable) | .1 `13f8b3e`, .2 `fe68673`, .3 `25357cf`, .4 `9c570f6`, .5 `b3046a5`, .6 `6cccf25`, .7 `d4e895f`, .8 `5fad6b9`, cleanup `noon-92o` `07189cc` | .9 Lesson 10: in progress at handoff |
 
-## 3. Where things are written down
+Every bead's `bd show <id>` comments hold: design, tests written-but-unrun, ponytail shortcuts,
+and **VERIFY notes** (things the verifier must check). PDFs: `docs/handbook/lesson-N.pdf`.
 
-| What | Where |
-|---|---|
-| The approved spec (keystones §2, rules learned §2a, features F1-F31 §3, failure modes §4, Antithesis §4a, e2e scenario §8) | `SPEC.md` |
-| The bead graph, readable | `BEADS.md`; key -> bd id map in `.beads/key-map.json` |
-| Lessons learned per bead (the real project memory) | `bd memories` / `bd prime` |
-| Deferred review findings | `bd show <id>` NOTES on the bead that will own them |
-| Verification layers | `VERIFICATION.md`, `Makefile` |
-| Handbook index, lesson builders, PDFs | `docs/handbook/` |
-| Drills | `drills/lesson-N/` (`sh drills/lesson-N/check.sh`) |
+## 4. What is left (in order)
 
-Helper used every session:
-`K() { python3 -c "import json;print(json.load(open('.beads/key-map.json'))['$1'])"; }` then `bd show $(K E4.1)`.
+1. **`noon-2h1.9` Lesson 10** (if not landed; fable). Then close nothing yet (verify parked).
+2. **Bugs** (opus, one at a time): `noon-3m1` (props cap UTF-16 vs socket UTF-8 bytes),
+   `noon-ibo` (e2e canvas p95), `noon-91u` (git peer resume after kill; push-ops idempotent;
+   Ship retry keeps commit record), `noon-37s` (usage not recorded for failed runs; token/cost
+   scope). Plus: `docs/handbook/build-lesson-7.py` anchor broken by E8.2 (see `bd show noon-98h.4`);
+   Pyright "group of None" warning in build-lesson-5..9.py (harmless).
+3. **Parked verification pass** (quiet machine, §5): per epic E4→E10 in order: `./init.sh` rerun
+   first (adds MINIO_PASSWORD, GITEA_*, webhook secret to `.env`; builds MinIO/Gitea/toxiproxy/
+   worker-git/worker-ship/sync-2), then `make check` + `make chaos` + `make drills`, fix failures
+   test-first (expect real bugs: none of these suites ever ran), regenerate screenshot baselines
+   listed in bead comments, then a fresh verifier per bead and a **review panel for R beads**
+   (5.3a, 5.5, 6.1a, 6.2, 7.1, 7.3, 8.1-8.4, 9.1, 9.2a, 9.5, 9.6, 10.8). Close beads as they pass.
+4. **Z** (`noon-cs6.*`): Z.1 SPEC §8 scenario script, Z.2a property catalog, Z.2b local
+   Antithesis-style harness (toxiproxy, owner's `~/repos/ai-engine/deploy/antithesis` method),
+   Z.3 fault runs → bug beads → fixes. Z.1 now depends on E10.9.
+5. Merge `build/epics` → `main` (through the full hook, no `--no-verify`).
+6. **E11** (`noon-3g7`): move the public demo to the verified build (§8).
 
-## 4. State: epics 0-3 closed; epic 4 half built
+## 5. Quiet machine protocol (owner rule)
 
-`make check` was green at HEAD (`c429f2b`). The docker stack is up, including the new
-`worker-sandbox` service.
+Before any Docker suite: `ps -Ao pid,pcpu,comm -r | head -20`, identify each heavy process, and
+**give the owner a table of what to stop (name, PID, CPU, what it is); the owner kills them, never
+you.** Keep Docker's `com.apple.Virtualization.VirtualMachine` and `claude`. Known offenders on
+this machine: `opencode`, `omnigent` python server, `hakimo-gastown` (`gc supervisor run` +
+its `dolt sql-server` + `bd send-metrics`), other projects' containers (`vision-system_*`).
+Never run two Docker-using suites at once. A 30 s "not ready within" under load is noise: re-run
+that one file before changing code.
 
-**FIRST THING NEXT SESSION: commit what is staged.** This file, `scripts/preview.sh`, and a test fix in
-`apps/worker/src/sandbox.int.test.ts` (proves "baked" by node_modules in the image instead of an 8 s
-bound) are STAGED, not committed: the pre-commit gate failed twice with the host at load average 117
-(opencode, Dia and git processes outside this project), each time with DIFFERENT failures. Check
-`uptime` first; with a quiet machine, `git commit` (never `--no-verify`). If the sandbox test "a
-sandbox removed while it is starting" fails again, the daemon printed a message the regex does not
-list (seen once under load: "docker exec: Error response from daemon: ..."): assert on the SPEED
-and the absence of "not ready within", not on the daemon's words.
+## 6. Running an agent (pattern that worked)
 
-- **Epic 3 is CLOSED** (2026-09-21). The 401 was never the token's fault: it had been pasted into
-  `.env` with a line break (line 2 held its last 18 characters). Joined; `node scripts/live-agent.ts`
-  printed `outcome ok`. `bd memories env-token` has the diagnosis recipe (keys and lengths only).
-- **E4.1 closed** (codegen), **E4.2a closed** (sandbox start). **E4.2b built and committed, NOT closed:**
-  it still needs its verifier and review panel (`needsReview=true`). `bd show noon-3rh.3` NOTES has
-  the exact status. E4.3 and E4.H are open.
-- **The owner can see it running**: `sh scripts/preview.sh` creates a document, opens its sandbox
-  job and prints a canvas URL and a preview URL; edits on the canvas appear in the preview in about
-  200 ms, without a reload. The canvas needs `pnpm --filter @noon/web dev` (port 5173). This script
-  is a stopgap (it inserts the job with psql): E4.3 replaces it with api routes and an iframe.
+Spawn in background with `name: b-<bead>`, `run_in_background: true`, prompt = "Builder for bead
+<id> (<one line>). First read and follow <scratchpad>/builder-rules.md exactly. Then `bd show
+<id>` incl. comments, read commits <hashes> ..." plus bead-specific risks. After each report:
+`bd comments add <id> "Built on build/epics <hash> by <agent> (<model>) ... Verify parked."`,
+hand-offs as comments on the next bead, bugs via `bd create -t bug`. Lessons: fable, copy the
+previous lesson's builder pattern, publish with the Artifact tool, URL into index.md before commit.
+Agents send their report twice (message + idle notification): record once.
 
-Published for the owner (private artifacts):
-- 0001 HLD: https://claude.ai/artifact/J2DVNLFHkKrLPwLyghFBc4
-- Lesson 0 (TS primer): https://claude.ai/artifact/3qLjxgH6vjT2bUnEa52omY
-- Lesson 1 (epic 1): https://claude.ai/artifact/TkBHmpDAedwZNEmFrFWqpV
-- Lesson 2 (epic 2): https://claude.ai/artifact/WCwLXNrjZJ1qX7knksdipw
-- Lesson 3 (epic 3): https://claude.ai/artifact/Qio1tZn6jkECjtZop15Uq7
-- Note, not a lesson: multiplayer approaches compared,
-  https://claude.ai/artifact/DNmGqNoLDGLtJBNEGaoFEF
-- PDFs: `docs/handbook/lesson-{0,1,2,3}.pdf`, `notes-multiplayer-approaches.pdf`. (Lesson 4: not yet.)
-  Drills for lessons 1, 2 and 3 are RED on purpose.
+## 7. Builder rules (recreate as <scratchpad>/builder-rules.md)
 
-### What exists (one line each)
+- Repo, branch `build/epics` (never switch, never touch `main`). You are the only agent on your
+  bead; don't spawn sub-agents. Read `bd show`, related `bd memories`, HANDOFF §2, SPEC sections.
+- Implement fully, test-first, no stubs; ponytail rules; match surrounding code; Node 24 TS rules.
+  Write the bead's named integration/e2e/chaos tests even though you can't run them.
+- RUN only `make lint typecheck unit` + your new unit tests (and `pnpm exec jscpd .`, `knip` clean).
+  No `make check`, integration, e2e, chaos. Serial. Known flake: codegen index.test.ts:363 timeout.
+- Commit only your paths: `git commit --no-verify -F <msgfile> -- <paths>`. If denied: stage, report
+  "COMMIT DENIED". Message: "<bead key> <what the user can now do>", body = WHY, line
+  "Gate: lint+typecheck+unit green; integration/e2e/chaos parked (host load), to run on build/epics
+  before merging to main.", trailer `Co-Authored-By: Claude <Opus 5.5|Fable 5.1> <noreply@anthropic.com>`.
+- Never touch HANDOFF.md, PROMPT_23_SEP.md, .beads/*, .claude/*, .env. No bd close/update/remember.
+  Missing input: report "NEEDS INPUT". Report under 150 words.
+- Live demo: never touch port 5173 or `../noon-demo`; screenshot with your own Vite (e.g. 5199);
+  never apply migrations to the shared dev Postgres (the demo api uses it).
 
-- `packages/contracts`: Zod schemas = the wire and HTTP contracts. Op (4 kinds, discriminated
-  union), ClientMessage, ServerMessage, RejectReason, Actor, Presence, Manifest, Run, UsageAmount,
-  UsageReport, FailureReason, MAX_COST_USD, **PreviewOutput** (`{url}`, http(s) only: it becomes an iframe src).
-- `packages/db`: `createDb` (pool private in a closure), org-scoped `forOrg(orgId)`, migrations
-  0001-0008, `documentStore()`, `jobStore()` (claim / finish / queued / cancelRequested /
-  recordUsage / **report** (a running job's output, PreviewOutput-validated) / **sandboxesInUse**),
-  runs (createRun / getRun / cancelRun), `usage()`, `provisionAppRole`. 0008: one unfinished
-  `sandbox` job per document (partial unique index) + `jobs.output jsonb`.
-  `testing.ts` = throwaway schemas.
-- `packages/session-token`: HMAC session tokens (claims: user, org, doc, aud "sync", knd, run, nam).
-- `packages/process`: `createShutdown`, env schemas.
-- `packages/codegen` (E4.1): `generate(doc, manifest)` -> `{ok, tsx}` or `{ok:false, reason, detail}`.
-  Total (never throws), deterministic, one file whose ONLY export is `Page`, `data-node-id` on
-  every element; literals chosen from the value, never from what the manifest claims.
-- `packages/queue`: BullMQ producer. `QUEUES = ["ai", "sandbox"]`. A message carries ONLY `{queue, jobId, orgId}`; `enqueue` and
-  `ping` have deadlines (with Redis away ioredis reconnects for ever and nothing settles).
-- `packages/design-system`: manifest GENERATED from `seed/sample-app` types with the TS compiler
-  API (`make manifest`; drift fails the gate). Components: Stack, Card, Button, Text, Image, Input.
-- `packages/doc-model`: `plan()` + pure `applyOp` + in-place `applyOpInto`, `changes`, `validate`,
-  `checkDoc`, `random-ops` (seeded).
-- `packages/peer-client`: **the single write path** (ESLint enforces it). `replica.ts` is pure;
-  `peer.ts` is the wire. `submit()` returns `{ ok, opId, settled }` with ONE outcome per op, exactly
-  once (the simulator asserts it). `confirmed` and `seq` are exposed **for epic 4's codegen and
-  epic 5's git peer: project from CONFIRMED, never from the optimistic document.**
-- `apps/api`: Hono. Orgs, workspaces, documents, `POST /documents/:id/session`, and the runs routes
-  (`POST /documents/:id/runs`, `GET .../runs/:runId`, `POST .../runs/:runId/cancel`,
-  `GET /orgs/:orgId/usage`). Identity until epic 8: header `x-dev-user`, development only.
-- `apps/sync`: `room.ts` is pure (no sockets); `server.ts` is the wire. `sim.ts` + `sim-seeds.ts` +
-  `sim-cli.ts`: the reconcile simulator (`make sim`).
-- `apps/worker`: `worker.ts` (claim -> cancel poll -> handler -> recordUsage -> finish; plus the
-  sweep that re-offers `queued` rows; handlers are a PARTIAL map: a process drains only the queues
-  it handles, each with its own concurrency). **One queue per process** (`WORKER_QUEUE=ai|sandbox`,
-  config.ts): the AI worker runs the Agent SDK's subprocess and must never hold the Docker socket.
-  `sandbox.ts` (E4.2a/b: `startSandbox`, `pushPage`, `isRunning`, `reapSandboxes`, `pagePath`,
-  `PREVIEW_PATH`), `preview.ts` (the `sandbox` queue's handler: silent peer, projects from
-  `peer.confirmed`, restarts a dead container, idles out), `sandbox/Dockerfile` (the sandbox image,
-  context = `seed/sample-app`; `make sandbox-image`), `sandbox-testing.ts` (shared test helpers).
-  Also `ai.ts` (one run, raced against a single `ended` promise:
-  `timed_out` / `sync_unreachable` / `worker_stopped` / `cancelled`), `sdk.ts` (the Agent SDK with a
-  capability ceiling, `checkInit`, `wrapInstruction`, `usageOf`, `failureReason`), `tools.ts` (six
-  tools, each `peer.submit` then `await settled`).
-- `apps/web`: React 19 + Vite. `?doc=<id>` canvas (wireframe from the manifest), inspector,
-  presence, refusal sentences, and `AiPanel.tsx`. Vite proxies `/api`.
-- `docker-compose.yml`: new `worker-sandbox` service (`WORKER_QUEUE=sandbox`, the ONLY service with
-  `/var/run/docker.sock`, runs as root, `SANDBOX_POOL=${COMPOSE_PROJECT_NAME}`). The app image now
-  carries the docker CLI (copied from `docker:27-cli`).
-- `e2e/`: Playwright. Runs api:3100 + sync:3101 + vite:5174 + `stub-worker.ts`:3102 FROM SOURCE.
-  `setup.ts` stops the compose worker and migrates from source; `teardown.ts` cleans up and starts
-  the worker again. Fixture: console-clean + axe after every test.
-- `learning-tests/`: nine standalone dependency probes (ws, postgres, node-ts, redis, minio, gitea,
-  sandbox, ts-manifest, agent-sdk). Their findings are SPEC §2a.
-  **Read `learning-tests/sandbox/test.ts`'s FINDINGS header before epic 4.**
+## 8. Public demo (ngrok) — running, keep it alive
 
-## 5. The per-bead loop (follow it exactly)
+- URL https://unpuffed-overtamely-zoey.ngrok-free.dev, basic auth user `noon`, password in
+  `~/.config/noon/ngrok-pass` (never commit it). `/preview/` is exempt from basic auth (opaque-origin
+  frame modules carry no credentials); previews are guarded by the per-container token.
+- Pieces: `ngrok http 5173 --traffic-policy-file ~/.config/noon/ngrok-policy.yml`; Vite from the
+  **frozen worktree** `../noon-demo` at `560ee27`: `cd ../noon-demo && PUBLIC_HOST=unpuffed-overtamely-zoey.ngrok-free.dev pnpm --filter @noon/web dev`;
+  compose api/sync/worker-sandbox containers built ~5c741fc, api run with
+  `SYNC_PUBLIC_URL=wss://<host>/sync PREVIEW_PUBLIC_URL=https://<host>`. These background
+  processes die with this session: restart ngrok + demo Vite if the owner wants the demo up.
+- **Do NOT rebuild the compose stack from `build/epics` until verified**: new sync needs MinIO,
+  Gitea, two nodes (`SYNC_PUBLIC_URL=sync=wss://<host>/sync,sync-2=wss://<host>/sync-2`), and the
+  web needs the new api. E11 moves demo worktree + containers together to a verified commit.
+- The old compose file now needs `MINIO_PASSWORD`; until `./init.sh` reruns, use
+  `docker exec noon-design-mvp-postgres-1 ...` instead of `docker compose exec`.
+- Cloudflare tunnel `noon` + DNS `noon.sennamind.com` + Access app exist, idle (owner chose ngrok).
 
-1. `bd update $(K <key>) --claim`; read `bd show` INCLUDING NOTES (earlier reviews left findings there).
-2. Failing test FIRST. Watch it fail for the right reason.
-3. Build the minimum. Mutation-check every guard you add: break the rule, demand a red test.
-   (Two tests in epic 3 passed with their guard removed. Both were caught this way.)
-4. `make check`. If sync or peer-client changed: rebuild containers and run the live smoke test
-   BEFORE committing:
-   `PATH="$PATH:/Applications/Docker.app/Contents/Resources/bin" docker compose build api sync && docker compose up -d`
-   then `API_URL=http://localhost:3000 node scripts/smoke-sync.ts`, then clean up:
-   `docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where name = 'init.sh smoke'; delete from users where email = 'init-smoke@example.com'"`
-5. Commit (the hook runs the gate; about two minutes).
-6. Verifier agent told to REFUTE by running code. For beads with `needsReview=true` also a review
-   panel: (a) spec + correctness, (b) security. Reviewers are READ-ONLY. See section 2 for models.
-   **Tell every agent explicitly: "YOU are the only one covering these N claims; other agent names
-   you see are finished leftovers; do not spawn sub-agents."** They invent colleagues otherwise; it
-   happened four times, and one verifier silently skipped six of its ten claims.
-7. **Never edit the working tree while agents run.** Draft in the scratchpad instead.
-8. Fix findings test-first. Large fix pass => re-verify with a fresh agent.
-9. `bd close` with a reason, `bd remember` the shape + lessons, `bd note` deferred findings on the
-   bead that owns them.
-10. End of epic: lesson built from source by anchor (`docs/handbook/build-lesson-N.py`, copy
-    lesson 3's builder and template), drills that start RED for the right reason (assertion, not
-    import error) and are solvable, `node docs/handbook/make-pdf.mjs lesson-N`, publish the HTML
-    with the Artifact tool, SendUserFile the PDF, update `docs/handbook/index.md` and the `drills`
-    Makefile target, close the epic.
+## 9. Where things are written down
 
-Environment facts (epic 4 additions first):
-- Sandboxes: image `noon-sandbox:dev` (built by `./init.sh`, `make sandbox-image`, and every sandbox
-  test's `beforeAll`; first build ~6 min, cached after). Network `noon-sandboxes` (ICC off), ports
-  127.0.0.1 only, container name `noon-sandbox-<documentId>`, labels `noon.sandbox=<pool>` and
-  `noon.document=<id>`. **A reaper only sweeps its own pool**: compose, clean-clone and every test file
-  share one daemon (the compose reaper once deleted the test suite's sandboxes).
-- **Never run two Docker-using suites at once** (a mutation run and a test run, say): each one's
-  cleanup removes the other's containers and turns results into noise. It happened this session.
-- Node 24: `execFile`'s `signal` option sends SIGTERM on abort WHATEVER `killSignal` says (measured);
-  `sandbox.ts` kills explicitly with SIGKILL. macOS scans a brand-new executable on its first run
-  (>300 ms): a test stub needs a generous window.
-- Mutation runs of the Docker suites take 1-3 min per mutant: run them in the background with
-  `run_in_background`, never alongside another Docker suite.
-
-Older facts: `docker` is not on PATH (use `/Applications/Docker.app/Contents/Resources/bin`);
-Postgres and Redis run in compose and integration + e2e tests need them (`./init.sh` boots
-everything); the project's Redis is on host port **6380**, because the owner's machine runs its own
-on 6379; `pnpm exec` runs from the repo root; `tsc` with file args needs `--ignoreConfig`.
-
-## 6. NEXT: finish epic 4
-
-Keystone 8 (SPEC §2): **one document <-> one generated TSX file of a fixed shape; doc -> TSX is
-deterministic; all other repo code is read-only to the canvas.** Reading TSX back is epic 5.
-
-### Step 1: E4.2b verification (the bead is built; do NOT rebuild it)
-
-Commit `c429f2b`. Run the per-bead loop from step 6: a verifier told to REFUTE by running code, and
-the review panel ((a) spec + correctness, (b) security), all three in parallel, read-only, with the
-"YOU are the only one... do not spawn sub-agents" line. Claims worth giving the verifier:
-the preview follows only CONFIRMED ops, within 3 s, no reload, state kept; one unfinished sandbox job
-per document; a dead container is restarted and the URL re-reported; the job ends when nobody is
-present for `idleMs`; cancel ends quietly, a stopping worker fails `worker_stopped`; the reaper
-removes only its own pool's idle sandboxes and never a document in use; the AI worker can never
-claim a sandbox job; `WORKER_QUEUE` refuses anything but exactly one queue. Tell it to use its own
-pool and a port range outside 20000-24999, and that the compose `worker-sandbox` is running.
-Then fix findings test-first, mutation-check, commit (include `scripts/preview.sh`), close.
-
-### Step 2: E4.3 (the canvas shows the preview)
-
-Acceptance: an iframe of the running page; an edit shows within 3 s without a full reload; if the
-container dies the iframe shows "rebuilding" and recovers unaided (F15). Checks:
-`e2e:preview-follows-edit-within-3s`, `e2e:preview-self-heals`. Its NOTES (`bd show noon-3rh.4`)
-hold binding findings from the E4.2a reviews. The shape they imply:
-- api: `POST /documents/:id/preview` (member only; insert the sandbox job `on conflict do nothing`,
-  enqueue; return the job) and `GET /documents/:id/preview` (`{status, url | null}` from `jobs.output`
-  through `PreviewOutput`). This replaces `scripts/preview.sh`.
-- web: iframe `sandbox="allow-scripts"` and NOT `allow-same-origin` (every preview shares host
-  127.0.0.1: without an opaque origin a preview could read cookies/storage and survive port reuse).
-  Re-read the URL, never cache it: a restarted sandbox can come back on another port, and then the
-  iframe must be pointed at it (Vite's own self-heal only covers the SAME origin). "Rebuilding" =
-  the preview is unreachable or the job restarted it.
-- Lock Vite `server.cors` to the canvas origin, injected so it survives a customer vite.config.
-- e2e: setup.ts stops the compose `worker` today; it must also stop `worker-sandbox` (or give e2e its
-  own pool and DB) or the compose worker will claim e2e's sandbox jobs. The self-heal test must not
-  be vacuous: push something a fresh container would NOT show before killing it (FINDINGS 7).
-
-### Step 3: E4.H (Lesson 4 + drills), then close the epic
-
-Built from source by anchor like lesson 3 (`docs/handbook/build-lesson-3.py` + template), PDF via
-`node docs/handbook/make-pdf.mjs lesson-4`, publish with the Artifact tool, send the PDF, drills in
-`drills/lesson-4/` that start RED on an assertion, `make drills` target, `docs/handbook/index.md`.
-Material the lesson should teach (all real, all in `bd memories e4-`): the lying-toString injection
-and "choose the literal from the value"; `-0`, NaN, hidden props; push(...arr) overflow; the
-start race where losers removed the winner's container (name uniqueness is not ownership); the
-`set -e` + `&&` trap; execFile's SIGTERM; one queue per process and why; pools; why the port is
-chosen once and why the URL can still change.
-
-### What the sandbox learning test measured (still the source for E4.3)
-
-`learning-tests/sandbox/test.ts` FINDINGS header. Short form: `server.host: true` + one published
-port serves HTTP and HMR; `docker exec` push ~20 ms; Fast Refresh keeps state only if the module
-exports only components; baked node_modules ~0.35 s cold start; a syntax error shows an overlay and
-recovers; cross-origin iframe embedding works; after a container restart Vite's client polls and
-does a full `location.reload()` ~1.2 s after a server answers on the SAME origin.
-
-### Beads waiting, with notes
-
-`noon-9gz` (NEW, security, blocks E5.1): per-document hostname proxy, `--internal` sandbox network,
-disk quota, pinned base image, no credentials in SEED_REPO. A low-priority bug bead: one e2e run saw
-canvas p95 3072 ms (never reproduced). Older: E9.5, E8.2, E9.6 (add: per-org cap on sandboxes),
-E3.2's budget_exceeded naming, E6.1a, E7.1, E8.1.
-
-Then epics 5 (git peer + ship), 6 (journal + snapshots), 7 (multi-node with fencing), 8 (auth,
-RBAC, audit), 9 (job hardening), Z (SPEC §8 scenario + the local Antithesis-style harness). Each
-with its lesson, PDF and drills.
-
-## 7. Hard-won rules (the short list; the long one is `bd memories`)
-
-- Validate before the write, with the same contract. **A contract must be at least as strict as the
-  strictest system behind it, and the inputs must be at least as strict as the contract.** Both
-  boundaries: epic 3 broke each one once.
-- Auth fails closed. Prove real wiring with a child-process test of `main.ts`.
-- Attach listeners before the first `await`. In Node, "I called it" and "it happened" differ: save
-  first, then close.
-- Bounded memory needs a rule for what falls outside it (`baseSeq` / `stale`).
-- "Would this op change the document?" is NOT "was it applied?". An id is a claim, content is the fact.
-- Rate limit where work ARRIVES. Cheap requests must not share an eviction pool with expensive ones.
-- **Anything a program awaits needs an end from outside.** A `Promise.race` leaves three things
-  behind: the loser (attach `.catch`, abort it), the timer (clear it), and any listener the loser
-  registered (remove it). A wait loop you race must be cancelled too.
-- **The truth is in Postgres; a queue message is a pointer.** Then a lost, duplicated, stale or
-  forged message can do nothing, and a sweep can recover from any of them.
-- **Put the invariant where no code path can walk around it**: CHECK constraints, a partial unique
-  index as a business rule. "Count, then insert" is two statements and races; the index is one.
-- A data-modifying CTE shares one snapshot with its outer query. Read "how it is now" in a second
-  statement.
-- A test named "X never happens" must COUNT X. Loose bounds hide off-by-ones. Never wait for
-  EXACTLY n of something that keeps growing: a poll looks before and after the moment.
-- A flaky test is a bug report: four of them were real bugs.
-- An oracle must not share code with what it judges. After building a simulator, sweep thousands of
-  seeds once and commit the ones that fail.
-- Forward compatibility must cover new VALUES inside known message types, not only new types.
-- React: open connections in an effect, never in render/useMemo; a library that defers its start
-  must check "was I closed meanwhile?".
-- **Uniqueness is not ownership.** Docker refused a second container with the same name, and ten
-  racing starters still removed each other's: a loser read "port taken" (taken by the WINNER) and
-  deleted it. One starter per resource: single-flight in-process, a unique job across processes.
-- A number remembered before an await can be stale after it: read the port AFTER ready.
-- Ask the system, don't parse its prose: an exec that raced a container's death had an EMPTY stderr.
-- `set -e` does not stop a script on a failure inside `a && b && c` (except the last): one command
-  per line.
-- Every resource needs an owner label before it gets a reaper, or one environment's cleanup eats
-  another's.
-- A test that holds a port must use a range nobody else in the file uses.
-- When a subagent writes something you will publish, read the AUTHORED surface and prove the
-  generated artifact is exactly its product (rebuild, compare bytes). Cheaper and stronger than
-  skimming the output.
+`SPEC.md` (spec), `BEADS.md` + `.beads/key-map.json` (bead graph, incl. E10), `bd memories`,
+`bd show <id>` comments (per-bead build notes + VERIFY notes), `VERIFICATION.md`, `Makefile`
+(`make chaos`, `make drills` added this run), `docs/handbook/` (lessons, builders, PDFs).
