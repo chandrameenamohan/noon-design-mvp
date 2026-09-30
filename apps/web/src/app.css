@@ -184,6 +184,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* --- the AI panel (right pane, under the inspector) and the ship control (top bar) --------------- */
 .ai-panel { display: grid; gap: var(--space-2); padding: var(--space-3); border-top: 1px solid var(--border); }
 .ai-panel textarea { resize: vertical; }
+/* `display: grid` above outranks the browser's own [hidden] rule, so the bar's AI button needs this one to close the panel. */
+.ai-panel[hidden] { display: none; }
 .ai-actions { display: flex; gap: var(--space-2); }
 #ai-status { margin: 0; min-height: 1.5rem; font-size: var(--text-sm); }
 .ai-steps { margin: 0; padding-inline-start: var(--space-6); max-height: 10rem; overflow-y: auto; font-size: var(--text-sm); }
