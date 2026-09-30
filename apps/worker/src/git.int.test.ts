@@ -1,21 +1,16 @@
-import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 import type { GitEvent } from "@noon/db";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { createGitPeer, type Apply, type ChangedPage } from "./git.ts";
+import { exec, git, localOrigin } from "./git-testing.ts";
 import { pagePath } from "./sandbox.ts";
 
 // E5.3a: integration:missed-webhook-reconciled and integration:worktree-cleaned. Real Postgres, real git.
 // The "Gitea" is a local bare repo (the peer fetches a path as it fetches a URL, as sandbox-testing.ts does):
 // no webhook is ever delivered here, which is exactly the missed delivery.
-const exec = promisify(execFile);
-const who = { GIT_AUTHOR_NAME: "eng", GIT_AUTHOR_EMAIL: "eng@localhost", GIT_COMMITTER_NAME: "eng", GIT_COMMITTER_EMAIL: "eng@localhost" };
-const git = async (cwd: string, ...args: string[]): Promise<string> => (await exec("git", args, { cwd, env: { ...process.env, ...who } })).stdout.trim();
 
 const DOC = "0f9c7a0e-1b2c-4d3e-8f00-000000000001";
 const OTHER = "0f9c7a0e-1b2c-4d3e-8f00-000000000002";
@@ -24,6 +19,7 @@ let root: string;
 let origin: string;
 let work: string;
 let dir: string;
+let commitOn: (files: Record<string, string>, message: string, branch: string) => Promise<string>;
 
 beforeAll(async () => {
   t = await createTestDb();
@@ -33,27 +29,15 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await t.rawQuery("delete from git_events");
-  root = mkdtempSync(join(tmpdir(), "noon-git-peer-"));
-  origin = join(root, "origin.git");
-  work = join(root, "work");
+  const local = await localOrigin("noon-git-peer-");
+  ({ root, origin, work } = local);
+  commitOn = local.commit;
   dir = join(root, "peer");
-  await exec("git", ["init", "--quiet", "--bare", "--initial-branch=main", origin]);
-  await exec("git", ["clone", "--quiet", origin, work]);
-  await commit({ "README.md": "seed\n" }, "seed");
-  return () => { rmSync(root, { recursive: true, force: true }); };
+  return local.remove;
 });
 
-/** Writes the files, commits and pushes: what an engineer does. Resolves with the new commit. */
-async function commit(files: Record<string, string>, message: string, branch = "main"): Promise<string> {
-  for (const [path, content] of Object.entries(files)) {
-    mkdirSync(dirname(join(work, path)), { recursive: true });
-    writeFileSync(join(work, path), content);
-  }
-  await git(work, "add", "--all");
-  await git(work, "commit", "--quiet", "--allow-empty", "-m", message);
-  await git(work, "push", "--quiet", "origin", `HEAD:refs/heads/${branch}`);
-  return git(work, "rev-parse", "HEAD");
-}
+/** What an engineer does: commit and push, to main unless told otherwise. */
+const commit = (files: Record<string, string>, message: string, branch = "main"): Promise<string> => commitOn(files, message, branch);
 
 function peer(apply: Apply = () => Promise.resolve()) {
   const logs: string[] = [];

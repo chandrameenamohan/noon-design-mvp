@@ -1,13 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Browser } from "@playwright/test";
-import type { Doc } from "@noon/contracts";
 import { expect, test } from "./fixtures.ts";
-import { documentWithButton, pushPage, relabelled } from "./gitea.ts";
+import { documentWithButton, pushPage, relabelled, welcomeOf } from "./gitea.ts";
 
 // e2e:conflict-banner-tree-unchanged (F16b). An engineer pushes the document's generated page out of shape to
 // the dev stack's REAL Gitea; the REAL git peer refuses it whole. The room is exactly as it was (the tree's hash
 // and its seq, as a fresh joiner is welcomed with them), the open canvas names the commit and the file, and
-// editing goes on. Ship (F17) is E5.5's and is not built yet: its "keeps working" belongs to that bead's e2e.
+// editing goes on. Ship keeping working with the banner up is e2e/ship.spec.ts.
 const user = `e2e-${String(Date.now())}-conflict@example.com`;
 test.setTimeout(60_000);
 
@@ -19,22 +18,8 @@ const canonical = (value: unknown): string =>
 
 /** What the room holds NOW, as it welcomes a new peer: the tree's hash and the seq it has reached. Opening also asks the git peer to reconcile. */
 async function roomState(browser: Browser, url: string): Promise<{ tree: string; seq: number }> {
-  const context = await browser.newContext();
-  try {
-    const joiner = await context.newPage();
-    const welcome = new Promise<{ doc: Doc; seq: number }>((resolve) => {
-      joiner.on("websocket", (ws) => { ws.on("framereceived", (frame) => {
-        const message = typeof frame.payload === "string" ? (JSON.parse(frame.payload) as { type: string; doc: Doc; seq: number }) : undefined;
-        if (message?.type === "welcome") resolve(message);
-      }); });
-    });
-    await joiner.goto(url);
-    await expect(joiner.getByRole("status")).toHaveText("live");
-    const { doc, seq } = await welcome;
-    return { tree: createHash("sha256").update(canonical(doc)).digest("hex"), seq };
-  } finally {
-    await context.close();
-  }
+  const { doc, seq } = await welcomeOf(browser, url);
+  return { tree: createHash("sha256").update(canonical(doc)).digest("hex"), seq };
 }
 
 test("a push that breaks the page's shape changes nothing; the canvas names the commit and file, and editing goes on", async ({ page, browser }) => {

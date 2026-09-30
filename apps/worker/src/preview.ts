@@ -2,8 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Manifest } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { generate } from "@noon/codegen";
-import { connectPeer } from "@noon/peer-client";
-import { signSessionToken } from "@noon/session-token";
+import { readingPeer } from "./live.ts";
 import { isRunning, previewUrl, pushPage, startSandbox, type SandboxOptions } from "./sandbox.ts";
 import { JobFailure } from "./worker.ts";
 
@@ -64,14 +63,7 @@ export function createPreviewHandler({ sessions, manifest, sandbox, stopping, st
       // canvas must load the page afresh, and it does exactly when the address changes.
       announce = `${previewUrl(url, job.documentId)}&started=${String(Date.now())}`;
     };
-    const peer = connectPeer({
-      manifest,
-      // Signed for the person who opened the preview; it reads, and never submits anything.
-      session: () => Promise.resolve({
-        wsUrl: `${sessions.syncUrl}/documents/${job.documentId}`,
-        token: signSessionToken({ userId, orgId: job.orgId, documentId: job.documentId, secret: sessions.secret, ttlSeconds: 60 }),
-      }),
-    });
+    const peer = readingPeer(job, userId, sessions, manifest); // for the person who opened the preview
     // Every way out of the loop below while the job is being stopped ends HERE, whatever docker call
     // it was in the middle of: cancelled = end quietly (the worker records `cancelled`), a stopping
     // worker = fail by name, as an AI run does, so the row says why the preview went away.

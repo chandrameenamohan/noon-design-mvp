@@ -4,6 +4,7 @@ import type { GitEvent, GitStore } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import type { ChangedPage, PageBase } from "./git.ts";
+import { whenLive, within } from "./live.ts";
 import { pushOps } from "./push-ops.ts";
 
 /**
@@ -18,15 +19,20 @@ import { pushOps } from "./push-ops.ts";
  * shows it: keepConflict). Whatever the room then refuses op by op (a remove on the canvas won the race) is counted.
  */
 export type PushOutcome =
-  | { kind: "skipped"; why: "other_branch" | "no_document" }
+  | { kind: "skipped"; why: "other_branch" | "no_document" | "shipped" }
   | { kind: "conflict"; reason: ConflictReason; detail: string }
   | { kind: "applied"; ops: number; refused: number };
 
-export function createPushApplier({ sessions, manifest, documentOrg, connectTimeoutMs = 10_000, settleTimeoutMs = 30_000, WebSocketImpl }: {
+export function createPushApplier({ sessions, manifest, documentOrg, shippedCommit, connectTimeoutMs = 10_000, settleTimeoutMs = 30_000, WebSocketImpl }: {
   /** `syncUrl` is how THIS process reaches the sync server. */
   sessions: { secret: string; syncUrl: string };
   manifest: Manifest;
   documentOrg: (documentId: string) => Promise<string | undefined>;
+  /**
+   * E5.5: did Ship make this commit? Its page is the document as it was when Ship read it, so it is skipped: the
+   * three-way diff of it against the room would undo every canvas edit that raced the ship.
+   */
+  shippedCommit: (sha: string) => Promise<boolean>;
   connectTimeoutMs?: number;
   /** How long the room may take to answer every op of one page. */
   settleTimeoutMs?: number;
@@ -34,6 +40,7 @@ export function createPushApplier({ sessions, manifest, documentOrg, connectTime
 }): (event: GitEvent, page: ChangedPage, base: () => Promise<PageBase>) => Promise<PushOutcome> {
   return async (event, page, base) => {
     if (event.ref !== `refs/heads/noon/${page.documentId}`) return { kind: "skipped", why: "other_branch" };
+    if (await shippedCommit(event.after)) return { kind: "skipped", why: "shipped" };
     if ("refused" in page) return { kind: "conflict", reason: page.refused, detail: page.path };
     const parsed = parse(page.tsx, manifest);
     if (!parsed.ok) return { kind: "conflict", reason: parsed.reason, detail: parsed.detail };
@@ -52,13 +59,7 @@ export function createPushApplier({ sessions, manifest, documentOrg, connectTime
       }),
     });
     try {
-      let check: NodeJS.Timeout | undefined;
-      await within(connectTimeoutMs, "sync_unreachable", new Promise<void>((resolve, reject) => {
-        check = setInterval(() => {
-          if (peer.status === "live") resolve();
-          else if (peer.closedBecause !== undefined) reject(new Error(`sync closed the git peer: ${peer.closedBecause}`));
-        }, 20);
-      })).finally(() => { clearInterval(check); });
+      await whenLive(peer, connectTimeoutMs);
       // The CONFIRMED document: the base of the diff must be what the room holds, never a guess.
       const result = pushOps({ base: baseDoc?.ok ? baseDoc.doc : undefined, target: parsed.doc, current: peer.confirmed, earlierIds: before.earlierIds });
       if (!result.ok) return { kind: "conflict", reason: result.reason, detail: result.detail };
@@ -87,13 +88,4 @@ export function createPushApplier({ sessions, manifest, documentOrg, connectTime
 export async function keepConflict(store: Pick<GitStore, "recordConflict" | "clearConflict">, event: GitEvent, page: ChangedPage, outcome: PushOutcome): Promise<void> {
   if (outcome.kind === "conflict") await store.recordConflict(page.documentId, { commit: event.after, file: page.path, reason: outcome.reason, detail: outcome.detail });
   else if (outcome.kind === "applied") await store.clearConflict(page.documentId);
-}
-
-async function within<T>(ms: number, reason: string, work: Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error(reason)); }, ms); })]);
-  } finally {
-    clearTimeout(timer);
-  }
 }

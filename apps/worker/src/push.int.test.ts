@@ -1,8 +1,4 @@
-import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { promisify } from "node:util";
+import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
 import { generate } from "@noon/codegen";
 import type { Doc, Op } from "@noon/contracts";
@@ -11,22 +7,19 @@ import { applyOp, emptyDoc } from "@noon/doc-model";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { connect, TEST_ORG, TEST_SECRET, useSyncServer, type TestPeer } from "../../sync/src/testing.ts";
 import { createGitPeer } from "./git.ts";
+import { localOrigin, type LocalOrigin } from "./git-testing.ts";
 import { createPushApplier, type PushOutcome } from "./push.ts";
 import { pagePath } from "./sandbox.ts";
 
 // E5.3b, integration:push-becomes-ops. Real git (a local bare repo stands in for Gitea, as in git.int.test.ts),
 // real Postgres for the git peer's inbox, the REAL sync server and the REAL peer-client. A person is in the
 // document the whole time: what they receive is what the canvas would show.
-const exec = promisify(execFile);
-const who = { GIT_AUTHOR_NAME: "eng", GIT_AUTHOR_EMAIL: "eng@localhost", GIT_COMMITTER_NAME: "eng", GIT_COMMITTER_EMAIL: "eng@localhost" };
-const git = async (cwd: string, ...args: string[]): Promise<string> => (await exec("git", args, { cwd, env: { ...process.env, ...who } })).stdout.trim();
 
 const DOC = "0f9c7a0e-1b2c-4d3e-8f00-00000000e53b";
 const BRANCH = `noon/${DOC}`;
 const ctx = useSyncServer();
 let t: TestDb;
-let root: string;
-let work: string;
+let local: LocalOrigin;
 let person: TestPeer;
 /** The document as the person holds it, rebuilt from the ops the room sent them. */
 let doc: Doc;
@@ -41,35 +34,21 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await t.rawQuery("delete from git_events");
-  root = mkdtempSync(join(tmpdir(), "noon-push-"));
-  const origin = join(root, "origin.git");
-  work = join(root, "work");
-  await exec("git", ["init", "--quiet", "--bare", "--initial-branch=main", origin]);
-  await exec("git", ["clone", "--quiet", origin, work]);
-  await commit({ "README.md": "seed\n" }, "seed", "main");
-  const toOps = createPushApplier({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, documentOrg: (id) => Promise.resolve(id === DOC ? TEST_ORG : undefined) });
+  local = await localOrigin("noon-push-");
+  const toOps = createPushApplier({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, documentOrg: (id) => Promise.resolve(id === DOC ? TEST_ORG : undefined), shippedCommit: (sha) => t.db.gitStore().shippedCommit(sha) });
   outcomes = [];
-  peer = createGitPeer({ seed: { url: origin }, dir: join(root, "peer"), store: t.db.gitStore(), log: () => undefined, apply: async (event, page, base) => { outcomes.push(await toOps(event, page, base)); } });
+  peer = createGitPeer({ seed: { url: local.origin }, dir: join(local.root, "peer"), store: t.db.gitStore(), log: () => undefined, apply: async (event, page, base) => { outcomes.push(await toOps(event, page, base)); } });
   await peer.reconcile();
   while (await peer.processNext());
   person = await connect(ctx.server.url, DOC);
   doc = emptyDoc();
   return () => {
     person.close();
-    rmSync(root, { recursive: true, force: true });
+    local.remove();
   };
 });
 
-async function commit(files: Record<string, string>, message: string, branch = BRANCH): Promise<string> {
-  for (const [path, content] of Object.entries(files)) {
-    mkdirSync(dirname(join(work, path)), { recursive: true });
-    writeFileSync(join(work, path), content);
-  }
-  await git(work, "add", "--all");
-  await git(work, "commit", "--quiet", "--allow-empty", "-m", message);
-  await git(work, "push", "--quiet", "--force", "origin", `HEAD:refs/heads/${branch}`);
-  return git(work, "rev-parse", "HEAD");
-}
+const commit = (files: Record<string, string>, message: string, branch = BRANCH): Promise<string> => local.commit(files, message, branch, true);
 /** The page file for a document, exactly as codegen writes it. */
 const fileOf = (page: Doc): string => {
   const generated = generate(page, manifest);
@@ -83,8 +62,9 @@ async function edit(op: Op): Promise<void> {
   doc = applyOp(doc, op);
 }
 /** Commits the page on the document's branch and lets the git peer work: what a push plus its webhook does. */
-async function push(page: Doc | string, branch = BRANCH): Promise<string> {
+async function push(page: Doc | string, branch = BRANCH, beforeTheWebhook: (sha: string) => Promise<void> = () => Promise.resolve()): Promise<string> {
   const sha = await commit({ [pagePath(DOC)]: typeof page === "string" ? page : fileOf(page) }, "edit the page", branch);
+  await beforeTheWebhook(sha);
   await peer.reconcile();
   while (await peer.processNext());
   return sha;
@@ -147,4 +127,22 @@ test("only the document's own branch speaks for it; a page out of shape or re-us
   await push(other);
   expect(outcomes.at(-1)).toMatchObject({ kind: "conflict", reason: "root_mismatch" });
   expect(gitOps().map((m) => (m as { op: Op }).op.type)).toEqual(["add_node", "remove_node"]); // b2 in, b2 out: nothing else ever left
+});
+
+test("a commit Ship made is skipped: a canvas edit that raced the ship stays (E5.5)", async () => {
+  await edit(button("b1", "Before"));
+  await push(doc); // the branch as it was: the last ship, or an engineer's push
+  await edit(setLabel("b1", "Shipped"));
+  const shipped = doc; // what Ship read and generated
+  await edit(setLabel("b1", "edited on the canvas while shipping"));
+  // Ship records its commit on its job BEFORE it pushes, so the commit is known by the time the push is seen.
+  const org = await t.createOrg("ship");
+  const workspace = await t.db.forOrg(org.id).createWorkspace({ name: "w" });
+  const document = await t.db.forOrg(org.id).createDocument({ workspaceId: workspace.id, title: "d" });
+  await push(shipped, BRANCH, async (sha) => {
+    await t.rawQuery("insert into jobs (org_id, document_id, queue, status, started_at, input, output) values ($1, $2, 'ship', 'running', now(), '{}', $3)", [org.id, document?.id, JSON.stringify({ commit: sha, pr: null })]);
+  });
+  expect(outcomes.at(-1)).toEqual({ kind: "skipped", why: "shipped" });
+  // Diffed, "Before" -> "Shipped" would have been replayed onto the room: the racing edit, undone.
+  expect(gitOps()).toEqual([]);
 });

@@ -32,6 +32,8 @@ export default defineConfig({
     // The REAL git peer (E5.3b), from source, against the dev stack's Gitea, with a mirror of its own. setup.ts
     // stops the compose one: both would drain the same inbox, and that one would edit through the compose sync.
     { command: fromEnv(`WORKER_QUEUE=git SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git GIT_PEER_DIR=${join(tmpdir(), "noon-e2e-git")} SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /git peer watching/u }, reuseExistingServer: false },
+    // The REAL ship worker (E5.5), from source, against the dev stack's Gitea; setup.ts stops the compose one.
+    { command: fromEnv(`WORKER_QUEUE=ship SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: ship/u }, reuseExistingServer: false },
     { command: `PUBLIC_HOST=localhost SANDBOX_PROXY_URL=http://127.0.0.1:${String(PORTS.sandboxProxy)} API_TARGET=http://localhost:${String(PORTS.api)} pnpm --filter @noon/web exec vite --port ${String(PORTS.web)} --strictPort`, url: `http://localhost:${String(PORTS.web)}`, reuseExistingServer: false },
   ],
 });

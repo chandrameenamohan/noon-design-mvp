@@ -8,6 +8,7 @@ import { ConflictBanner } from "./ConflictBanner.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
+import { ShipPanel } from "./ShipPanel.tsx";
 import { usePeer } from "./usePeer.ts";
 
 type Component = Manifest["components"][number];
@@ -111,6 +112,7 @@ export function Canvas({ documentId }: { documentId: string }) {
         {manifest.components.map((component) => <button key={component.name} type="button" onClick={() => { add(component); }}>Add {component.name}</button>)}
       </div>
       <ConflictBanner documentId={documentId} />
+      <ShipPanel documentId={documentId} />
       <AiPanel documentId={documentId} />
       {refusals.map((refusal) => (
         <p key={refusal.id} role="alert" className="refusal">

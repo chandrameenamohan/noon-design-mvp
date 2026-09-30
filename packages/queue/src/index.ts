@@ -2,8 +2,8 @@ import { Queue, type ConnectionOptions } from "bullmq";
 import { Id } from "@noon/contracts";
 import { z } from "zod";
 
-// ponytail: only the queues an epic already needs. `git` and `ship` arrive with epic 5.
-export const QUEUES = ["ai", "sandbox"] as const;
+// ponytail: only the queues an epic already needs. The git peer (E5.3a) has no queue: its inbox is in Postgres.
+export const QUEUES = ["ai", "sandbox", "ship"] as const;
 export type QueueName = (typeof QUEUES)[number];
 
 /**

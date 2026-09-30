@@ -9,6 +9,7 @@ import {
   CreateRunBody,
   CreateWorkspaceBody,
   DocumentConflict,
+  DocumentShip,
   PageQuery,
   type ErrorBody,
   type HealthResponse,
@@ -293,6 +294,28 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin, webho
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     const conflict = doc && (await db.forOrg(doc.orgId).getConflict(doc.id));
     return conflict === undefined ? notFound(c) : c.json(DocumentConflict.parse({ conflict }));
+  });
+
+  // F17: Ship. A job, like a run: the row IS the ship, the queue only tells the ship worker (which alone holds the
+  // Gitea token) to look. Presses coalesce into the ship still waiting (201 when this press made it, 200 when it
+  // joined it), so a double click or two tabs never make two; a press while one runs queues the next, which reads
+  // the document afresh. MEMBERSHIP ONLY, like runs, until E8.2.
+  app.post("/documents/:id/ship", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const started = doc && (await db.forOrg(doc.orgId).startShip({ documentId: doc.id, createdBy: c.var.user.id }));
+    if (!started) return notFound(c);
+    if (started.created) {
+      // Left to the sweep if Redis is away, as a run is: the job exists, and it will be found.
+      await enqueue(started.created).catch((err: unknown) => {
+        process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
+      });
+    }
+    return c.json(started.ship, started.created ? 201 : 200);
+  });
+  app.get("/documents/:id/ship", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const ship = doc && (await db.forOrg(doc.orgId).getShip(doc.id));
+    return ship === undefined ? notFound(c) : c.json(DocumentShip.parse({ ship }));
   });
 
   app.notFound(notFound);

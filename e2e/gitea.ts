@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEnv, promisify } from "node:util";
-import type { Page } from "@playwright/test";
+import type { Browser, Page } from "@playwright/test";
 import type { Doc } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { generate } from "../packages/codegen/src/index.ts";
@@ -70,6 +70,49 @@ export function relabelled(buttonId: string, label: string): string {
     },
   };
   const file = generate(edited, manifest);
+  if (!file.ok) throw new Error(file.reason);
+  return file.tsx;
+}
+
+/** The room's document as it welcomes a new peer, and the seq it has reached. Opening also asks the git peer to reconcile. */
+export async function welcomeOf(browser: Browser, url: string): Promise<{ doc: Doc; seq: number }> {
+  const context = await browser.newContext();
+  try {
+    const joiner = await context.newPage();
+    const welcome = new Promise<{ doc: Doc; seq: number }>((resolve) => {
+      joiner.on("websocket", (ws) => { ws.on("framereceived", (frame) => {
+        const message = typeof frame.payload === "string" ? (JSON.parse(frame.payload) as { type: string; doc: Doc; seq: number }) : undefined;
+        if (message?.type === "welcome") resolve(message);
+      }); });
+    });
+    await joiner.goto(url);
+    await expect(joiner.getByRole("status")).toHaveText("live");
+    return await welcome;
+  } finally {
+    await context.close();
+  }
+}
+
+// --- Ship (F17): what Gitea itself holds -------------------------------------------------------------
+const API = `${REPO.replace(/\/noon\/sample-app\.git$/u, "")}/api/v1/repos/noon/sample-app`;
+const gitea = async (path: string, init: RequestInit = {}): Promise<Response> => fetch(`${API}${path}`, { ...init, headers: { authorization: `token ${TOKEN}`, "content-type": "application/json" } });
+/** The open pull requests whose head is the document's branch. */
+export async function openPullsOf(documentId: string): Promise<{ number: number; head: { sha: string } }[]> {
+  const pulls = (await (await gitea("/pulls?state=open&limit=50")).json()) as { number: number; head: { ref: string; sha: string } }[];
+  return pulls.filter((pull) => pull.head.ref === `noon/${documentId}`);
+}
+/** The document's page as its branch in Gitea holds it, byte for byte (null: no such file or branch). */
+export async function pageInGitea(documentId: string): Promise<string | null> {
+  const res = await gitea(`/raw/src/pages/noon-${documentId}.tsx?ref=${encodeURIComponent(`noon/${documentId}`)}`);
+  return res.ok ? res.text() : null;
+}
+/** Closes the branch's pull requests; call it in `finally` (before removing the branch). */
+export async function closePulls(documentId: string): Promise<void> {
+  for (const pull of await openPullsOf(documentId)) await gitea(`/pulls/${String(pull.number)}`, { method: "PATCH", body: JSON.stringify({ state: "closed" }) });
+}
+/** The document's generated page, as codegen writes it. */
+export function pageOf(doc: Doc): string {
+  const file = generate(doc, manifest);
   if (!file.ok) throw new Error(file.reason);
   return file.tsx;
 }

@@ -18,6 +18,7 @@ test("a page out of shape on the document's branch is a conflict, and nothing is
     sessions: { secret: "s".repeat(32), syncUrl: "ws://127.0.0.1:1" },
     manifest,
     documentOrg: (id) => { opened.push(`org ${id}`); return Promise.resolve("org"); },
+    shippedCommit: () => Promise.resolve(false),
     WebSocketImpl: function NoSocket() { opened.push("socket"); throw new Error("no socket may be opened for a conflict"); } as unknown as typeof WebSocket,
   });
   const noBase = () => { opened.push("base"); return Promise.resolve({ tsx: undefined, earlierIds: new Set<string>() }); };
@@ -26,6 +27,25 @@ test("a page out of shape on the document's branch is a conflict, and nothing is
   expect(outcome).toMatchObject({ kind: "conflict", reason: "extra_statement" });
   expect(await toOps(event, { documentId: DOC, path, refused: "not_a_file" }, noBase)).toEqual({ kind: "conflict", reason: "not_a_file", detail: path });
   expect(opened).toEqual([]);
+});
+
+test("a commit Ship made is skipped before anything is read or opened: the room already holds that document (E5.5)", async () => {
+  const asked: string[] = [];
+  const opened: string[] = [];
+  const toOps = createPushApplier({
+    sessions: { secret: "s".repeat(32), syncUrl: "ws://127.0.0.1:1" },
+    manifest,
+    documentOrg: () => { opened.push("org"); return Promise.resolve("org"); },
+    shippedCommit: (sha) => { asked.push(sha); return Promise.resolve(sha === event.after); },
+    WebSocketImpl: function NoSocket() { opened.push("socket"); throw new Error("no socket may be opened for a shipped commit"); } as unknown as typeof WebSocket,
+  });
+  const noBase = () => { opened.push("base"); return Promise.resolve({ tsx: undefined, earlierIds: new Set<string>() }); };
+  expect(await toOps(event, { documentId: DOC, path, tsx: inShape.tsx }, noBase)).toEqual({ kind: "skipped", why: "shipped" });
+  expect(asked).toEqual([event.after]);
+  expect(opened).toEqual([]);
+  // Another branch is not asked about at all: only the document's own branch speaks for it.
+  expect(await toOps({ ...event, ref: "refs/heads/main" }, { documentId: DOC, path, tsx: inShape.tsx }, noBase)).toEqual({ kind: "skipped", why: "other_branch" });
+  expect(asked).toHaveLength(1);
 });
 
 test("a refused page becomes the document's conflict, naming commit and file; an applied one clears it; a skipped one changes nothing", async () => {
@@ -39,6 +59,7 @@ test("a refused page becomes the document's conflict, naming commit and file; an
     { kind: "conflict", reason: "spread", detail: "line 3: a spread" },
     { kind: "skipped", why: "other_branch" },
     { kind: "skipped", why: "no_document" },
+    { kind: "skipped", why: "shipped" },
     { kind: "applied", ops: 0, refused: 0 },
   ];
   for (const outcome of outcomes) await keepConflict(store, event, page, outcome);

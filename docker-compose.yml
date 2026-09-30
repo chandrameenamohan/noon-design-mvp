@@ -205,6 +205,31 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # E5.5 (F17): Ship. Pushes the document's page to its branch in Gitea and opens the pull request, so it holds
+  # the Gitea token that may PUSH: no model and no Docker socket share its process. Each ship works in a bare
+  # repo of its own in /tmp, removed when the ship ends.
+  worker-ship:
+    build: .
+    command: ["node", "apps/worker/src/main.ts"]
+    environment:
+      WORKER_QUEUE: ship
+      DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      # It reads the document from the room, as a silent peer: its own session, signed with the sync server's secret.
+      SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+      SYNC_URL: "ws://sync:3001"
+      SEED_REPO: http://gitea:3000/noon/sample-app.git
+      GITEA_TOKEN: "${GITEA_TOKEN:-}"
+    depends_on:
+      gitea: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      sync: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 volumes:
   pgdata:
   giteadata:

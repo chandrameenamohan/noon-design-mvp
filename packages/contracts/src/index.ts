@@ -121,6 +121,27 @@ export type Conflict = z.infer<typeof Conflict>;
 export const DocumentConflict = z.strictObject({ conflict: Conflict.nullable() });
 export type DocumentConflict = z.infer<typeof DocumentConflict>;
 
+// --- Ship (F17) ------------------------------------------------------------------------------------
+/**
+ * What a running `ship` job reports. `commit`: the commit THIS job made on the document's branch (null when the
+ * branch already held the page as generated); the git peer skips it, as it is the document already. `pr`: the
+ * open pull request, once found or opened. Its `url` goes into a link's href: http(s) only.
+ */
+export const ShipOutput = z.strictObject({
+  commit: Conflict.shape.commit.nullable(),
+  pr: z.strictObject({ number: z.number().int().positive(), url: z.url({ protocol: /^https?$/u }) }).nullable(),
+});
+export type ShipOutput = z.infer<typeof ShipOutput>;
+/** A document's ship as the canvas reads it: a job, like a run. `error` is present exactly when it failed. */
+export const Ship = z.strictObject({
+  id: Id, documentId: Id, status: RunStatus, error: FailureReason.nullable(), commit: ShipOutput.shape.commit, pr: ShipOutput.shape.pr,
+  createdAt: Timestamp, finishedAt: Timestamp.nullable(),
+});
+export type Ship = z.infer<typeof Ship>;
+/** GET /documents/:id/ship: the newest ship, or null when the document was never shipped. */
+export const DocumentShip = z.strictObject({ ship: Ship.nullable() });
+export type DocumentShip = z.infer<typeof DocumentShip>;
+
 // --- Usage (F12) -----------------------------------------------------------------------------------
 // The upper bound is not taste: it is what the system BEHIND this schema can hold. Cost is a
 // numeric(12,6) column, whose largest value is 999999.999999 and whose scale is a millionth of a dollar

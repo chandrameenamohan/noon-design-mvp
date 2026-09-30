@@ -17,5 +17,5 @@ export default function teardown(): void {
   if (leftovers.length > 0) execFileSync("docker", ["rm", "--force", ...leftovers], { env: { ...process.env, PATH: path }, stdio: "ignore" });
   const networks = list("network", "ls", "--quiet", "--filter", "label=noon.sandbox=noon-e2e");
   if (networks.length > 0) execFileSync("docker", ["network", "rm", ...networks], { env: { ...process.env, PATH: path }, stdio: "ignore" });
-  execFileSync("docker", ["compose", "start", "worker", "worker-sandbox", "worker-git"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped them
+  execFileSync("docker", ["compose", "start", "worker", "worker-sandbox", "worker-git", "worker-ship"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped them
 }

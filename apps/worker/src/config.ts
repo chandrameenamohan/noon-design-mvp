@@ -25,7 +25,8 @@ const Env = z.object({
   // ONE queue per process. The sandbox queue needs the Docker daemon, which is root on the host; the
   // AI queue runs a model's subprocess. They never share a process (E4.2a security review).
   // `git` is the git peer (E5.3a): no queue message drives it, it polls its inbox in Postgres.
-  WORKER_QUEUE: z.enum(["ai", "sandbox", "git"], { error: "WORKER_QUEUE must be ai, sandbox or git" }).default("ai"),
+  // `ship` (E5.5) pushes to Gitea and opens pull requests: it holds the Gitea token, and no model nor Docker socket.
+  WORKER_QUEUE: z.enum(["ai", "sandbox", "git", "ship"], { error: "WORKER_QUEUE must be ai, sandbox, git or ship" }).default("ai"),
   SANDBOX_IMAGE: z.string().min(1).default("noon-sandbox:dev"),
   DOCKER: z.string().min(1).default("docker"),
   // This stack's sandboxes: the only ones its reaper may remove (the daemon is shared with tests).
@@ -46,7 +47,7 @@ const Env = z.object({
 
 export function loadConfig(env: Record<string, string | undefined>): {
   databaseUrl: string; redisUrl: string; sessions: { secret: string; syncUrl: string }; oauthToken: string | undefined; model: string;
-  queue: "ai" | "sandbox" | "git"; gitDir: string; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string; seed: SeedRepo };
+  queue: "ai" | "sandbox" | "git" | "ship"; gitDir: string; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string; seed: SeedRepo };
 } {
   const parsed = parseEnv(Env, env);
   // The preview tokens' key, derived and not a new secret in .env: the sync server's secret never leaves

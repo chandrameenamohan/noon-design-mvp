@@ -1,4 +1,4 @@
-import { Document, DocumentConflict, Org, Preview, Run, SessionResponse, Workspace } from "@noon/contracts";
+import { Document, DocumentConflict, DocumentShip, Org, Preview, Run, SessionResponse, Ship, Workspace } from "@noon/contracts";
 import type { z } from "zod";
 
 // Until epic 8 the api takes the caller's identity from a header, in development only (SPEC §2.16).
@@ -91,4 +91,14 @@ export async function readConflict(documentId: string): Promise<DocumentConflict
   if (res.status === 404) return "gone";
   if (!res.ok) throw new Error(`GET conflict answered ${String(res.status)}`);
   return DocumentConflict.parse(await res.json()).conflict;
+}
+
+// --- Ship (F17) ------------------------------------------------------------------------------------
+/** Presses Ship: the ship still waiting for this document, or a new one. Parsed with the contract (the pull request link goes into an href). */
+export const startShip = (documentId: string): Promise<Ship> => post(`/documents/${documentId}/ship`, Ship);
+/** The document's newest ship, or null when it was never shipped. */
+export async function readShip(documentId: string): Promise<Ship | null> {
+  const res = await fetch(`/api/documents/${documentId}/ship`, { headers: { "x-dev-user": devUser } });
+  if (!res.ok) throw new Error(`GET ship answered ${String(res.status)}`);
+  return DocumentShip.parse(await res.json()).ship;
 }

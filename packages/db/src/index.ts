@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -38,7 +38,7 @@ export type DocumentStore = {
   save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
 };
 
-const QUEUES = ["ai", "sandbox"] as const;
+const QUEUES = ["ai", "sandbox", "ship"] as const;
 type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string };
 /** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
 export type Job = { id: string; orgId: string; documentId: string; queue: JobKey["queue"]; input: Record<string, unknown>; /** Undefined once that user has been deleted. */ createdBy: string | undefined };
@@ -53,8 +53,11 @@ type JobStore = {
   cancelRequested(key: JobKey): Promise<boolean>;
   /** What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per job. */
   recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
-  /** What a RUNNING job has to say before it ends (a sandbox's preview URL; null while it restarts). Validated; a job that is not running is left as it is. */
-  report(key: JobKey, output: PreviewOutput | null): Promise<void>;
+  /**
+   * What a RUNNING job has to say before it ends: a sandbox's preview URL (null while it restarts), a ship's
+   * commit and pull request. Validated by the key's queue; a job that is not running is left as it is.
+   */
+  report(key: JobKey, output: PreviewOutput | ShipOutput | null): Promise<void>;
   /**
    * Documents whose sandbox must stay, across ALL orgs: a sandbox job queued or running, or finished
    * less than `graceMs` ago (a quick reopen finds it warm). The reaper removes every other sandbox.
@@ -94,6 +97,8 @@ export type GitStore = {
   recordConflict(documentId: string, conflict: Omit<Conflict, "at">): Promise<void>;
   /** A later push to the document's branch was applied: the conflict no longer stands. */
   clearConflict(documentId: string): Promise<void>;
+  /** E5.5: did a ship job make this commit? Its page is the document as it was, so the git peer skips it. */
+  shippedCommit(sha: string): Promise<boolean>;
 };
 // The same rules the table's checks hold, parsed BEFORE the write: a bad value is a caller's bug, named here.
 const GitSha = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
@@ -128,6 +133,14 @@ type OrgScope = {
   getPreview(documentId: string): Promise<Preview | undefined>;
   /** The newest push to the document's branch that changed nothing (F16b); null: none stands. Undefined: no such document in THIS org. */
   getConflict(documentId: string): Promise<Conflict | null | undefined>;
+  /**
+   * F17: makes sure a ship is waiting for the document: a queued ship job, unless one is waiting already (the
+   * unique index decides; presses coalesce into it). `created` is the new job's key, to enqueue. Undefined when
+   * the document does not exist in THIS org.
+   */
+  startShip(input: { documentId: string; createdBy: string | undefined }): Promise<{ ship: Ship; created: JobKey | undefined } | undefined>;
+  /** The document's newest ship; null: never shipped. Undefined when the document does not exist in THIS org. */
+  getShip(documentId: string): Promise<Ship | null | undefined>;
   /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
   cancelRun(documentId: string, id: string): Promise<Run | undefined>;
   /** Everything this org has consumed: totals over all of it, and one page of the records. Undefined = a bad cursor. */
@@ -168,6 +181,14 @@ const UsageTotalsRow = z
 const JobRow = z
   .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.enum(QUEUES), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
   .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
+
+// A ship's output is written by our own worker, but read as untrusted all the same: a row that does not parse reads as "nothing yet".
+const ShipRow = z
+  .object({ id: z.string(), document_id: z.string(), status: z.string(), error: z.string().nullable(), output: z.unknown(), created_at: timestamp, finished_at: nullableTimestamp })
+  .transform((r): Ship => {
+    const output = ShipOutput.safeParse(r.output);
+    return Ship.parse({ id: r.id, documentId: r.document_id, status: r.status, error: r.error, commit: output.success ? output.data.commit : null, pr: output.success ? output.data.pr : null, createdAt: r.created_at, finishedAt: r.finished_at });
+  });
 
 // The URL only counts while the job runs: a finished job's last address may belong to someone else by now.
 // Parsed as a sandbox's address (loopback only); a row that is not one reads as "no URL", never a 500.
@@ -399,8 +420,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           "select id, org_id, queue from jobs where status = 'queued' and queue = any($2) order by created_at, id limit $1",
           [limit, QUEUES],
         ),
-      async report({ jobId, orgId }, output) {
-        const valid = PreviewOutput.nullable().parse(output); // the contract the reader will use, BEFORE the write
+      async report({ queue, jobId, orgId }, output) {
+        const valid = (queue === "ship" ? ShipOutput : PreviewOutput).nullable().parse(output); // the contract the reader will use, BEFORE the write
         if (!isId(jobId) || !isId(orgId)) return;
         await pool.query("update jobs set output = $3 where org_id = $1 and id = $2 and status = 'running'", [orgId, jobId, JSON.stringify(valid)]);
       },
@@ -451,6 +472,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       async clearConflict(documentId) {
         if (isId(documentId)) await pool.query("delete from document_conflicts where document_id = $1", [documentId]);
       },
+      shippedCommit: async (sha) => (await pool.query("select 1 from jobs where queue = 'ship' and output ->> 'commit' = $1 limit 1", [GitSha.parse(sha)])).rowCount === 1,
     }),
 
     getDocumentForMember: async (documentId, userId) =>
@@ -472,6 +494,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         if (job) return job;
         return (await one(z.object({ id: z.string() }), "select id from documents where org_id = $1 and id = $2", [orgId, documentId])) ? { status: "none", url: null } : undefined;
       };
+      const newestShip = (documentId: string): Promise<Ship | undefined> =>
+        one(ShipRow, "select * from jobs where org_id = $1 and document_id = $2 and queue = 'ship' order by created_at desc, id desc limit 1", [orgId, documentId]);
       // An id that is not a UUID cannot name anything, so it means "not found" rather than a
       // Postgres 22P02 error (which would surface as a 500 and echo the caller's input).
       const orgExists = isId(orgId);
@@ -577,6 +601,25 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           // The document's org decides whether there is an answer at all; the conflict row, whether it is null.
           const found = await rows(ConflictRow, "select c.* from documents d left join document_conflicts c on c.document_id = d.id where d.org_id = $1 and d.id = $2", [orgId, documentId]);
           return found.length === 0 ? undefined : found[0] ?? null;
+        },
+        startShip: async ({ documentId, createdBy }) => {
+          if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
+          // `on conflict do nothing`: a ship already waiting for this document is the answer (jobs_one_queued_ship_per_document).
+          const inserted = await one(
+            z.object({ id: z.string() }),
+            "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ship', '{}', $3 from documents d where d.org_id = $1 and d.id = $2 on conflict do nothing returning id",
+            [orgId, documentId, createdBy ?? null],
+          );
+          // A second statement, so it sees the winner's commit. Not "the queued one": it may have been claimed in
+          // between, and then it is running and has not read the document before this press. None: no such document.
+          const ship = await newestShip(documentId);
+          return ship && { ship, created: inserted ? { queue: "ship" as const, jobId: inserted.id, orgId } : undefined };
+        },
+        async getShip(documentId) {
+          if (!orgExists || !isId(documentId)) return undefined;
+          const ship = await newestShip(documentId);
+          if (ship) return ship;
+          return (await one(z.object({ id: z.string() }), "select id from documents where org_id = $1 and id = $2", [orgId, documentId])) ? null : undefined;
         },
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)

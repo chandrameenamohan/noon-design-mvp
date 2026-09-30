@@ -43,6 +43,7 @@ test("a worker drains the AI queue unless told otherwise, and anything but one k
   for (const bad of ["", "mail", "ai,sandbox", "AI"]) expect(() => loadConfig({ ...good, WORKER_QUEUE: bad }), bad).toThrow(/WORKER_QUEUE/);
   expect(loadConfig({ ...good, WORKER_QUEUE: "git" })).toMatchObject({ queue: "git", gitDir: "/var/lib/noon-git" });
   expect(loadConfig({ ...good, WORKER_QUEUE: "git", GIT_PEER_DIR: "/data/git" }).gitDir).toBe("/data/git");
+  expect(loadConfig({ ...good, WORKER_QUEUE: "ship", GITEA_TOKEN: "t" })).toMatchObject({ queue: "ship", sandbox: { seed: { url: "http://gitea:3000/noon/sample-app.git", auth: { user: "noon", token: "t" } } } });
   expect(() => loadConfig({ ...good, WORKER_QUEUE: "git", GIT_PEER_DIR: "relative/git" })).toThrow(/GIT_PEER_DIR/);
   expect(loadConfig({ ...good, WORKER_QUEUE: "sandbox", SANDBOX_POOL: "noon-clean" }).sandbox.pool).toBe("noon-clean");
   for (const bad of ["", "Has Space", "x=y"]) expect(() => loadConfig({ ...good, SANDBOX_POOL: bad }), bad).toThrow(/SANDBOX_POOL/);

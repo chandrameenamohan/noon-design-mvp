@@ -9,6 +9,7 @@ import { createGitPeer } from "./git.ts";
 import { createPreviewHandler } from "./preview.ts";
 import { createPushApplier, keepConflict } from "./push.ts";
 import { reapSandboxes } from "./sandbox.ts";
+import { createShipHandler } from "./ship.ts";
 import { probeTools, sdkRunner } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
 import { startWorker, type Handlers } from "./worker.ts";
@@ -51,6 +52,16 @@ function sandboxHandlers(): Handlers {
   };
 }
 
+// E5.5 (F17): Ship. Its own process, as it holds the Gitea token that may push; the AI worker never does.
+function shipHandlers(): Handlers {
+  return {
+    ship: createShipHandler({
+      sessions: config.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
+      report: (job, output) => db.jobStore().report({ queue: "ship", jobId: job.id, orgId: job.orgId }, output),
+    }),
+  };
+}
+
 // A worker has no port to probe; the container healthcheck reads this file's age instead.
 const onAlive = (): void => { writeFileSync("/tmp/worker-alive", ""); };
 
@@ -58,7 +69,7 @@ const onAlive = (): void => { writeFileSync("/tmp/worker-alive", ""); };
 // put in one. ponytail: a 1 s poll of a partial index; LISTEN/NOTIFY if a second's delay ever matters.
 function startGitPeer(): Promise<{ stop(): Promise<void> }> {
   const store = db.gitStore();
-  const toOps = createPushApplier({ sessions: config.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId) });
+  const toOps = createPushApplier({ sessions: config.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId), shippedCommit: (sha) => store.shippedCommit(sha) });
   const peer = createGitPeer({
     seed: config.sandbox.seed, dir: config.gitDir, store, log,
     // E5.3b: each page becomes ops through peer-client. E5.4: a refused one becomes the document's conflict banner.
@@ -76,7 +87,7 @@ const worker = config.queue === "git"
   : await startWorker({
     db,
     redisUrl: config.redisUrl,
-    handlers: config.queue === "ai" ? aiHandlers() : sandboxHandlers(),
+    handlers: config.queue === "ai" ? aiHandlers() : config.queue === "ship" ? shipHandlers() : sandboxHandlers(),
     concurrency: { sandbox: config.sandbox.concurrency },
     sweepMs: 5000,
     onAlive,
@@ -85,7 +96,9 @@ process.stdout.write(config.queue === "ai"
   ? `worker draining queues: ai (model ${config.model}, token ${config.oauthToken === undefined ? "MISSING: every run will fail as token_missing" : "present"})\n`
   : config.queue === "git"
     ? `git peer watching ${config.sandbox.seed.url} (token ${config.sandbox.seed.auth === undefined ? "MISSING" : "present"})\n`
-    : `worker draining queues: sandbox (image ${config.sandbox.image}, at most ${String(config.sandbox.concurrency)} at once)\n`);
+    : config.queue === "ship"
+      ? `worker draining queues: ship (to ${config.sandbox.seed.url}, token ${config.sandbox.seed.auth === undefined ? "MISSING" : "present"})\n`
+      : `worker draining queues: sandbox (image ${config.sandbox.image}, at most ${String(config.sandbox.concurrency)} at once)\n`);
 
 // Tell the runs in flight to end NOW (as failed/worker_stopped: a row left `running` would block its
 // document's next run for ever), stop taking jobs, wait for those endings to be written, close the pool.
