@@ -1,3 +1,4 @@
+import { twoBrowsersOnANewDocument } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:ai-cursor-on-touched-node (E10.6): the AI is a cursor too. It has no pointer, so its mark ("AI") sits on the
@@ -6,12 +7,7 @@ import { expect, test } from "./fixtures.ts";
 const user = `e2e-${String(Date.now())}-ai-cursor@example.com`;
 
 test("the AI's cursor appears on the other browser's canvas, labelled AI, on the node it last touched, and leaves with the run", async ({ page, browser }) => {
-  await page.goto(`/?user=${user}`);
-  await page.getByRole("button", { name: "New document", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const other = await (await browser.newContext()).newPage();
-  await other.goto(page.url());
-  await expect(other.getByRole("status")).toHaveText("live");
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
 
   await page.getByLabel("Ask the AI to change this page").fill("a card with 4 buttons");
   await page.getByRole("button", { name: "Ask the AI", exact: true }).click();

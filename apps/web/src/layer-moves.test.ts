@@ -1,21 +1,10 @@
 import { expect, test } from "vitest";
 import type { Doc } from "@noon/contracts";
+import { doc } from "./doc.fixture.ts";
 import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Row } from "./layer-moves.ts";
 
 // unit:drop-to-move-op (E10.3): a drop intent becomes ONE move_node, or null when there is nowhere to go.
-
-// The page holds a card (with a button and a text), a stack (empty) and a second text.
-const doc: Doc = {
-  rootId: "root",
-  nodes: {
-    root: { id: "root", component: "Page", props: {}, parentId: null, children: ["card", "stack", "text2"] },
-    card: { id: "card", component: "Card", props: {}, parentId: "root", children: ["button", "text"] },
-    button: { id: "button", component: "Button", props: { label: "Go" }, parentId: "card", children: [] },
-    text: { id: "text", component: "Text", props: { value: "Hi" }, parentId: "card", children: [] },
-    stack: { id: "stack", component: "Stack", props: {}, parentId: "root", children: [] },
-    text2: { id: "text2", component: "Text", props: { value: "Bye" }, parentId: "root", children: [] },
-  },
-};
+// The page (doc.fixture.ts) holds a card (with a button and a text), a stack (empty) and a second text.
 
 test("before and after a row mean that row's parent, at the row's place or the one past it", () => {
   expect(dropToMoveOp(doc, { nodeId: "text2", targetId: "card", placement: "before" })).toEqual({ type: "move_node", nodeId: "text2", newParentId: "root", index: 0 });

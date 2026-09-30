@@ -1,22 +1,11 @@
 import { expect, test } from "vitest";
-import type { Doc, Manifest } from "@noon/contracts";
+import type { Manifest } from "@noon/contracts";
+import { doc } from "./doc.fixture.ts";
 import { addOpAt, indexAlong, insertLineAt, previewProps, requiredProps, slotForDrop, slotForSelection, slotOnCanvas } from "./library-adds.ts";
 
 // unit:drop-to-add-op (E10.5): a drop target (a row and a place, a node under the pointer, the selection) becomes
 // ONE slot (parentId + index), and the slot becomes ONE add_node with the manifest's required props.
-
-// The page holds a card (with a button and a text), a stack (empty) and a second text.
-const doc: Doc = {
-  rootId: "root",
-  nodes: {
-    root: { id: "root", component: "Page", props: {}, parentId: null, children: ["card", "stack", "text2"] },
-    card: { id: "card", component: "Card", props: {}, parentId: "root", children: ["button", "text"] },
-    button: { id: "button", component: "Button", props: { label: "Go" }, parentId: "card", children: [] },
-    text: { id: "text", component: "Text", props: { value: "Hi" }, parentId: "card", children: [] },
-    stack: { id: "stack", component: "Stack", props: {}, parentId: "root", children: [] },
-    text2: { id: "text2", component: "Text", props: { value: "Bye" }, parentId: "root", children: [] },
-  },
-};
+// The page (doc.fixture.ts) holds a card (with a button and a text), a stack (empty) and a second text.
 const CONTAINERS = new Set(["root", "card", "stack"]);
 const isContainer = (id: string): boolean => CONTAINERS.has(id);
 

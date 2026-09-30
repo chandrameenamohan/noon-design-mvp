@@ -1,38 +1,14 @@
-import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
+import { axeClean, box, button, centreOf, emptySpot, heading, layer, newDocument, tile, zoomOf } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:canvas-zoom-pan-select (E10.2): the real components on an infinite canvas; zoom at the pointer, pan,
 // click and keyboard selection with an outline and a label; the frame is inert; axe-clean in both themes.
 const user = `e2e-${String(Date.now())}-zoom@example.com`;
-const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
-/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
-const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
-const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const canvasOf = (page: Page) => page.getByRole("region", { name: "Canvas" });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
-const zoomOf = async (page: Page): Promise<number> => Number(await page.locator(".world").getAttribute("data-zoom"));
-const box = async (page: Page, selector: string): Promise<{ x: number; y: number; width: number; height: number }> => {
-  const found = await page.locator(selector).first().boundingBox();
-  if (!found) throw new Error(`${selector} has no box`);
-  return found;
-};
-/** The middle of a node's own element (its wrapper has no box): where a person would click it. */
-const centreOf = async (page: Page, component: string): Promise<{ x: number; y: number }> => {
-  const b = await box(page, `[data-node-id][data-component=${component}] > :first-child`);
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-};
-/** A spot on the sheet with nothing on it: the fitted frame leaves a margin, and its top-left corner is outside the frame. */
-const emptySpot = async (page: Page): Promise<{ x: number; y: number }> => { const c = await box(page, ".canvas"); return { x: c.x + 12, y: c.y + 12 }; };
-const axeClean = async (page: Page, theme: string): Promise<void> => {
-  const axe = await new AxeBuilder({ page }).analyze();
-  expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
-};
 
 async function pageWithCardButtonText(page: Page): Promise<void> {
-  await page.goto(`/?user=${user}`);
-  await button(page, "New document").click();
-  await expect(page.getByRole("status")).toHaveText("live");
+  await newDocument(page, user);
   await tile(page, "Card").click();
   await layer(page, "Card 1").click();
   await tile(page, "Button").click(); // into the card

@@ -1,43 +1,19 @@
-import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
+import { axeClean, box, button, centreOf, emptySpot, heading, layer, newDocument, tile, zoomOf } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:cursors-agree-across-zoom (E10.6): two browsers at different zooms see each other's pointer on the same
 // component, a still pointer fades after 5 s, an avatar in the bar jumps to that person's selection, and the
 // frame's fields keep the design system's own light look in the dark theme (E10.5 hand-off).
 const user = `e2e-${String(Date.now())}-cursors@example.com`;
-const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
-const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
-const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
-const zoomOf = async (page: Page): Promise<number> => Number(await page.locator(".world").getAttribute("data-zoom"));
-type Box = { x: number; y: number; width: number; height: number };
-const box = async (page: Page, selector: string): Promise<Box> => {
-  const found = await page.locator(selector).first().boundingBox();
-  if (!found) throw new Error(`${selector} has no box`);
-  return found;
-};
-/** The middle of a node's own element (its wrapper has no box). */
-const centreOf = async (page: Page, component: string): Promise<{ x: number; y: number }> => {
-  const b = await box(page, `[data-node-id][data-component=${component}] > :first-child`);
-  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-};
-/** A spot on the sheet with nothing on it: the fitted frame leaves a margin, and its top-left corner is outside the frame. */
-const emptySpot = async (page: Page): Promise<{ x: number; y: number }> => { const c = await box(page, ".canvas"); return { x: c.x + 12, y: c.y + 12 }; };
 /** How far the cursor's tip (its top-left corner) is from a screen point, in px. */
 const tipDistance = async (page: Page, from: { x: number; y: number }): Promise<number> => {
   const tip = await page.locator("[data-presence-cursor]").first().boundingBox();
   return tip ? Math.hypot(tip.x - from.x, tip.y - from.y) : Number.POSITIVE_INFINITY;
 };
-const axeClean = async (page: Page, theme: string): Promise<void> => {
-  const axe = await new AxeBuilder({ page }).analyze();
-  expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
-};
 
 test("a pointer rests on the Button in one browser and is drawn on the Button in the other, at a different zoom and after either side zooms; still 5 s, it fades; the avatar jumps to that person's selection", async ({ page, browser }) => {
-  await page.goto(`/?user=${user}`);
-  await button(page, "New document").click();
-  await expect(page.getByRole("status")).toHaveText("live");
+  await newDocument(page, user);
   await tile(page, "Card").click();
   await layer(page, "Card 1").click();
   await tile(page, "Button").click(); // into the card

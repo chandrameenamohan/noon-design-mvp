@@ -1,5 +1,5 @@
-import { AxeBuilder } from "@axe-core/playwright";
 import type { Locator, Page } from "@playwright/test";
+import { axeCleanLightAndDark, componentsOf, heading, layer, pageChildren, tile, treeOf, twoBrowsersOnANewDocument } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:library-drag-to-canvas (E10.5): the library lists every manifest component as a searchable tile with a live
@@ -7,24 +7,7 @@ import { expect, test } from "./fixtures.ts";
 // at the index the drop line shows; Enter adds into the selection (after it when it is a leaf); the new node is
 // selected; the other browser sees every add; axe-clean light and dark.
 const user = `e2e-${String(Date.now())}-library@example.com`;
-const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
-const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
-const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
 const library = (page: Page) => page.getByRole("region", { name: "Library" });
-/** The page's direct children on the canvas, in order. */
-const pageChildren = (page: Page) => page.locator(".page-frame > [data-node-id]");
-const componentsOf = async (rows: Locator): Promise<string[]> => rows.evaluateAll((els) => els.map((el) => el.getAttribute("data-component") ?? ""));
-const treeOf = (page: Page): Promise<string> =>
-  page.evaluate(() => {
-    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-component"), walk(child)]);
-    const root = document.querySelector("[data-node-id=root]");
-    return JSON.stringify(root ? walk(root) : "no root");
-  });
-const axeClean = async (page: Page, theme: string): Promise<void> => {
-  const axe = await new AxeBuilder({ page }).analyze();
-  expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
-};
 const middle = async (target: Locator): Promise<{ x: number; y: number; width: number; height: number }> => {
   const box = await target.boundingBox();
   if (!box) throw new Error("the target has no box");
@@ -57,12 +40,7 @@ async function countingAdds(page: Page): Promise<{ adds: () => number }> {
 test("every component is a searchable tile with a live render; Enter, a click and a drag onto the canvas or the tree each add ONE node where shown, and select it; the other browser sees them; axe-clean light and dark", async ({ page, browser }) => {
   await page.emulateMedia({ colorScheme: "light" });
   const sent = await countingAdds(page);
-  await page.goto(`/?user=${user}`);
-  await button(page, "New document").click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const other = await (await browser.newContext()).newPage();
-  await other.goto(page.url());
-  await expect(other.getByRole("status")).toHaveText("live");
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
 
   // A listbox of every manifest component, each tile a REAL render (the sample app's own classes), hidden from the
   // accessibility tree so the tile's name is the component's; the old "Add X" toolbar is gone.
@@ -169,8 +147,5 @@ test("every component is a searchable tile with a live render; Enter, a click an
   await expect(other.getByText("saved", { exact: true })).toBeVisible();
   expect(await treeOf(page)).toBe(await treeOf(other));
 
-  await axeClean(page, "light");
-  await button(page, "Dark theme").click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await axeClean(page, "dark");
+  await axeCleanLightAndDark(page);
 });

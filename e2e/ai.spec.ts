@@ -1,22 +1,13 @@
+import { twoBrowsersOnANewDocument } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // F9, F10, F11. The model is scripted (e2e/stub-worker.ts); everything else is the real thing: the api,
 // the queue, the worker's handler, peer-client, the sync server and two browsers.
 const user = `e2e-${String(Date.now())}-ai@example.com`;
 
-async function twoBrowsersOnANewDocument(page: import("@playwright/test").Page, browser: import("@playwright/test").Browser) {
-  await page.goto(`/?user=${user}`);
-  await page.getByRole("button", { name: "New document", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const other = await (await browser.newContext()).newPage();
-  await other.goto(page.url());
-  await expect(other.getByRole("status")).toHaveText("live");
-  return other;
-}
-
 // e2e:ai-run-streams
 test("an instruction makes the AI appear, its nodes arrive on BOTH canvases one by one while a person edits too, and the run ends `succeeded`", async ({ page, browser }) => {
-  const other = await twoBrowsersOnANewDocument(page, browser);
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
   await page.getByLabel("Ask the AI to change this page").fill("a card with 4 buttons");
   await page.getByRole("button", { name: "Ask the AI", exact: true }).click();
 
@@ -48,7 +39,7 @@ test("an instruction makes the AI appear, its nodes arrive on BOTH canvases one 
 
 // e2e:ai-cancel-within-3s
 test("cancel ends the run within 3 s: what the AI had already made stays, nothing more arrives, and the AI leaves", async ({ page, browser }) => {
-  const other = await twoBrowsersOnANewDocument(page, browser);
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
   await page.getByLabel("Ask the AI to change this page").fill("a card with 30 buttons");
   await page.getByRole("button", { name: "Ask the AI", exact: true }).click();
   const made = other.locator("[data-component=Button]");

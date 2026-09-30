@@ -1,29 +1,11 @@
-import { AxeBuilder } from "@axe-core/playwright";
 import type { Locator, Page } from "@playwright/test";
+import { axeCleanLightAndDark, button, componentsOf, heading, layer, pageChildren, tile, treeOf, twoBrowsersOnANewDocument } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:layers-drag-and-keyboard-reorder (E10.3): the layers are an ARIA tree whose selection is the canvas's,
 // both ways; a drag shows a line (before/after) or a box (into) and sends ONE move_node; Alt+arrows and
 // Delete do the same by keyboard; the other browser sees every move live; axe-clean light and dark.
 const user = `e2e-${String(Date.now())}-layers@example.com`;
-const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
-/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
-const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
-const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
-/** The page's direct children on the canvas, in order. */
-const pageChildren = (page: Page) => page.locator(".page-frame > [data-node-id]");
-const componentsOf = async (rows: Locator): Promise<string[]> => rows.evaluateAll((els) => els.map((el) => el.getAttribute("data-component") ?? ""));
-const treeOf = (page: Page): Promise<string> =>
-  page.evaluate(() => {
-    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-component"), walk(child)]);
-    const root = document.querySelector("[data-node-id=root]");
-    return JSON.stringify(root ? walk(root) : "no root");
-  });
-const axeClean = async (page: Page, theme: string): Promise<void> => {
-  const axe = await new AxeBuilder({ page }).analyze();
-  expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
-};
 const middle = async (row: Locator): Promise<{ x: number; y: number; height: number }> => {
   const box = await row.boundingBox();
   if (!box) throw new Error("the row has no box");
@@ -57,12 +39,7 @@ async function countingMoves(page: Page): Promise<{ moves: () => number }> {
 test("the tree mirrors the canvas both ways; drag reorders and nests as ONE move_node with a line or a box; Alt+arrows and Delete by keyboard; the other browser sees every move; axe-clean light and dark", async ({ page, browser }) => {
   await page.emulateMedia({ colorScheme: "light" });
   const sent = await countingMoves(page);
-  await page.goto(`/?user=${user}`);
-  await button(page, "New document").click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const other = await (await browser.newContext()).newPage();
-  await other.goto(page.url());
-  await expect(other.getByRole("status")).toHaveText("live");
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
 
   // Page [Card 1 [Button 1], Stack 1, Text 1]
   await tile(page, "Card").click();
@@ -193,8 +170,5 @@ test("the tree mirrors the canvas both ways; drag reorders and nests as ONE move
   await expect(other.getByText("saved", { exact: true })).toBeVisible();
   expect(await treeOf(page)).toBe(await treeOf(other));
 
-  await axeClean(page, "light");
-  await button(page, "Dark theme").click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await axeClean(page, "dark");
+  await axeCleanLightAndDark(page);
 });

@@ -100,7 +100,7 @@ export function PreviewSplit({ open, documentId, children }: { open: boolean; do
  * this canvas's own origin (/preview/...), and there the opaque origin also keeps the page away from the canvas.
  * ponytail: polling. A pushed "the URL changed" (SSE) is the upgrade if a second of lag ever matters.
  */
-export function Preview({ documentId }: { documentId: string }) {
+function Preview({ documentId }: { documentId: string }) {
   const [state, setState] = useState<PreviewState | "busy">();
   const hadUrl = useRef(false);
   // The device is a session's choice; the first is the phone, the frame a page most needs checking in.

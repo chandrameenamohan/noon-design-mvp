@@ -1,5 +1,5 @@
-import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
+import { axeClean, button, layer, tile, twoBrowsersOnANewDocument } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:inspector-edits-propagate (E10.4): the inspector is the manifest rendered in sections; each control kind
@@ -7,18 +7,10 @@ import { expect, test } from "./fixtures.ts";
 // value is one op, not one per keystroke; Reset sends null; gap and padding shade their space on the canvas
 // while hovered or focused; a refusal is repeated beside its control; axe-clean light and dark.
 const user = `e2e-${String(Date.now())}-inspector@example.com`;
-const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
-/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
-const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
-const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const inspector = (page: Page) => page.getByRole("complementary", { name: "Selected element" });
 const radio = (page: Page, group: string, option: string) => inspector(page).getByRole("radiogroup", { name: group, exact: true }).getByRole("radio", { name: option, exact: true });
 const field = (page: Page, name: string) => inspector(page).getByLabel(name, { exact: true });
 const shades = (page: Page) => page.locator("[data-outline=shade]");
-const axeClean = async (page: Page, theme: string): Promise<void> => {
-  const axe = await new AxeBuilder({ page }).analyze();
-  expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
-};
 
 /** Counts the set_prop ops THIS browser sends: the proof that typing is one op on commit, not one per keystroke. */
 async function countingSetProps(page: Page): Promise<{ sent: () => number }> {
@@ -38,12 +30,7 @@ async function countingSetProps(page: Page): Promise<{ sent: () => number }> {
 test("sections from the manifest; every control kind edits as one set_prop that the other browser's canvas and inspector follow; steppers, Reset, shading, an inline refusal; axe-clean light and dark", async ({ page, browser }) => {
   await page.emulateMedia({ colorScheme: "light" });
   const ops = await countingSetProps(page);
-  await page.goto(`/?user=${user}`);
-  await button(page, "New document").click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const other = await (await browser.newContext()).newPage();
-  await other.goto(page.url());
-  await expect(other.getByRole("status")).toHaveText("live");
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
 
   // Page [Stack 1 [Button 1, Text 1], Card 1]
   await tile(page, "Stack").click();
