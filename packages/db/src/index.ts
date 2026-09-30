@@ -891,7 +891,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             await client.query("rollback");
             return { made };
           }
-          await client.query("update idempotency_keys set job_id = $5 where org_id = $1 and user_id = $2 and key = $3", [...params, jobId]);
+          await client.query("update idempotency_keys set job_id = $4 where org_id = $1 and user_id = $2 and key = $3", [...params.slice(0, 3), jobId]);
           await client.query("commit");
           return { made };
         } catch (err) {

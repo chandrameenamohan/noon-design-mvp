@@ -54,7 +54,7 @@ describe("integration:idempotency-key-race", () => {
     const doc = await document("ann@example.com");
     const key = crypto.randomUUID();
     const answers = await Promise.all(Array.from({ length: 20 }, () => ship("ann@example.com", doc, key)));
-    expect(answers.map((a) => a.status).sort()).toEqual([201, ...Array<number>(19).fill(200)]);
+    expect(answers.map((a) => a.status).sort()).toEqual([...Array<number>(19).fill(200), 201]);
     const ships = await Promise.all(answers.map(async (a) => Ship.parse(await a.json())));
     const [first] = await jobs(doc, "ship");
     expect(await jobs(doc, "ship")).toHaveLength(1);
@@ -82,7 +82,8 @@ describe("integration:idempotency-key-race", () => {
 
   test("the same key with a different request is refused with 422, and makes nothing", async () => {
     const doc = await document("ann@example.com");
-    const other = await document("ann@example.com");
+    // Same org: a key is scoped to (org, user), so a document in another org would be a fresh key (next test).
+    const other = Document.parse(await (await post("ann@example.com", `/orgs/${doc.orgId}/workspaces/${doc.workspaceId}/documents`, { title: "Other" })).json());
     const key = crypto.randomUUID();
     const made = Run.parse(await (await run("ann@example.com", doc, key, "add a hero")).json());
     await finish(doc, made.id);
