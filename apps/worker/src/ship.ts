@@ -53,8 +53,13 @@ export function openPullOf(page: unknown, branch: string): ShippedPull | undefin
   return found && pullOf(found);
 }
 
-/** Did git refuse the push because the branch is not where we built on (not a fast-forward)? Anything else is a real failure. */
-export const pushRejected = (err: unknown): boolean => /\[rejected\]|non-fast-forward|\(fetch first\)/u.test(err instanceof Error ? err.message : String(err));
+/**
+ * Did git refuse the push because the branch is not where we built on? Either git saw it (not a fast-forward) or
+ * Gitea did, at its ref lock, when the branch was created or moved after git's ref advertisement (two first ships
+ * at once both push a create; the loser's is "reference already exists"). Anything else is a real failure.
+ */
+export const pushRejected = (err: unknown): boolean =>
+  /\[rejected\]|non-fast-forward|\(fetch first\)|cannot lock ref '[^']*': (?:reference already exists|is at [0-9a-f]+ but expected)/u.test(err instanceof Error ? err.message : String(err));
 
 /** `git ls-remote` as ref -> commit. */
 export function remoteHeads(output: string): Map<string, string> {

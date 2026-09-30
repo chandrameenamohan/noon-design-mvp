@@ -22,9 +22,13 @@ test("the branch's pull request is the OPEN one whose head is the branch, never 
   expect(() => openPullOf([{ ...pull(3, BRANCH), html_url: "javascript:alert(1)" }], BRANCH)).toThrow();
 });
 
-test("only git's own 'not a fast-forward' is a race to build again on; any other failure is one", () => {
+test("only a branch that moved (git's 'not a fast-forward', or Gitea's ref lock losing a race) is a race to build again on; any other failure is one", () => {
   expect(pushRejected(new Error("git push:  ! [rejected]        abc -> noon/x (non-fast-forward)"))).toBe(true);
   expect(pushRejected(new Error("git push:  ! [rejected]        abc -> noon/x (fetch first)"))).toBe(true);
+  // The race lost on the server's side: the ref was created (or moved) between git's ref advertisement and its lock.
+  expect(pushRejected(new Error("git push: remote: error: cannot lock ref 'refs/heads/noon/x': reference already exists\n ! [remote rejected] abc -> noon/x (failed to update ref)"))).toBe(true);
+  expect(pushRejected(new Error(`git push: remote: error: cannot lock ref 'refs/heads/noon/x': is at ${"a".repeat(40)} but expected ${"b".repeat(40)}`))).toBe(true);
+  expect(pushRejected(new Error("git push:  ! [remote rejected] abc -> noon/x (pre-receive hook declined)"))).toBe(false);
   expect(pushRejected(new Error("git push: fatal: unable to access 'http://gitea:3000/': Could not resolve host"))).toBe(false);
   expect(pushRejected(new Error("git push: remote: Unauthorized"))).toBe(false);
 });
