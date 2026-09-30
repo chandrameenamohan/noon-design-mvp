@@ -19,12 +19,12 @@ type Ctx = {
 /** The Gitea webhook secret every test server holds (E5.3a). */
 export const TEST_WEBHOOK_SECRET = "test-only-webhook-secret-0123456789abcdef";
 
-export function useTestServer({ enqueue = () => Promise.resolve() }: { enqueue?: (ref: JobRef) => Promise<void> } = {}): Ctx {
+export function useTestServer({ enqueue = () => Promise.resolve(), accessChanged }: { enqueue?: (ref: JobRef) => Promise<void>; accessChanged?: (change: { orgId: string; userId: string }) => Promise<void> } = {}): Ctx {
   let db: TestDb | undefined;
   let server: RunningServer | undefined;
   beforeAll(async () => {
     db = await createTestDb();
-    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, webhookSecret: TEST_WEBHOOK_SECRET, enqueue }); // runs are tested with a real queue in apps/worker
+    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, webhookSecret: TEST_WEBHOOK_SECRET, enqueue, ...(accessChanged ? { accessChanged } : {}) }); // runs are tested with a real queue in apps/worker
   });
   afterAll(async () => {
     await server?.close();

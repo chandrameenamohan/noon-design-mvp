@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { HealthResponse, Preview, SandboxUrl, SignUpBody, UsageAmount } from "./index.ts";
+import { HealthResponse, includes, Preview, Role, SandboxUrl, SignUpBody, UsageAmount } from "./index.ts";
 
 const valid = { status: "ok", service: "api" };
 
@@ -67,4 +67,10 @@ test("a sign-up password is 8 to 128 characters and nothing else is demanded of 
   expect(body("x".repeat(128))).toBe(true);
   expect(body("x".repeat(129))).toBe(false);
   expect(SignUpBody.safeParse({ email: "ann@example.com", name: "Ann", password: "x".repeat(8), role: "owner" }).success).toBe(false);
+});
+
+// F24: the roles are nested. Every pair, so that a rank swapped or a comparison flipped is caught.
+test("an owner may do what an editor may, an editor what a viewer may, and never the other way", () => {
+  const allowed = Role.options.flatMap((role) => Role.options.filter((need) => includes(role, need)).map((need) => `${role}>=${need}`));
+  expect(allowed.sort()).toEqual(["editor>=editor", "editor>=viewer", "owner>=editor", "owner>=owner", "owner>=viewer", "viewer>=viewer"]);
 });

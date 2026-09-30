@@ -11,14 +11,18 @@ import {
   CreateWorkspaceBody,
   DocumentConflict,
   DocumentShip,
+  includes,
   PageQuery,
+  SetMemberBody,
   SignInBody,
   SignUpBody,
+  type Document,
   type ErrorBody,
   type HealthResponse,
   type Org,
   type Me,
   type Preview,
+  type Role,
   type SessionResponse,
   type User,
 } from "@noon/contracts";
@@ -37,9 +41,26 @@ const MAX_WEBHOOK_BYTES = 1024 * 1024;
 const WEBHOOK_PATH = "/webhooks/gitea";
 
 type ErrorCode = ErrorBody["error"];
-const fail = (c: Context, status: 400 | 401 | 404 | 409 | 413 | 415 | 429 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
+const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 429 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
+
+/** Every guard `need` made, and the role it asks for: how app.test.ts finds a route that declares none. */
+export const GUARDS = new WeakMap<object, Role>();
+/**
+ * E8.2 (F24): the route needs at least `role` in the org (the parent's middleware put the caller's role on the
+ * context, from the same row that proved membership). A member without it gets 403: they may see the thing, so
+ * "not found" would be a lie; a stranger never gets this far (404, F2). Every org and document route declares one:
+ * app.test.ts fails for a route that does not, so a new route is closed until someone decides who may use it.
+ */
+const need = (role: Role) => {
+  const guard = createMiddleware<{ Variables: { role: Role } }>(async (c, next) => {
+    if (!includes(c.var.role, role)) return fail(c, 403, "forbidden");
+    await next();
+  });
+  GUARDS.set(guard, role);
+  return guard;
+};
 
 /** Turns Zod issues into `{field, message}`. A problem with the value as a whole is named by `root`. */
 function issuesOf(error: z.ZodError, root: string): NonNullable<ErrorBody["issues"]> {
@@ -101,6 +122,11 @@ export type AppDeps = {
    * E9.6's limiter. ponytail: allows everything until then; ceiling: an online guesser pays only scrypt's cost per try.
    */
   allowAttempt?: (key: string) => Promise<boolean>;
+  /**
+   * E8.2 (F24): tells every sync node that this user's role in this org changed (Redis pub/sub), so their live
+   * sessions keep to it within the 10 s F24 allows. A seam like `enqueue`; without Redis in a test, nobody listens.
+   */
+  accessChanged?: (change: { orgId: string; userId: string }) => Promise<void>;
 };
 
 /**
@@ -114,7 +140,7 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true) }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true), accessChanged = () => Promise.resolve() }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
   const route = syncRouter({ nodes: sessions.sync, owner, alive });
   // Paid for now, not by the first sign-in with an unknown email (whose extra hash would be a timing tell).
@@ -227,61 +253,89 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // EVERYTHING about one org lives behind this middleware, including reading the org itself: it is
   // the one place that decides whether the caller may see this org. Not a member and no such org
   // are the same answer, 404, so a response never confirms that someone else's org exists (F2).
-  // MEMBERSHIP ONLY: the member's role is ignored here, so today a viewer may create workspaces and
-  // documents. Role enforcement arrives in E8.2, which must cover these REST writes, not only ops.
-  const org = new Hono<{ Variables: { user: User; org: Org; scope: ReturnType<Db["forOrg"]> } }>();
+  // The same row carries the caller's role, which each route's `need` checks (E8.2).
+  const org = new Hono<{ Variables: { user: User; org: Org; role: Role; scope: ReturnType<Db["forOrg"]> } }>();
   org.use(async (c, next) => {
     const found = await db.getOrgForMember(c.req.param("orgId") ?? "", c.var.user.id);
     if (!found) return notFound(c);
-    c.set("org", found);
-    c.set("scope", db.forOrg(found.id));
+    c.set("org", found.org);
+    c.set("role", found.role);
+    c.set("scope", db.forOrg(found.org.id));
     await next();
   });
 
-  org.get("/", (c) => c.json(c.var.org));
+  org.get("/", need("viewer"), (c) => c.json(c.var.org));
 
-  org.post("/workspaces", async (c) => c.json(await c.var.scope.createWorkspace(await body(c, CreateWorkspaceBody)), 201));
-  org.get("/workspaces", async (c) => {
+  // F24: only an owner changes roles, their own included (the last owner cannot step down: the org would have
+  // none). A new member is added the same way: the api has no email to invite with, so it takes a user who signed up.
+  // The change is committed BEFORE it is announced, so a sync node that hears of it reads the new role.
+  org.put("/members", need("owner"), async (c) => {
+    const member = await c.var.scope.setMember(await body(c, SetMemberBody));
+    if (member === "no_user") return notFound(c);
+    if (member === "last_owner") return fail(c, 409, "last_owner");
+    // ponytail: announced once, best effort; ceiling: with Redis away here (but not at the sync nodes, which re-read
+    // everything when their own link comes back) open sessions keep the old role until they reconnect; upgrade: an
+    // outbox row the api retries. REST routes read the role on every request, so they are never behind.
+    await accessChanged({ orgId: c.var.org.id, userId: member.userId }).catch((err: unknown) => {
+      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `role change not announced: ${describeError(err)}` })}\n`);
+    });
+    return c.json(member);
+  });
+
+  org.post("/workspaces", need("editor"), async (c) => c.json(await c.var.scope.createWorkspace(await body(c, CreateWorkspaceBody)), 201));
+  org.get("/workspaces", need("viewer"), async (c) => {
     const page = await c.var.scope.listWorkspaces(pageQuery(c));
     return page ? c.json(page) : badCursor(c);
   });
-  org.get("/workspaces/:id", async (c) => {
+  org.get("/workspaces/:id", need("viewer"), async (c) => {
     const ws = await c.var.scope.getWorkspace(c.req.param("id"));
     return ws ? c.json(ws) : notFound(c);
   });
 
-  org.post("/workspaces/:id/documents", async (c) => {
+  org.post("/workspaces/:id/documents", need("editor"), async (c) => {
     const { title } = await body(c, CreateDocumentBody);
     const doc = await c.var.scope.createDocument({ workspaceId: c.req.param("id"), title });
     return doc ? c.json(doc, 201) : notFound(c);
   });
-  org.get("/workspaces/:id/documents", async (c) => {
+  org.get("/workspaces/:id/documents", need("viewer"), async (c) => {
     const id = c.req.param("id");
     const query = pageQuery(c);
     if (!(await c.var.scope.getWorkspace(id))) return notFound(c);
     const page = await c.var.scope.listDocuments(id, query);
     return page ? c.json(page) : badCursor(c);
   });
-  org.get("/documents/:id", async (c) => {
+  org.get("/documents/:id", need("viewer"), async (c) => {
     const doc = await c.var.scope.getDocument(c.req.param("id"));
     return doc ? c.json(doc) : notFound(c);
   });
 
   // F12: what this org's AI runs have consumed. Behind the org middleware like everything else about an
   // org, so another org's usage is the usual 404. ponytail: totals over all time; periods and limits are E9.5.
-  org.get("/usage", async (c) => {
+  // Owners only (E8.2): what the org spends is the business of whoever runs it, not of everyone who can look.
+  org.get("/usage", need("owner"), async (c) => {
     const report = await c.var.scope.usage(pageQuery(c));
     return report ? c.json(report) : badCursor(c);
   });
 
   app.route("/orgs/:orgId", org);
 
+  // Everything under /documents/:id: the path names no org, so the lookup itself is membership-filtered, and the
+  // same row carries the caller's role for each route's `need` (E8.2). Not a member: 404, as for an org.
+  const document = new Hono<{ Variables: { user: User; doc: Document; role: Role } }>();
+  document.use(async (c, next) => {
+    const found = await db.getDocumentForMember(c.req.param("id") ?? "", c.var.user.id);
+    if (!found) return notFound(c);
+    c.set("doc", found.document);
+    c.set("role", found.role);
+    await next();
+  });
+
   // The routing hook (SPEC §2.11): a peer never knows a sync address in advance, it asks here, and gets the
-  // node that owns the room (E7.1), or any node when nobody does yet. The path names no org, so the lookup
-  // itself is membership-filtered.
-  app.post("/documents/:id/session", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    if (!doc) return notFound(c);
+  // node that owns the room (E7.1), or any node when nobody does yet. A viewer opens the document too: to watch
+  // it. What they may do inside is the sync server's business, which reads the role itself (the token says who,
+  // never what they may do, so a role change is not waiting for a token to expire).
+  document.post("/session", need("viewer"), async (c) => {
+    const { doc } = c.var;
     // E5.3a: a document is opening, so the git peer looks at Gitea now: a push whose delivery was lost reaches
     // the canvas at once, not on the next timer. Best effort: a session is never refused over it.
     await db.gitStore().requestReconcile().catch((err: unknown) => {
@@ -304,11 +358,10 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     } satisfies SessionResponse);
   });
 
-  // MEMBERSHIP ONLY, like the org routes above: a viewer can start a run until E8.2 enforces roles here too.
-  // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look.
-  app.post("/documents/:id/runs", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    if (!doc) return notFound(c);
+  // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look. It edits the
+  // document and costs money: editors and owners. Its ops carry its creator's role into the room (E8.2).
+  document.post("/runs", need("editor"), async (c) => {
+    const { doc } = c.var;
     const { instruction } = await body(c, CreateRunBody);
     const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id });
     if (!run) return notFound(c); // the document was deleted in between
@@ -322,23 +375,20 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     }
     return c.json(run, 201);
   });
-  app.post("/documents/:id/runs/:runId/cancel", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const run = doc && (await db.forOrg(doc.orgId).cancelRun(doc.id, c.req.param("runId")));
+  document.post("/runs/:runId/cancel", need("editor"), async (c) => {
+    const run = await db.forOrg(c.var.doc.orgId).cancelRun(c.var.doc.id, c.req.param("runId"));
     return run ? c.json(run) : notFound(c);
   });
-  app.get("/documents/:id/runs/:runId", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const run = doc && (await db.forOrg(doc.orgId).getRun(doc.id, c.req.param("runId")));
+  document.get("/runs/:runId", need("viewer"), async (c) => {
+    const run = await db.forOrg(c.var.doc.orgId).getRun(c.var.doc.id, c.req.param("runId"));
     return run ? c.json(run) : notFound(c);
   });
 
   // F15: the document's running page. The canvas POSTs to make sure a preview is on its way and GETs,
   // once a second, where it answers: the address can change when a sandbox restarts, so it is never kept.
-  // MEMBERSHIP ONLY, like runs. The job row IS the preview; the queue only tells a worker to look.
-  app.post("/documents/:id/preview", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const opened = doc && (await db.forOrg(doc.orgId).openPreview({ documentId: doc.id, createdBy: c.var.user.id }));
+  // A viewer may open it: it shows the document, and changes nothing in it. The job row IS the preview.
+  document.post("/preview", need("viewer"), async (c) => {
+    const opened = await db.forOrg(c.var.doc.orgId).openPreview({ documentId: c.var.doc.id, createdBy: c.var.user.id });
     if (!opened) return notFound(c);
     if (opened === "busy") return fail(c, 409, "preview_limit");
     if (opened.created) {
@@ -349,26 +399,23 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     }
     return c.json(publicPreview(opened.preview, previewOrigin), opened.created ? 201 : 200);
   });
-  app.get("/documents/:id/preview", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const preview = doc && (await db.forOrg(doc.orgId).getPreview(doc.id));
+  document.get("/preview", need("viewer"), async (c) => {
+    const preview = await db.forOrg(c.var.doc.orgId).getPreview(c.var.doc.id);
     return preview ? c.json(publicPreview(preview, previewOrigin)) : notFound(c);
   });
   // F16b: the newest push to the document's branch that changed nothing, which the canvas shows as a banner.
-  // MEMBERSHIP ONLY, like the preview. The body is parsed with the contract: commit and file are an engineer's text.
-  app.get("/documents/:id/conflict", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const conflict = doc && (await db.forOrg(doc.orgId).getConflict(doc.id));
+  // The body is parsed with the contract: commit and file are an engineer's text.
+  document.get("/conflict", need("viewer"), async (c) => {
+    const conflict = await db.forOrg(c.var.doc.orgId).getConflict(c.var.doc.id);
     return conflict === undefined ? notFound(c) : c.json(DocumentConflict.parse({ conflict }));
   });
 
   // F17: Ship. A job, like a run: the row IS the ship, the queue only tells the ship worker (which alone holds the
   // Gitea token) to look. Presses coalesce into the ship still waiting (201 when this press made it, 200 when it
   // joined it), so a double click or two tabs never make two; a press while one runs queues the next, which reads
-  // the document afresh. MEMBERSHIP ONLY, like runs, until E8.2.
-  app.post("/documents/:id/ship", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const started = doc && (await db.forOrg(doc.orgId).startShip({ documentId: doc.id, createdBy: c.var.user.id }));
+  // the document afresh. It opens a pull request in the org's name: editors and owners.
+  document.post("/ship", need("editor"), async (c) => {
+    const started = await db.forOrg(c.var.doc.orgId).startShip({ documentId: c.var.doc.id, createdBy: c.var.user.id });
     if (!started) return notFound(c);
     if (started.created) {
       // Left to the sweep if Redis is away, as a run is: the job exists, and it will be found.
@@ -378,11 +425,12 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     }
     return c.json(started.ship, started.created ? 201 : 200);
   });
-  app.get("/documents/:id/ship", async (c) => {
-    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
-    const ship = doc && (await db.forOrg(doc.orgId).getShip(doc.id));
+  document.get("/ship", need("viewer"), async (c) => {
+    const ship = await db.forOrg(c.var.doc.orgId).getShip(c.var.doc.id);
     return ship === undefined ? notFound(c) : c.json(DocumentShip.parse({ ship }));
   });
+
+  app.route("/documents/:id", document);
 
   app.notFound(notFound);
   app.onError((err, c) => {

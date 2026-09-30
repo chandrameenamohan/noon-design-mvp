@@ -94,6 +94,8 @@ async function witness(session: () => Promise<{ wsUrl: string; token: string }>)
 }
 
 const org = idOf(await post("/orgs", { name: `chaos ${name}` }));
+// The AI peer acts for this person: since E8.2 the room lets in only a member of the org, and an AI run is its creator.
+const me = idOf(((await (await fetch(`${api}/auth/me`, { headers })).json()) as { user: unknown }).user);
 const workspace = idOf(await post(`/orgs/${org}/workspaces`, { name: "chaos" }));
 
 async function round(n: number): Promise<{ round: number; from: string; to: string; fencedAppends: number; ops: number; journaled: number; violations: string[] }> {
@@ -101,7 +103,7 @@ async function round(n: number): Promise<{ round: number; from: string; to: stri
   const session = async () => SessionResponse.parse(await post(`/documents/${doc}/session`));
   const peers = {
     person: connectPeer({ manifest, session }),
-    ai: connectPeer({ manifest, session: async () => ({ wsUrl: (await session()).wsUrl, token: signSessionToken({ userId: randomUUID(), orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: "agent", runId: randomUUID() } }) }) }),
+    ai: connectPeer({ manifest, session: async () => ({ wsUrl: (await session()).wsUrl, token: signSessionToken({ userId: me, orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: "agent", runId: randomUUID() } }) }) }),
   };
   const all = Object.entries(peers);
   const ledger = createLedger();

@@ -1,6 +1,7 @@
 import { Redis } from "ioredis";
 import { formatHolder, parseHolder, type Holder } from "./lease.ts";
 
+export { accessPublisher, accessSubscriber } from "./access.ts";
 export { keepLease, NodeId, syncNodesField, syncRouter, takeLease, type Holder, type SyncNodes } from "./lease.ts";
 
 /**

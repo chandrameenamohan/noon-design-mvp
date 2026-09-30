@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ClientMessage, type Doc, type HealthResponse, type SequencedOp } from "@noon/contracts";
+import { ClientMessage, type Doc, type HealthResponse, type Role, type SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { keepLease, takeLease, type Holder, type Leases } from "@noon/lease";
 import { manifest } from "@noon/design-system";
@@ -21,6 +21,11 @@ export type RunningSyncServer = {
   idle(): Promise<void>;
   peerCount(documentId: string): number;
   roomCount(): number;
+  /**
+   * E8.2 (F24): an owner changed this user's role in this org (or "all": changes may have been missed). Every live
+   * session it concerns reads its role again and keeps to it from its next op. Resolves once they have. Never rejects.
+   */
+  recheck(change: { orgId: string; userId: string } | "all"): Promise<void>;
 };
 
 const PROTOCOL = "noon.v1";
@@ -57,9 +62,15 @@ type Options = {
    * in Redis. Without it this process opens every room it is asked for, which is right for exactly one node.
    */
   lease?: { leases: Leases; nodeId: string };
+  /**
+   * E8.2 (F24): a user's role in the org, if the document is that org's and they are a member (db.roleIn). Asked
+   * when a peer joins and on every `recheck`: a viewer's ops are refused, and a non-member is closed out. The token
+   * says only who someone is, never what they may do. Without it every peer may edit (tests without a database).
+   */
+  roles?: (orgId: string, documentId: string, userId: string) => Promise<Role | undefined>;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles }: Options): Promise<RunningSyncServer> {
   const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
@@ -73,6 +84,10 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   const leaving = new Set<Promise<void>>();
   const peerCounts = new Map<string, () => number>(); // answered by the ROOM: who has joined, not which sockets exist
   let closing = false;
+  // Every socket past the upgrade, from BEFORE its role is first read: a change published while that read is in
+  // flight still finds it. `asked`/`applied` number the reads, so an older answer never replaces a newer one.
+  type Connected = { peer: Peer; ws: WebSocket; documentId: string; asked: number; applied: number };
+  const connected = new Set<Connected>();
   // "Alive" into Redis every tenth of a ttl (E7.2): /session stops sending peers to a node that went quiet,
   // and a node knows which leases can only expire. A failed beat is not logged: Redis being away already is.
   const beat = (): void => { if (lease && !closing) void lease.leases.beat(lease.nodeId).catch(() => undefined); };
@@ -285,6 +300,46 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     return { room, orgId, ...(snapshot ? { snapshot } : {}) };
   }
 
+  /**
+   * Reads what this peer may do, and applies it. False: it is no member (any more), and was closed out. Rejects when
+   * Postgres did not answer. The git peer is the service itself (its id names a commit event, not a person); an AI
+   * run is its creator, so it can do what they can.
+   */
+  async function applyRole(entry: Connected): Promise<boolean> {
+    const { peer, ws, documentId } = entry;
+    if (!roles || peer.actor.kind === "git") {
+      peer.mayEdit = true;
+      return true;
+    }
+    const asked = ++entry.asked;
+    const role = await roles(peer.session.orgId, documentId, peer.session.userId);
+    if (asked < entry.applied) return ws.readyState === ws.OPEN; // a newer read already decided
+    entry.applied = asked;
+    if (role === undefined) {
+      // The same answer a stranger's token gets: the document is not there for them.
+      ws.close(CLOSE.documentNotFound, "cannot_open_document");
+      return false;
+    }
+    peer.mayEdit = role !== "viewer";
+    return true;
+  }
+
+  async function recheck(change: { orgId: string; userId: string } | "all"): Promise<void> {
+    const due = [...connected].filter(({ peer }) => change === "all" || (peer.session.orgId === change.orgId && peer.session.userId === change.userId));
+    await Promise.all(due.map(async (entry) => {
+      // Until Postgres answers or the socket goes: a demotion must not be lost to one failed read.
+      while (!closing && connected.has(entry)) {
+        try {
+          await applyRole(entry);
+          return;
+        } catch (err) {
+          log(entry.documentId, `role not read again, retrying: ${err instanceof Error ? err.message : "unknown"}`);
+          await new Promise((resolve) => setTimeout(resolve, recoverMs).unref());
+        }
+      }
+    }));
+  }
+
   function log(documentId: string, message: string): void {
     process.stderr.write(`${JSON.stringify({ level: "error", source: "sync", documentId, message })}\n`);
   }
@@ -321,6 +376,34 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     let onFrame = (data: RawData): void => void early.push(data);
     ws.on("message", (data) => { onFrame(data); });
 
+    const peer: Peer = {
+      // WHO this is comes from the verified token and from nothing else (SPEC §2.3).
+      actor: { kind: claims.actor.kind, id: claims.userId, ...(claims.actor.runId === undefined ? {} : { runId: claims.actor.runId }) },
+      session: { userId: claims.userId, orgId: claims.orgId, expiresAt: claims.expiresAt },
+      send: (message) => {
+        if (ws.readyState !== ws.OPEN) return;
+        // send() never throws and never blocks: what cannot be written yet is queued IN OUR MEMORY.
+        // A peer that stops reading would grow that queue without end, so past the limit it goes.
+        if (ws.bufferedAmount > maxBufferedBytes) ws.terminate();
+        else ws.send(JSON.stringify(message));
+      },
+      sendText: (text) => { if (ws.readyState === ws.OPEN && ws.bufferedAmount <= maxBufferedBytes) ws.send(text); else if (ws.readyState === ws.OPEN) ws.terminate(); },
+      ...(claims.name === undefined ? {} : { name: claims.name }),
+      kick: () => { ws.close(CLOSE.tooManyRequests, "rate_limited"); },
+      mayEdit: false, // until its role is read
+    };
+
+    // E8.2 (F24): who may be here and edit is Postgres's answer, asked BEFORE any room is opened for them.
+    const entry: Connected = { peer, ws, documentId, asked: 0, applied: 0 };
+    connected.add(entry);
+    ws.on("close", () => { connected.delete(entry); });
+    try {
+      if (!(await applyRole(entry))) return;
+    } catch {
+      ws.close(CLOSE.unavailable, "unavailable"); // "try again", as when the document cannot be loaded
+      return;
+    }
+
     let pending = rooms.get(documentId);
     if (!pending) {
       const fresh: Promise<Opened> = open(documentId, claims.orgId, () => {
@@ -356,22 +439,6 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       if (room.peerCount === 0) closeRoom(documentId, opened, opening);
       return;
     }
-
-    const peer: Peer = {
-      // WHO this is comes from the verified token and from nothing else (SPEC §2.3).
-      actor: { kind: claims.actor.kind, id: claims.userId, ...(claims.actor.runId === undefined ? {} : { runId: claims.actor.runId }) },
-      session: { userId: claims.userId, orgId: claims.orgId, expiresAt: claims.expiresAt },
-      send: (message) => {
-        if (ws.readyState !== ws.OPEN) return;
-        // send() never throws and never blocks: what cannot be written yet is queued IN OUR MEMORY.
-        // A peer that stops reading would grow that queue without end, so past the limit it goes.
-        if (ws.bufferedAmount > maxBufferedBytes) ws.terminate();
-        else ws.send(JSON.stringify(message));
-      },
-      sendText: (text) => { if (ws.readyState === ws.OPEN && ws.bufferedAmount <= maxBufferedBytes) ws.send(text); else if (ws.readyState === ws.OPEN) ws.terminate(); },
-      ...(claims.name === undefined ? {} : { name: claims.name }),
-      kick: () => { ws.close(CLOSE.tooManyRequests, "rate_limited"); },
-    };
 
     // Heartbeat: a killed peer is noticed at once (TCP says so); a FROZEN one, or one behind a dead
     // NAT, says nothing at all. Ping, and if the last ping was never answered, it is gone.
@@ -452,6 +519,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
         url: `ws://localhost:${String(address.port)}`,
         idle,
         roomCount: () => rooms.size,
+        recheck,
         peerCount: (documentId) => peerCounts.get(documentId)?.() ?? 0,
         close: async () => {
           closing = true;

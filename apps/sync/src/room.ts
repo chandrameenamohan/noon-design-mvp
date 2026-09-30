@@ -17,6 +17,8 @@ export type Peer = {
   name?: string;
   /** Ends this peer's connection. Called for a peer that keeps sending while it is being refused. */
   kick?(): void;
+  /** E8.2 (F24): may this peer change the document? False for a viewer. The server may flip it at any moment (a role change). */
+  mayEdit: boolean;
 };
 
 /**
@@ -240,6 +242,11 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
     };
 
     if (!peers.has(peer)) return; // dropped while this op waited in the queue
+    // F24: asked when the op's TURN comes, not when it arrived: an op queued before a demotion is refused too.
+    if (!peer.mayEdit) {
+      refuse("forbidden");
+      return;
+    }
     // Before the dedupe: even an answer from memory is an acknowledgement, and a read-only room gives none.
     if (readOnly) {
       refuse("unavailable");

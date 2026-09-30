@@ -68,7 +68,7 @@ function switchable(): Journal & { state: { down: boolean } } {
 }
 function roomPeer(id: string): Peer & { inbox: ServerMessage[] } {
   const inbox: ServerMessage[] = [];
-  return { actor: { kind: "user", id }, session: { userId: id, orgId: "org", expiresAt: 0 }, inbox, send: (m) => void inbox.push(m) };
+  return { actor: { kind: "user", id }, session: { userId: id, orgId: "org", expiresAt: 0 }, mayEdit: true, inbox, send: (m) => void inbox.push(m) };
 }
 
 test("the room stamps the fall and the recovery with the clock it was LENT, and tells a late joiner since when", async () => {

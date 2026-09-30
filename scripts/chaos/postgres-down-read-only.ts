@@ -50,10 +50,12 @@ function check(ok: boolean, what: string): void {
 }
 
 const org = idOf(await post("/orgs", { name: "chaos read-only" }));
+// The AI peer acts for this person: since E8.2 the room lets in only a member of the org, and an AI run is its creator.
+const me = idOf(((await (await fetch(`${api}/auth/me`, { headers })).json()) as { user: unknown }).user);
 const workspace = idOf(await post(`/orgs/${org}/workspaces`, { name: "chaos" }));
 const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: "chaos read-only" }));
 const wsUrl = `${syncUrl}/documents/${doc}`;
-const signed = (actor: { kind: "agent" | "git"; runId: string }) => () => Promise.resolve({ wsUrl, token: signSessionToken({ userId: randomUUID(), orgId: org, documentId: doc, secret, ttlSeconds: 600, actor }) });
+const signed = (actor: { kind: "agent" | "git"; runId: string }) => () => Promise.resolve({ wsUrl, token: signSessionToken({ userId: me, orgId: org, documentId: doc, secret, ttlSeconds: 600, actor }) });
 const peers = {
   person: connectPeer({ manifest, session: async () => SessionResponse.parse(await post(`/documents/${doc}/session`)) }),
   ai: connectPeer({ manifest, session: signed({ kind: "agent", runId: randomUUID() }) }),

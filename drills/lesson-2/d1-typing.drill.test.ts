@@ -17,7 +17,7 @@ import { createRoom, type Peer } from "../../apps/sync/src/room.ts";
 
 function peer(id: string): Peer & { inbox: ServerMessage[] } {
   const inbox: ServerMessage[] = [];
-  return { actor: { kind: "user", id }, session: { userId: id, orgId: "org", expiresAt: 0 }, name: id, inbox, send: (m) => void inbox.push(m) };
+  return { actor: { kind: "user", id }, session: { userId: id, orgId: "org", expiresAt: 0 }, mayEdit: true, name: id, inbox, send: (m) => void inbox.push(m) };
 }
 
 test("a client may say it is typing; it still may not say who it is", () => {

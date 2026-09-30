@@ -79,6 +79,7 @@ export async function runSim({ seed, steps = 300, peers: peerCount = 3, factorie
     const peer: Peer = {
       actor: { kind: "user", id: client.name },
       session: { userId: client.name, orgId: "org", expiresAt: 0 },
+      mayEdit: true,
       // A message belongs to the room until it is on the wire: copy it, as JSON.stringify would.
       send: (message) => {
         record(message); // as the room SAYS it, not when a client hears it: the room's document is already ahead

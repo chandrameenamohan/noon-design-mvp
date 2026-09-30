@@ -15,7 +15,7 @@ const clientOp = (op: Op, baseSeq = 0, opId = uuid()): ClientOp => ({ opId, base
 
 function peer(id: string, kind: Actor["kind"] = "user"): Peer & { inbox: ServerMessage[] } {
   const inbox: ServerMessage[] = [];
-  return { actor: { kind, id }, session: { userId: id, orgId: "org", expiresAt: 0 }, inbox, send: (m) => void inbox.push(m) };
+  return { actor: { kind, id }, session: { userId: id, orgId: "org", expiresAt: 0 }, mayEdit: true, inbox, send: (m) => void inbox.push(m) };
 }
 const ops = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<ServerMessage, { type: "op" }> => m.type === "op");
 const rejects = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<ServerMessage, { type: "rejected" }> => m.type === "rejected");
@@ -140,7 +140,7 @@ test("journal: every accepted op is journaled BEFORE it is broadcast, in the ord
   const journal = memoryJournal();
   const order: string[] = [];
   const room = createRoom({ doc: emptyDoc(), manifest, journal: { ...journal, append: async (op) => { await Promise.resolve(); order.push(`journal ${String(op.seq)}`); return journal.append(op); } } });
-  const watcher: Peer = { actor: { kind: "user", id: "w" }, session: { userId: "w", orgId: "org", expiresAt: 0 }, send: (m) => { if (m.type === "op") order.push(`broadcast ${String(m.seq)}`); } };
+  const watcher: Peer = { actor: { kind: "user", id: "w" }, session: { userId: "w", orgId: "org", expiresAt: 0 }, mayEdit: true, send: (m) => { if (m.type === "op") order.push(`broadcast ${String(m.seq)}`); } };
   const [a, b] = [peer("a"), peer("b")];
   room.join(a); room.join(b); room.join(watcher);
   await Promise.all(Array.from({ length: 20 }, (_, i) => room.submit(i % 2 ? a : b, clientOp(add(`n${String(i)}`)))));
@@ -661,4 +661,47 @@ test("onAccepted hears every seq the room applies, and nothing it refuses", asyn
   await room.submit(a, clientOp(setGap("n1", 4), 1));
   expect(heard).toEqual([1, 2]);
   expect(rejects(a)).toHaveLength(1);
+});
+
+// E8.2 (F24): a viewer sees everything and changes nothing.
+test("a viewer's op is refused as forbidden, applied to nothing and heard by nobody, while it still sees the others' ops and presence", async () => {
+  const journal = memoryJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const [editor, viewer] = [peer("e"), { ...peer("v"), mayEdit: false }];
+  room.join(editor); room.join(viewer);
+  const refused = clientOp(add("from-viewer"));
+  await room.submit(viewer, refused);
+  expect(rejects(viewer)).toEqual([{ type: "rejected", opId: refused.opId, reason: "forbidden" }]);
+  expect(room.doc.nodes["from-viewer"]).toBeUndefined();
+  expect(journal.rows).toEqual([]);
+  expect(room.seq).toBe(0);
+  expect(editor.inbox.filter((m) => m.type !== "welcome")).toEqual([]); // nobody heard of it
+
+  await room.submit(editor, clientOp(add("from-editor")));
+  expect(ops(viewer).map((m) => m.seq)).toEqual([1]); // it sees the edit live
+  room.presence(editor, { cursor: { x: 0.5, y: 0.5 }, selection: null });
+  expect(viewer.inbox.some((m) => m.type === "presence")).toBe(true);
+});
+
+test("the role is asked when an op's turn comes: an op queued before a demotion is refused, and a promotion takes effect on the next op", async () => {
+  let release: () => void = () => undefined;
+  let started: () => void = () => undefined;
+  const persisting1 = new Promise<void>((resolve) => { started = resolve; });
+  const slow = persisting((op) => (op.seq === 1 ? new Promise<void>((resolve) => { release = resolve; started(); }) : Promise.resolve()));
+  const room = createRoom({ doc: emptyDoc(), manifest, journal: slow });
+  const p = peer("p");
+  room.join(p);
+  const first = room.submit(p, clientOp(add("one")));
+  const queued = clientOp(add("two"));
+  const second = room.submit(p, queued); // waits behind `first`
+  await persisting1; // `one` was judged and is being made durable
+  p.mayEdit = false; // an owner made p a viewer while `two` was waiting
+  release();
+  await Promise.all([first, second]);
+  expect(ops(p).map((m) => m.seq)).toEqual([1]);
+  expect(rejects(p)).toEqual([{ type: "rejected", opId: queued.opId, reason: "forbidden" }]);
+
+  p.mayEdit = true;
+  await room.submit(p, clientOp(add("three"), 1));
+  expect(ops(p).map((m) => m.seq)).toEqual([1, 2]);
 });

@@ -34,6 +34,16 @@ export type Workspace = z.infer<typeof Workspace>;
 export const Document = z.object({ id: Id, orgId: Id, workspaceId: Id, title: Name, createdAt: Timestamp });
 export type Document = z.infer<typeof Document>;
 
+// --- Roles (F24) -------------------------------------------------------------------
+/** A member's role in an org. A viewer reads everything and changes nothing; only an owner changes roles. */
+export const Role = z.enum(["owner", "editor", "viewer"]);
+export type Role = z.infer<typeof Role>;
+const RANK: Record<Role, number> = { viewer: 0, editor: 1, owner: 2 };
+/** Does `role` include everything `need` may do? The roles are nested: owner > editor > viewer. */
+export const includes = (role: Role, need: Role): boolean => RANK[role] >= RANK[need];
+export const Member = z.object({ userId: Id, email: User.shape.email, name: Name, role: Role });
+export type Member = z.infer<typeof Member>;
+
 // --- HTTP bodies -------------------------------------------------------------
 // --- Sign-in (F23) ----------------------------------------------------------------
 /**
@@ -54,6 +64,8 @@ export type Me = z.infer<typeof Me>;
 export const CreateOrgBody = z.strictObject({ name: Name });
 export const CreateWorkspaceBody = z.strictObject({ name: Name });
 export const CreateDocumentBody = z.strictObject({ title: Name });
+/** PUT /orgs/:orgId/members: makes the user with this email a member at `role`, or changes their role. Owners only. */
+export const SetMemberBody = z.strictObject({ email: User.shape.email, role: Role });
 
 // --- AI runs (F9) ----------------------------------------------------------------
 /** Newlines and tabs are fine in an instruction; other control characters are not (jsonb cannot hold NUL). */
@@ -181,7 +193,7 @@ export type UsageReport = z.infer<typeof UsageReport>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
@@ -323,6 +335,9 @@ export const RejectReason = z.enum([
   // This peer is sending faster than its budget. NOT applied. Wait `retryAfterMs`, then send this op
   // again and everything after it, in order: until then the room refuses this peer's later ops as well.
   "rate_limited",
+  // F24: this peer may not edit the document (a viewer, or an AI run acting for one). NOT applied; sending it
+  // again changes nothing until an owner changes the role.
+  "forbidden",
 ]);
 export type RejectReason = z.infer<typeof RejectReason>;
 

@@ -19,6 +19,7 @@ const SENTENCES: Record<Rejection["reason"] | "not_ready" | "invalid_op" | "too_
   stale: "This edit could not be saved: you were disconnected for too long.",
   unavailable: "The server could not save this edit.",
   rate_limited: "You are editing faster than the server accepts.",
+  forbidden: "You can view this document but not edit it.",
   connection_closed: "This edit was not saved: the connection ended.",
   not_ready: "The document has not loaded yet.",
   invalid_op: "That value is too large or contains characters that cannot be stored.",
