@@ -1,6 +1,8 @@
 import type { Doc, Manifest } from "@noon/contracts";
 import { checkDoc, checkProp, nodeOf, type PropProblem } from "@noon/doc-model";
 
+export { parse } from "./parse.ts";
+
 /**
  * Keystone 8: one document becomes ONE generated TSX file of a fixed shape, and the same document
  * always generates the same bytes. Determinism is not tidiness here: epic 5 opens a pull request
@@ -37,8 +39,8 @@ const isIdentifier = (name: string): boolean => /^[A-Za-z_$][A-Za-z0-9_$]*$/u.te
 /** A node id is written inside a double-quoted attribute. The contract allows only these characters; a document loaded from a snapshot may not have met that contract. */
 const isNodeId = (id: string): boolean => /^[A-Za-z0-9_-]+$/u.test(id);
 
-// ponytail: not exported until a caller needs to switch on it; Generated carries it either way.
-type CodegenReason = PropProblem | "malformed_doc" | "unknown_component" | "reserved_component" | "parent_takes_no_children";
+/** Why a document has no file. `parse` refuses with these too: it hands every tree it reads back to `generate`. */
+export type CodegenReason = PropProblem | "malformed_doc" | "unknown_component" | "reserved_component" | "parent_takes_no_children";
 /**
  * Either the file or the reason there is none. Refusing is the point: a document whose design
  * system has changed under it (a prop that no longer exists, a component that was dropped) must not

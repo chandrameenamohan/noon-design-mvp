@@ -196,6 +196,9 @@ importers:
       '@noon/doc-model':
         specifier: workspace:^
         version: link:../doc-model
+      typescript:
+        specifier: ~6.0.0
+        version: 6.0.3
     devDependencies:
       '@noon/design-system':
         specifier: workspace:^

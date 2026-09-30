@@ -7,7 +7,8 @@
   },
   "dependencies": {
     "@noon/contracts": "workspace:^",
-    "@noon/doc-model": "workspace:^"
+    "@noon/doc-model": "workspace:^",
+    "typescript": "~6.0.0"
   },
   "devDependencies": {
     "@noon/design-system": "workspace:^"
