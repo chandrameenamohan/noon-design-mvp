@@ -8,13 +8,13 @@ import { manifest } from "@noon/design-system";
 import { connect, TEST_ORG, TEST_SECRET, useSyncServer, type TestPeer } from "../../sync/src/testing.ts";
 import { createPreviewHandler } from "./preview.ts";
 import { pagePath, PREVIEW_PATH, sandboxName, type SandboxOptions } from "./sandbox.ts";
-import { buildImage, DOCKER, docker, IMAGE, testPool } from "./sandbox-testing.ts";
+import { buildImage, DOCKER, docker, IMAGE, removePool, TEST_PREVIEW_KEY, testPool } from "./sandbox-testing.ts";
 
 // E4.2b: the `sandbox` queue's handler. The REAL sync server, the REAL peer-client, a REAL container.
 const ctx = useSyncServer();
 // A sync server that knows no document: every peer, the handler's included, is closed for good (4404).
 const nowhere = useSyncServer({ store: { load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
-const sandbox: Omit<SandboxOptions, "signal"> = { image: IMAGE, docker: DOCKER, pool: testPool(), ports: [24000, 24999] };
+const sandbox: Omit<SandboxOptions, "signal"> = { image: IMAGE, docker: DOCKER, pool: testPool(), previewKey: TEST_PREVIEW_KEY, proxyPort: 24000 };
 const made: string[] = [];
 const job = (createdBy: string | undefined = randomUUID()): Job => {
   const documentId = randomUUID();
@@ -26,6 +26,7 @@ const never = new AbortController().signal;
 beforeAll(buildImage, 900_000);
 afterAll(async () => {
   await docker("rm", "--force", ...made.map(sandboxName)).catch(() => undefined);
+  await removePool(sandbox.pool);
 });
 
 function handler(overrides: Partial<Parameters<typeof createPreviewHandler>[0]> = {}) {
@@ -70,9 +71,9 @@ test("the preview follows the CONFIRMED document into the sandbox within 3 s, re
   const ended = handle(run, never);
 
   await eventually(() => Promise.resolve(urls.length > 0), 30_000);
-  // The document is named IN the URL: a stale iframe that reconnects to a port another document took
-  // meanwhile asks that document's entry for the wrong page, and is refused (sandbox.int.test.ts).
-  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:(\\d+)/preview/${run.documentId}/\\1/${PREVIEW_PATH}\\?doc=${run.documentId}&started=\\d+$`, "u"));
+  // Through the pool's proxy, with the container's token (noon-9gz), and the document named in the query
+  // too: the sandbox's entry renders nothing for another one (sandbox.int.test.ts).
+  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:24000/preview/${run.documentId}/[0-9a-f]{16}\\.[0-9a-f]{32}/${PREVIEW_PATH}\\?doc=${run.documentId}&started=\\d+$`, "u"));
   expect((await fetch(urls[0] ?? "")).status).toBe(200);
 
   human.send(add("s", "root", "Stack"));

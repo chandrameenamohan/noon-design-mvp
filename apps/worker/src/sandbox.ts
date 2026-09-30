@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
+import { previewToken } from "./sandbox-proxy.ts";
 
 /**
  * The sandbox: one container per document working branch, running the sample app's own dev server
@@ -22,12 +25,18 @@ const POOL = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 const checkPool = (pool: string): void => {
   if (!POOL.test(pool)) throw new Error(`not a sandbox pool name: ${JSON.stringify(pool)}`);
 };
-/** Sandboxes live here, not on the default bridge: inter-container traffic off, so one cannot read another's dev server. */
-const NETWORK = "noon-sandboxes";
-/** What Docker says when the host port is taken: by another container, or (Docker Desktop: "Ports are not available") by a host process. */
-const PORT_TAKEN = /port is already allocated|address already in use|ports are not available/iu;
+/**
+ * The pool's proxy (sandbox-proxy.ts): the only published port, and the only other member of every
+ * sandbox's network. Its program is that file, handed to `node -e` in the sandbox image (which has
+ * Node and nothing of ours), so no second image to build or keep in step.
+ */
+const proxyName = (pool: string): string => `noon-sandbox-proxy-${pool}`;
+const PROXY_PORT = 8080;
+const PROXY_PROGRAM = `${readFileSync(new URL("sandbox-proxy.ts", import.meta.url), "utf8")}\nservePreviews({ key: process.env.PREVIEW_KEY ?? "", port: ${String(PROXY_PORT)} });\n`;
+/** Names what a key signs without naming the key: a label anyone with `docker inspect` can read. */
+const fingerprint = (...parts: string[]): string => createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 16);
 
-/** `url` is where the dev server answers, its base included: http://127.0.0.1:<port>/preview/<document>/<port>/. */
+/** `url` is where the dev server answers, through the pool's proxy, its base included: http://127.0.0.1:<proxy port>/preview/<document>/<token>/. */
 export type Sandbox = { container: string; url: string };
 export type SandboxOptions = {
   image: string;
@@ -37,10 +46,15 @@ export type SandboxOptions = {
    * Docker daemon; without this, one stack's reaper removed another's sandboxes (it happened).
    */
   pool: string;
+  /**
+   * Signs every preview token (sandbox-proxy.ts). Only this process and the pool's proxy hold it; a
+   * sandbox never does. At least 32 characters.
+   */
+  previewKey: string;
   /** The docker CLI. Docker Desktop does not always put it on PATH. */
   docker?: string;
-  /** Host ports to choose from, inclusive. */
-  ports?: readonly [number, number];
+  /** Where the pool's proxy listens, on 127.0.0.1: the one address every preview of the pool shares. */
+  proxyPort?: number;
   /** The whole start, first docker call to first HTTP 200. */
   readyTimeoutMs?: number;
   /** Aborted = give up now (the job was cancelled, or the worker is stopping). */
@@ -55,42 +69,38 @@ export const pagePath = (documentId: string): string => `src/pages/noon-${docume
 export const PREVIEW_PATH = "noon-preview/";
 /**
  * The address the canvas frames. It NAMES the document, and the sandbox's entry renders nothing for
- * another one: a page left open on a port that another document's sandbox took meanwhile (a tab opened
- * on the preview directly, whose Vite client reloads when the port answers again) must not show that
- * document, possibly another org's. ponytail: until noon-9gz gives each document its own hostname.
+ * another one: a second lock behind the base, which already names the document and its container.
  */
 export const previewUrl = (sandboxUrl: string, documentId: string): string => new URL(`${PREVIEW_PATH}?doc=${documentId}`, sandboxUrl).href;
 /**
  * The path the sandbox's dev server serves under (Vite's `base`), and refuses everything outside of
- * (the Dockerfile's config). It is what lets the canvas's dev server carry the preview on its OWN origin,
- * as /preview/..., when the app is reached through one public URL (a tunnel: noon-l96): the proxy there
- * forwards the path unchanged to the port it names, and the sandbox answers only if the document matches.
- * The port rides along so the proxy needs no lookup; the document id is the part nobody can guess.
- * ponytail: the document id is the only key, until noon-9gz gives each document its own hostname.
+ * (the Dockerfile's config): /preview/<document>/<token>/, the token minted for THIS container (a fresh
+ * nonce each time one is created). The pool's proxy checks the token's signature; the sandbox checks it
+ * is its own. The canvas's dev server carries the same path on its own origin behind one public URL
+ * (noon-l96), so the document id alone opens nothing, there or here (noon-9gz).
  */
-const previewBase = (documentId: string, port: number): string => `/preview/${documentId}/${String(port)}/`;
+const previewBase = (documentId: string, key: string): string => `/preview/${documentId}/${previewToken(key, documentId, randomBytes(8).toString("hex"))}/`;
 
 const starting = new Map<string, Promise<Sandbox>>();
-let network: Promise<void> | undefined;
+/** Per pool: the proxy this process last made sure of, by its label. */
+const proxies = new Map<string, { want: string; made: Promise<void> }>();
 
 /**
  * Starts the document's sandbox, or finds the one already running, and resolves once its dev
  * server answers. Safe to call again at any time: a running sandbox is returned as it is, a stopped
- * one is started again WITH ITS WORKING TREE and ON ITS OLD PORT.
+ * one is started again on its old URL but with a FRESH CLONE (the working tree is a sized tmpfs, the
+ * disk quota: it does not outlive the container's run; the preview job pushes the page again).
  *
- * The port never changes while the container exists, and that is a requirement, not tidiness:
- * after a restart Vite's client reloads the page by itself, but only if the new server answers on
- * the SAME origin (SPEC §2a). Docker's own port choice (`-p 127.0.0.1::5173`) is re-rolled on every
- * `docker start` (measured: 49755, then 49767), so the port is chosen here, once, and written into
- * the container's own configuration. (A STOPPED container does not hold its port, though: if
- * something takes it meanwhile, the sandbox comes back fresh on another one. Callers must read the
- * URL from the result every time, never keep the first one.)
+ * The origin never changes: every preview answers on the pool proxy's one port (SPEC §2a's self-heal
+ * wants the same origin). A container made anew (reaped, a new image, a new key) gets a new token, so
+ * callers must read the URL from the result every time, never keep the first one.
  */
 export function startSandbox(documentId: string, options: SandboxOptions): Promise<Sandbox> {
   // The id becomes a container name, a label and a git branch. execFile has no shell, but a
   // branch called `--upload-pack=...` is still an argument. Only a plain uuid gets past here.
   if (!UUID.test(documentId)) return Promise.reject(new Error(`not a document id: ${JSON.stringify(documentId)}`));
   if (!POOL.test(options.pool)) return Promise.reject(new Error(`not a sandbox pool name: ${JSON.stringify(options.pool)}`));
+  if (options.previewKey.length < 32) return Promise.reject(new Error("the preview key must be at least 32 characters"));
   // ponytail: a caller that joins an attempt in flight gets THAT attempt's deadline and signal. Fine
   // while the only caller per document is its one sandbox job (E4.2b).
   let attempt = starting.get(documentId);
@@ -102,18 +112,21 @@ export function startSandbox(documentId: string, options: SandboxOptions): Promi
 }
 
 async function start(documentId: string, options: SandboxOptions): Promise<Sandbox> {
-  const { image, docker = "docker", ports = [20000, 20999], readyTimeoutMs = 60_000 } = options;
+  const { docker = "docker", proxyPort = 20000, readyTimeoutMs = 60_000 } = options;
   const deadline = AbortSignal.any([AbortSignal.timeout(readyTimeoutMs), ...(options.signal ? [options.signal] : [])]);
   const run: Run = (...args) => dockerCli(docker, args, deadline);
   const name = sandboxName(documentId);
   try {
-    await ensureNetwork(run);
-    await create(run, name, documentId, image, ports, options.pool);
+    await ensureProxy(run, options.pool, options.image, options.previewKey, proxyPort);
+    await ensureNetwork(run, name, documentId, options.pool);
+    await create(run, name, documentId, options);
+    // Every start, not only the first: a proxy made anew since (a new key, a new program) is on no
+    // sandbox's network until it is joined again.
+    await join(run, name, proxyName(options.pool));
     await ready(run, name, deadline);
-    // The port is read AFTER the dev server answered, from the container that answered: never a
-    // number remembered from before a restart that somebody else may have finished differently.
-    const port = await portOf(run, name);
-    return { container: name, url: `http://127.0.0.1:${String(port)}${previewBase(documentId, port)}` };
+    // The base is read AFTER the dev server answered, from the container that answered: never one
+    // remembered from before a restart that somebody else may have finished differently.
+    return { container: name, url: `http://127.0.0.1:${String(proxyPort)}${await baseOf(run, name)}` };
   } catch (err) {
     // A deadline or a cancel ends every docker call with the same anonymous AbortError; say which.
     if (options.signal?.aborted) throw new Error(`${name}: start cancelled`, { cause: err });
@@ -122,63 +135,55 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
   }
 }
 
-/** Makes sure the container exists and is running: started again if stopped, created if missing. */
-async function create(run: Run, name: string, documentId: string, image: string, ports: readonly [number, number], pool: string): Promise<void> {
-  // Candidates step through the range from a start taken from the document id: spread, so two
-  // documents rarely want the same port, and stepping, so a taken port is never tried twice.
-  const size = ports[1] - ports[0] + 1;
-  const offset = Number.parseInt(documentId.slice(0, 8), 16) % size;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    if (await restarted(run, name)) return;
-    const candidate = ports[0] + ((offset + attempt) % size);
-    try {
-      await run("run", "--detach", "--name", name,
-        "--label", `${LABEL}=${pool}`, "--label", `noon.document=${documentId}`,
-        "--env", `BRANCH=noon/${documentId}`, "--env", `PAGE=${pagePath(documentId)}`,
-        // Fixed with the port: a restarted container keeps both, a recreated one gets both anew.
-        "--env", `PREVIEW_BASE=${previewBase(documentId, candidate)}`,
-        // Loopback only: a laptop on a shared network must not serve its previews to the room.
-        "--publish", `127.0.0.1:${String(candidate)}:${String(CONTAINER_PORT)}`,
-        "--network", NETWORK,
-        // It runs code nobody here wrote (the customer's repo) and code generated from user input.
-        // ponytail: egress (and host.docker.internal) is open, and the working tree's disk is not
-        // capped. Both close behind the sandbox proxy (bead noon-9gz), before E5 runs a customer repo.
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256",
-        "--memory", "1g", "--memory-swap", "1g", "--cpus", "1", "--tmpfs", "/tmp:size=64m",
-        image);
-      return;
-    } catch (err) {
-      // `docker run` CREATES the container before it binds the port, so a port that turns out to be
-      // taken leaves a container behind under the document's name. The next turn's `restarted()`
-      // finds it, fails to start it for the same reason, and removes it; then the next port is tried.
-      // A name conflict means another process created it: the next turn finds that one.
-      if (!PORT_TAKEN.test(String(err)) && !String(err).includes("is already in use by container")) throw err;
-    }
+/** Makes sure the container exists, is running, and is of the current image and key: started again if stopped, made anew otherwise. */
+async function create(run: Run, name: string, documentId: string, options: SandboxOptions): Promise<void> {
+  // Asked once per start: `make sandbox-image` retags the image, and a container of the old one must
+  // not be started again as if nothing had changed (E4.2a spec note 3).
+  const image = (await run("image", "inspect", "--format", "{{.Id}}", options.image)).trim();
+  const key = fingerprint(options.previewKey);
+  if (await restarted(run, name, image, key)) return;
+  try {
+    await run("run", "--detach", "--name", name,
+      "--label", `${LABEL}=${options.pool}`, "--label", `noon.document=${documentId}`, "--label", `noon.key=${key}`,
+      "--env", `BRANCH=noon/${documentId}`, "--env", `PAGE=${pagePath(documentId)}`,
+      // Fixed for the container's life: a restarted container keeps it, a recreated one gets a new token.
+      "--env", `PREVIEW_BASE=${previewBase(documentId, options.previewKey)}`,
+      // Its own --internal network (ensureNetwork): no egress, no host, no other sandbox, no published port.
+      "--network", name,
+      // It runs code nobody here wrote (the customer's repo) and code generated from user input.
+      "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "256",
+      "--memory", "1g", "--memory-swap", "1g", "--cpus", "1",
+      // The disk quota: nothing on the image's filesystem is writable. The working tree is a sized tmpfs
+      // (node_modules is a link into the image, read-only), and so is /tmp. Both count against --memory,
+      // so filling them costs this sandbox its own memory, never the host's disk.
+      "--read-only", "--tmpfs", "/app:size=256m,uid=1000,gid=1000,mode=0755", "--tmpfs", "/tmp:size=64m",
+      options.image);
+  } catch (err) {
+    // A name conflict means another process created it: find that one.
+    if (!String(err).includes("is already in use by container") || !(await restarted(run, name, image, key))) throw err;
   }
-  throw new Error(`${name}: no free port after 5 tries`);
 }
 
-/** True when the container exists and is now running; false when there is none (any leftover removed). */
-async function restarted(run: Run, name: string): Promise<boolean> {
-  let running: string;
+/**
+ * True when the container exists and is now running; false when there is none. One of another image,
+ * or with a token signed by another key (the proxy would refuse every request), is removed: false.
+ */
+async function restarted(run: Run, name: string, image: string, key: string): Promise<boolean> {
+  let state: string;
   try {
-    running = (await run("container", "inspect", "--format", "{{.State.Running}}", name)).trim();
+    state = (await run("container", "inspect", "--format", `{{.State.Running}} {{.Image}} {{index .Config.Labels "noon.key"}}`, name)).trim();
   } catch (err) {
     if (String(err).includes("No such container")) return false;
     throw err;
   }
-  if (running === "true") return true;
-  try {
-    await run("start", name);
-    return true;
-  } catch (err) {
-    // Its port was taken while it was stopped. The working tree goes with it: a fresh clone on a new
-    // port beats a sandbox that can never start. Safe only because no one else is starting this
-    // document right now (see the top of the file): otherwise "taken" may mean taken by ITSELF.
-    if (!PORT_TAKEN.test(String(err))) throw err;
+  const [running, was, signed] = state.split(" ");
+  if (was !== image || signed !== key) {
     await run("rm", "--force", name);
     return false;
   }
+  if (running === "true") return true;
+  await run("start", name);
+  return true;
 }
 
 /**
@@ -206,43 +211,105 @@ export async function isRunning(documentId: string, options: SandboxOptions): Pr
 }
 
 /**
- * The reaper: removes every sandbox whose document is not in use, running or not, and returns those
- * documents. Only its own pool's. `inUse` asks Postgres: the truth is there, and a container is only a
- * cache of it. Removed, never merely stopped: a stopped container gives up its port, and a sandbox
- * restarted on a different port breaks the open iframe's self-healing.
+ * The reaper: removes every sandbox whose document is not in use, running or not, and its network, and
+ * returns those documents. Only its own pool's. `inUse` asks Postgres: the truth is there, and a
+ * container is only a cache of it. Removed, never merely stopped: a stopped container still holds its
+ * network, and one of the daemon's few address pools with it.
  *
- * The containers are listed FIRST, then Postgres is asked. The other order races a start: "not in
- * use" is read, a job starts the document's sandbox, the list then includes it, and it is removed
- * mid-start. This way a listed container was there before the answer, which covers any job that made it.
+ * The containers and networks are listed FIRST, then Postgres is asked. The other order races a start:
+ * "not in use" is read, a job starts the document's sandbox, the list then includes it, and it is
+ * removed mid-start. This way a listed one was there before the answer, which covers any job that made it.
  */
 export async function reapSandboxes(inUse: () => Promise<ReadonlySet<string>>, options: SandboxOptions): Promise<string[]> {
   checkPool(options.pool);
   const deadline = AbortSignal.any([AbortSignal.timeout(options.readyTimeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
-  const docker = options.docker ?? "docker";
-  const listed = await dockerCli(docker, ["ps", "--all", "--filter", `label=${LABEL}=${options.pool}`, "--format", `{{.Label "noon.document"}}`], deadline);
+  const run: Run = (...args) => dockerCli(options.docker ?? "docker", args, deadline);
+  const format = ["--filter", `label=${LABEL}=${options.pool}`, "--format", `{{.Label "noon.document"}}`];
+  const containers = (await run("ps", "--all", ...format)).split("\n");
+  // A network outlives its container when a start failed between the two: swept all the same.
+  const networks = (await run("network", "ls", ...format)).split("\n");
   const used = await inUse();
   // Only names this code made: a label that is not a uuid is left alone, never interpolated.
-  const idle = listed.split("\n").filter((id) => UUID.test(id) && !used.has(id));
-  if (idle.length > 0) await dockerCli(docker, ["rm", "--force", ...idle.map(sandboxName)], deadline);
-  return idle;
+  const idle = (ids: string[]): string[] => ids.filter((id) => UUID.test(id) && !used.has(id));
+  const idleContainers = idle(containers);
+  const idleNetworks = idle(networks);
+  if (idleContainers.length > 0) await run("rm", "--force", ...idleContainers.map(sandboxName));
+  for (const id of idleNetworks) {
+    // The proxy is the network's other member, and a network with a member cannot be removed.
+    await run("network", "disconnect", "--force", sandboxName(id), proxyName(options.pool)).catch(() => undefined);
+    await run("network", "rm", sandboxName(id)).catch((err: unknown) => {
+      if (!String(err).includes("not found")) throw err;
+    });
+  }
+  return [...new Set([...idleContainers, ...idleNetworks])];
 }
 
-async function portOf(run: Run, name: string): Promise<number> {
-  return Number(await run("container", "inspect", "--format", `{{(index (index .HostConfig.PortBindings "${String(CONTAINER_PORT)}/tcp") 0).HostPort}}`, name));
+/** The container's own PREVIEW_BASE, as it was created with it. */
+async function baseOf(run: Run, name: string): Promise<string> {
+  const env = await run("container", "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", name);
+  const base = env.split("\n").find((line) => line.startsWith("PREVIEW_BASE="))?.slice("PREVIEW_BASE=".length);
+  if (base === undefined) throw new Error(`${name}: no PREVIEW_BASE`);
+  return base;
 }
 
-/** Once per process. `enable_icc=false`: containers on this network cannot open connections to each other. */
-function ensureNetwork(run: Run): Promise<void> {
-  network ??= run("network", "inspect", NETWORK).then(
-    () => undefined,
-    () => run("network", "create", "--opt", "com.docker.network.bridge.enable_icc=false", NETWORK).then(() => undefined, (err: unknown) => {
-      if (!String(err).includes("already exists")) throw err; // another process made it first
-    }),
-  ).catch((err: unknown) => {
-    network = undefined; // a failure is not remembered: the next start asks again
+/**
+ * The document's own network. --internal: no route out, no host.docker.internal (which reaches the
+ * api's x-dev-user, Postgres and Redis on the host's loopback), and no published port either (Docker
+ * binds none for an internal-only container, measured), which is why the proxy exists. One per
+ * document, not one shared with inter-container traffic off: that would cut the proxy off too (measured).
+ * E5: the clone from Gitea must come through the worker or the proxy, never a route to the compose network.
+ * ponytail: a network per sandbox spends one of the daemon's address pools each, about 30 by default
+ * (some already taken). Ceiling: that many sandboxes at once, daemon-wide; upgrade: `default-address-pools`
+ * with small subnets in the daemon's config, or explicit `--subnet`s carved from one range.
+ */
+async function ensureNetwork(run: Run, name: string, documentId: string, pool: string): Promise<void> {
+  await run("network", "create", "--internal", "--label", `${LABEL}=${pool}`, "--label", `noon.document=${documentId}`, name).catch((err: unknown) => {
+    if (!String(err).includes("already exists")) throw err; // a restart, or another process made it first
+  });
+}
+
+/** Puts a container on a network; already on it is fine. */
+async function join(run: Run, network: string, container: string): Promise<void> {
+  await run("network", "connect", network, container).catch((err: unknown) => {
+    if (!String(err).includes("already exists")) throw err;
+  });
+}
+
+/**
+ * The pool's proxy, once per process and key: made if missing, made anew when its program or key changed (a
+ * label says which it runs), then joined to every sandbox network the pool already has. Loopback only,
+ * like every port here, and confined like a sandbox: it parses what strangers send.
+ */
+function ensureProxy(run: Run, pool: string, image: string, key: string, port: number): Promise<void> {
+  const want = fingerprint(PROXY_PROGRAM, key, String(port));
+  const known = proxies.get(pool);
+  if (known?.want === want) return known.made;
+  const made = makeProxy(run, pool, image, key, port, want).catch((err: unknown) => {
+    if (proxies.get(pool)?.made === made) proxies.delete(pool); // a failure is not remembered: the next start asks again
     throw err;
   });
-  return network;
+  proxies.set(pool, { want, made });
+  return made;
+}
+
+async function makeProxy(run: Run, pool: string, image: string, key: string, port: number, want: string): Promise<void> {
+  const name = proxyName(pool);
+  const seen = await run("container", "inspect", "--format", `{{.State.Running}} {{index .Config.Labels "noon.proxy"}}`, name).catch((err: unknown) => {
+    if (String(err).includes("No such container")) return undefined;
+    throw err;
+  });
+  if (seen?.trim() === `true ${want}`) return;
+  if (seen !== undefined) await run("rm", "--force", name);
+  try {
+    await run("run", "--detach", "--name", name, "--label", `noon.proxy=${want}`, "--label", `noon.proxy-pool=${pool}`,
+      "--restart", "unless-stopped", "--publish", `127.0.0.1:${String(port)}:${String(PROXY_PORT)}`, "--env", `PREVIEW_KEY=${key}`,
+      "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64", "--memory", "256m", "--memory-swap", "256m",
+      "--entrypoint", "node", image, "--input-type=module-typescript", "-e", PROXY_PROGRAM);
+  } catch (err) {
+    if (!String(err).includes("is already in use by container")) throw err; // another process made it first
+  }
+  const networks = (await run("network", "ls", "--filter", `label=${LABEL}=${pool}`, "--format", "{{.Name}}")).split("\n").filter(Boolean);
+  for (const network of networks) await join(run, network, name);
 }
 
 /**

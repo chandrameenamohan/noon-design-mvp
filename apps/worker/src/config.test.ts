@@ -45,3 +45,18 @@ test("a worker drains the AI queue unless told otherwise, and anything but one k
   for (const bad of ["", "Has Space", "x=y"]) expect(() => loadConfig({ ...good, SANDBOX_POOL: bad }), bad).toThrow(/SANDBOX_POOL/);
   for (const bad of ["0", "-1", "1.5", "lots"]) expect(() => loadConfig({ ...good, SANDBOX_CONCURRENCY: bad }), bad).toThrow(/SANDBOX_CONCURRENCY/);
 });
+
+// noon-9gz: the pool's sandbox proxy, and the key its preview tokens are signed with.
+test("the sandbox proxy listens on 20000 unless told otherwise, on a port a non-root process may take", () => {
+  expect(loadConfig(good).sandbox.proxyPort).toBe(20000);
+  expect(loadConfig({ ...good, SANDBOX_PROXY_PORT: "20100" }).sandbox.proxyPort).toBe(20100);
+  for (const bad of ["", "80", "0", "65536", "20000x", "2e4"]) expect(() => loadConfig({ ...good, SANDBOX_PROXY_PORT: bad }), bad).toThrow(/SANDBOX_PROXY_PORT/);
+});
+
+test("the preview key is derived from the session secret: stable across restarts, never the secret itself, another secret another key", () => {
+  const key = loadConfig(good).sandbox.previewKey;
+  expect(key).toMatch(/^[0-9a-f]{64}$/u);
+  expect(key).not.toContain(good.SESSION_TOKEN_SECRET);
+  expect(loadConfig(good).sandbox.previewKey).toBe(key);
+  expect(loadConfig({ ...good, SESSION_TOKEN_SECRET: "t".repeat(32) }).sandbox.previewKey).not.toBe(key);
+});

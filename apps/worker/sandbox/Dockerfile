@@ -5,13 +5,22 @@
 # installed at container start (learning-tests/sandbox FINDINGS 6). It is also installed INSIDE
 # Linux, which matters: Vite's bundler ships a native binary per platform, so a host's
 # node_modules copied in would not run.
-FROM node:24-slim
+#
+# The base is pinned by digest (noon-9gz): a tag moves, and this image runs code nobody here wrote.
+# Moving it is a deliberate edit: `docker pull node:24-slim`, then its RepoDigest here.
+FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-RUN npm install -g pnpm@9.15.4 && mkdir /app && chown node:node /app
+RUN npm install -g pnpm@9.15.4 && mkdir /app /home/node/deps && chown node:node /app /home/node/deps
 USER node
-WORKDIR /app
+# node_modules lives OUTSIDE the working tree (noon-9gz). The container runs --read-only, with the
+# working tree /app a sized tmpfs (the disk quota), so node_modules must come from a path of the image:
+# the start links /app/node_modules to it, read-only. Two things Vite writes into node_modules are sent
+# elsewhere: its dependency cache (our config's cacheDir) and its bundled-config temp file, which goes
+# to node_modules/.vite-temp whatever the config says (Vite 8's source): that is a link into /tmp.
+WORKDIR /home/node/deps
 COPY --chown=node:node package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --ignore-workspace
+RUN pnpm install --frozen-lockfile --ignore-workspace && ln -s /tmp/vite-temp node_modules/.vite-temp
+WORKDIR /app
 
 # The seed repository, as a bare repo inside the image: the "remote" each container clones from
 # until Gitea exists. ponytail: epic 5 points SEED_REPO at Gitea and deletes these lines.
@@ -21,10 +30,9 @@ RUN cd /tmp/seed && git init -q -b main && git add -A \
  && git clone -q --bare /tmp/seed /home/node/seed.git && rm -rf /tmp/seed
 ENV SEED_REPO=/home/node/seed.git
 
-# The container's OWN clone, on the document's working branch, checked out over the baked
-# node_modules (git refuses to clone into a non-empty directory; init + fetch + checkout does not
-# mind, and node_modules is in the seed's .gitignore). Only on the FIRST start: a restarted container
-# keeps its working tree, which is the whole point of restarting rather than recreating it.
+# The container's OWN clone, on the document's working branch, then node_modules linked in. The
+# working tree is a tmpfs (noon-9gz's disk quota), empty on every start, so in practice this clones
+# every time; the preview job pushes the document's page again after any start (preview.ts).
 #
 # One command per line, NOT an `a && b && c` chain: `set -e` ignores a failure anywhere in such a
 # chain except its last command, so a clone that failed went on to start a dev server with no
@@ -58,12 +66,13 @@ if (new URLSearchParams(location.search).get("doc") === "@DOC@") createRoot(root
 else root.textContent = "This preview belongs to another document. Reload the canvas.";
 EOF
 # The dev server's config: OURS, wrapped around the customer's (which may say anything). The port and
-# host the worker depends on, and cors. The canvas frames the preview with sandbox="allow-scripts" and
-# no allow-same-origin, so the page's origin is "null" and every module request carries `Origin: null`;
+# host the worker depends on, cors, and hmr: forced to the default, because a customer hmr.port or
+# clientPort would move the HMR socket off the one path the proxy carries (learning-tests/sandbox FINDINGS 1).
+# The canvas frames the preview with sandbox="allow-scripts" and no allow-same-origin, so the page's origin is "null" and every module request carries `Origin: null`;
 # Vite's default (any localhost origin) refuses those and the page never renders (measured). Allowing
 # exactly "null", and no real origin, is also STRICTER for real sites: another local dev server can no
-# longer read this one's source. ponytail: any site's opaque-origin frame passes too, until the
-# per-document hostname proxy (noon-9gz) puts an unguessable name in front of it.
+# longer read this one's source. Any site's opaque-origin frame passes the CORS check too, but it must
+# first know the container's token: the sandbox proxy (noon-9gz) answers nothing without it.
 # The customer's config is wrapped, not trusted: see the plugin below for what that takes.
 COPY <<'EOF' /home/node/preview/vite.config.mjs
 import { loadConfigFromFile } from "vite";
@@ -118,8 +127,14 @@ export default async (env) => {
   return {
     ...own,
     base: BASE,
+    // Inside the working tree (a tmpfs): node_modules, where Vite puts it by default, is read-only.
+    cacheDir: `${process.cwd()}/noon-preview/.vite`,
     plugins: [onlyUnderTheBase(), lockTheOrigin(), ...(own.plugins ?? [])],
-    server: { ...own.server, host: true, port: 5173, strictPort: true, cors: { origin: ALLOWED } },
+    server: {
+      ...own.server, host: true, port: 5173, strictPort: true, cors: { origin: ALLOWED }, hmr: true,
+      // node_modules is a link to /home/node/deps, outside the root: Vite serves only what this allows.
+      fs: { ...own.server?.fs, allow: [process.cwd(), "/home/node/deps"] },
+    },
   };
 };
 EOF
@@ -131,6 +146,7 @@ EOF
 COPY --chmod=755 <<'EOF' /home/node/start.sh
 #!/bin/sh
 set -eu
+mkdir -p /tmp/vite-temp
 if ! git rev-parse --quiet --verify HEAD >/dev/null 2>&1; then
   rm -rf .git
   git init --quiet --initial-branch=main
@@ -142,7 +158,12 @@ mkdir -p noon-preview
 cp /home/node/preview/index.html /home/node/preview/vite.config.mjs noon-preview/
 sed -e "s|@PAGE@|../$PAGE|" -e "s|@DOC@|${BRANCH#noon/}|" /home/node/preview/main.tsx > noon-preview/main.tsx
 [ -f "$PAGE" ] || cp /home/node/preview/placeholder.tsx "$PAGE"
-grep -qx 'noon-preview/' .git/info/exclude || echo 'noon-preview/' >> .git/info/exclude
-exec pnpm exec vite --config noon-preview/vite.config.mjs
+ln -sfn /home/node/deps/node_modules node_modules
+# A link is not the directory the seed's `node_modules/` ignores: excluded by name, like the preview.
+for excluded in noon-preview/ node_modules; do
+  grep -qx "$excluded" .git/info/exclude || echo "$excluded" >> .git/info/exclude
+done
+# Vite itself, not `pnpm exec`: pnpm wants to write under $HOME, and nothing outside the tmpfs is writable.
+exec node node_modules/vite/bin/vite.js --config noon-preview/vite.config.mjs
 EOF
 CMD ["/home/node/start.sh"]

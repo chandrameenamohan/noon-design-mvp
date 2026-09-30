@@ -29,7 +29,7 @@ function aiHandlers(): Handlers {
   return { ai: createAiHandler({ sessions: config.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, stillMember, runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
 }
 function sandboxHandlers(): Handlers {
-  const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool };
+  const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool, proxyPort: config.sandbox.proxyPort, previewKey: config.sandbox.previewKey };
   // The reaper: every sandbox whose document has no sandbox job in flight, and none finished in the
   // last five minutes, is removed. Postgres says what is in use; the containers are only a cache of it.
   // ponytail: one timer, one sweep at a time; a lease if two sandbox workers ever run (E7).

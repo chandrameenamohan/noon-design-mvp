@@ -197,6 +197,24 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       nextCursor: result.rows.length > limit && last ? encodeCursor(last.cursor_ts, last.id) : null,
     };
   }
+  /** One statement, returning ids, in a transaction that holds the org's advisory lock: one at a time per org. */
+  async function inOrgTurn(orgId: string, sql: string, params: unknown[]): Promise<{ id: string }[]> {
+    const client = await pool.connect();
+    let broken: Error | undefined;
+    try {
+      await client.query("begin");
+      await client.query("select pg_advisory_xact_lock(hashtext('noon:preview:' || $1))", [orgId]);
+      const result = (await client.query<QueryResultRow>(sql, params)).rows.map((row) => z.object({ id: z.string() }).parse(row));
+      await client.query("commit");
+      return result;
+    } catch (err) {
+      await client.query("rollback").catch(() => undefined);
+      broken = err instanceof Error ? err : new Error(String(err));
+      throw err;
+    } finally {
+      client.release(broken); // after a failure the connection's transaction state is unknown: destroyed
+    }
+  }
   async function one<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T | undefined> {
     return (await rows(parser, sql, params))[0];
   }
@@ -443,11 +461,11 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         openPreview: async ({ documentId, createdBy }) => {
           if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
           // `on conflict do nothing`: the document's unfinished job, if any, is the answer as it is.
-          // ponytail: the per-org cap is a count inside the insert, so two opens at the same instant
-          // can pass it together (a sandbox or two over, never unbounded). An advisory lock per org
-          // makes it exact, if fairness ever has to be.
-          const inserted = await rows(
-            z.object({ id: z.string() }),
+          // The per-org cap is a count inside the insert, and two counts read at the same instant both
+          // pass it: opens of one org take turns on an advisory lock, and each insert, a statement of its
+          // own after the lock, reads what the one before it committed (read committed).
+          const inserted = await inOrgTurn(
+            orgId,
             "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'sandbox', '{}', $3 from documents d " +
               "where d.org_id = $1 and d.id = $2 and (select count(*) from jobs where org_id = $1 and queue = 'sandbox' and status in ('queued', 'running') and document_id <> $2) < $4 " +
               // Not again straight after a failure: the canvas asks once a second, and a sandbox that cannot

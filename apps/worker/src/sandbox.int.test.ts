@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer as createHttpServer } from "node:http";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -12,14 +11,24 @@ import type { Doc, Op, PropValue } from "@noon/contracts";
 import { generate } from "@noon/codegen";
 import { manifest } from "@noon/design-system";
 import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
-import { buildImage, DOCKER, docker, dockerEnv, IMAGE, testPool } from "./sandbox-testing.ts";
+import { previewToken } from "./sandbox-proxy.ts";
+import { buildImage, DOCKER, docker, dockerEnv, IMAGE, removePool, TEST_PREVIEW_KEY, testPool } from "./sandbox-testing.ts";
 import { isRunning, pagePath, previewUrl, pushPage, reapSandboxes, sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
 
 // E4.2a, integration:sandbox-start-ready. Real Docker, the real image, the real sample app.
 const BROKEN = "noon-sandbox:broken";
 const SILENT = "noon-sandbox:silent";
+/** The same image with one more layer: another image id, as after `make sandbox-image`. */
+const NEWER = "noon-sandbox:newer";
 const pool = testPool();
-const options: SandboxOptions = { image: IMAGE, docker: DOCKER, pool, ports: [21000, 21999] };
+// 21000: never the compose stack's proxy (20000) or the e2e stack's (20100).
+const options: SandboxOptions = { image: IMAGE, docker: DOCKER, pool, previewKey: TEST_PREVIEW_KEY, proxyPort: 21000 };
+/** Another stack's pool: its own proxy, on its own port. */
+const pools = [pool];
+const otherPool = (): SandboxOptions => {
+  pools.push(testPool());
+  return { ...options, pool: pools.at(-1) ?? "", proxyPort: 21000 + pools.length - 1 };
+};
 const made: string[] = [];
 const newDocument = (): string => {
   const id = randomUUID();
@@ -33,6 +42,7 @@ beforeAll(async () => {
   await variant(BROKEN, "ENV SEED_REPO=/nowhere.git");
   // The same image, running but with no dev server: it never answers.
   await variant(SILENT, `CMD ["sleep", "infinity"]`);
+  await variant(NEWER, "LABEL noon.test=newer");
 }, 900_000);
 
 async function variant(tag: string, line: string): Promise<void> {
@@ -43,7 +53,16 @@ async function variant(tag: string, line: string): Promise<void> {
 
 afterAll(async () => {
   if (made.length > 0) await docker("rm", "--force", ...made.map(sandboxName)).catch(() => undefined);
+  for (const each of pools) await removePool(each);
 });
+
+/** Writes a file into the sandbox's working tree. Not `docker cp`: Docker refuses it into a --read-only container, tmpfs or not. */
+async function write(id: string, path: string, content: string): Promise<void> {
+  const run = promisify(execFile)(DOCKER, ["exec", "--interactive", sandboxName(id), "sh", "-c", `cat > "${path}"`], { timeout: 60_000, env: dockerEnv });
+  run.child.stdin?.end(content);
+  await run;
+}
+const TOKENED = /^http:\/\/127\.0\.0\.1:21000\/preview\/[0-9a-f-]{36}\/[0-9a-f]{16}\.[0-9a-f]{32}\/$/u;
 
 test("a document's sandbox starts from the baked image and reports a URL that serves the sample app", async () => {
   const id = newDocument();
@@ -56,17 +75,19 @@ test("a document's sandbox starts from the baked image and reports a URL that se
   expect(await page.text()).toContain(`<div id="root">`);
   // The dev server really transforms the app's code, not only serves index.html.
   expect(await (await fetch(new URL("src/pages/Showcase.tsx", sandbox.url))).text()).toContain("Showcase");
-  // noon-l96: it serves under /preview/<document>/<port>/ (so the canvas's dev server can carry it), and
-  // outside that a bare 404: Vite's own would NAME the base, handing the document id to anyone trying ports.
-  expect(sandbox.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:(\\d+)/preview/${id}/\\1/$`, "u"));
-  for (const path of ["/", "/index.html", "/src/pages/Showcase.tsx", `/preview/${randomUUID()}/${new URL(sandbox.url).port}/`]) {
+  // noon-9gz: it answers through the pool's proxy, under /preview/<document>/<token>/, and outside that
+  // a bare 404: from the proxy without the token, from the sandbox for a token that is not its container's
+  // (Vite's own 404 would NAME the base, handing the token to anyone who has an old one).
+  expect(sandbox.url).toMatch(TOKENED);
+  expect(sandbox.url).toContain(`/preview/${id}/`);
+  for (const path of ["/", "/index.html", "/src/pages/Showcase.tsx", `/preview/${id}/`, `/preview/${id}/${previewToken(TEST_PREVIEW_KEY, id, "0000000000000000")}/`]) {
     const outside = await fetch(new URL(path, sandbox.url), { headers: { accept: "text/html" }, redirect: "manual" });
     expect(outside.status, path).toBe(404);
     expect(await outside.text(), path).toBe("");
   }
   // Baked: node_modules is IN THE IMAGE, before any container starts (a structural fact, not a
   // timing guess: an 8 s bound between "about 1 s" and "10.6 s to install" failed once under load).
-  await docker("run", "--rm", "--entrypoint", "test", IMAGE, "-d", "/app/node_modules/vite"); // throws when it is not there
+  await docker("run", "--rm", "--entrypoint", "test", IMAGE, "-d", "/home/node/deps/node_modules/vite"); // throws when it is not there
   expect(took).toBeLessThan(30_000); // a smoke bound only
 }, 60_000);
 
@@ -100,25 +121,25 @@ test("one container per document: ten concurrent starts all get the same sandbox
   expect(await startSandbox(id, options)).toEqual(results[0]);
 }, 90_000);
 
-test("ten concurrent starts of a KILLED sandbox bring it back once, with its working tree", async () => {
+test("ten concurrent starts of a KILLED sandbox bring it back once", async () => {
   const id = newDocument();
   await startSandbox(id, options);
-  await docker("exec", sandboxName(id), "sh", "-c", "echo kept > kept.txt");
   await docker("kill", sandboxName(id));
   const results = await Promise.all(Array.from({ length: 10 }, () => startSandbox(id, options)));
   await expectOneSandbox(id, results);
-  expect(await docker("exec", sandboxName(id), "cat", "kept.txt")).toBe("kept");
 }, 90_000);
 
-test("a stopped sandbox comes back on the SAME url with its working tree, because Vite's client only self-heals on the same origin", async () => {
+test("a stopped sandbox comes back on the SAME url, with a fresh clone: the working tree is a tmpfs, the disk quota", async () => {
   const id = newDocument();
   const before = await startSandbox(id, options);
-  await docker("exec", sandboxName(id), "sh", "-c", "echo kept > kept.txt");
+  await docker("exec", sandboxName(id), "sh", "-c", "echo gone > gone.txt");
   await docker("kill", sandboxName(id));
   const after = await startSandbox(id, options);
   expect(after.url).toBe(before.url);
   expect((await fetch(after.url)).status).toBe(200);
-  expect(await docker("exec", sandboxName(id), "cat", "kept.txt")).toBe("kept");
+  // Gone with the run: the preview job pushes the document's page again after every start (preview.ts).
+  await expect(docker("exec", sandboxName(id), "test", "-e", "gone.txt")).rejects.toThrow();
+  expect(await docker("exec", sandboxName(id), "git", "rev-parse", "--abbrev-ref", "HEAD")).toBe(`noon/${id}`);
 }, 60_000);
 
 test("a clone that died halfway is done again on the next start, not served as it is", async () => {
@@ -132,50 +153,95 @@ test("a clone that died halfway is done again on the next start, not served as i
   expect(await docker("exec", sandboxName(id), "git", "log", "--format=%s", "-1")).toBe("seed");
 }, 60_000);
 
-test("a port something else holds is skipped, and the container it left behind does not block the next try", async () => {
-  // Held on the host, where Docker has to bind. Two ports in the range, the first one taken.
-  const held = createServer();
-  // Outside the file's shared range, so no other test's sandbox can already sit on either port.
-  await new Promise<void>((resolve) => held.listen(22990, "127.0.0.1", resolve));
-  try {
-    // An id whose first eight hex digits are 0 starts at the FIRST port of the range: the held one.
-    const id = `00000000-${randomUUID().slice(9)}`;
-    made.push(id);
-    const sandbox = await startSandbox(id, { ...options, ports: [22990, 22991] });
-    expect(sandbox.url).toBe(`http://127.0.0.1:22991/preview/${id}/22991/`);
-    // With the ONLY port held, it gives up by name instead of looping.
-    await expect(startSandbox(newDocument(), { ...options, ports: [22990, 22990] })).rejects.toThrow(/no free port/u);
-  } finally {
-    held.close();
-  }
-}, 60_000);
+test("a sandbox of an older image, or signed with an older key, is made anew with a new token, never started as it was", async () => {
+  // E4.2a spec note 3: after `make sandbox-image`, a stopped container was docker-started on the OLD image.
+  const id = newDocument();
+  const first = await startSandbox(id, options);
+  await docker("stop", sandboxName(id));
+  const newer = await startSandbox(id, { ...options, image: NEWER });
+  expect(newer.url).not.toBe(first.url);
+  expect(await docker("container", "inspect", "--format", "{{.Image}}", sandboxName(id))).toBe(await docker("image", "inspect", "--format", "{{.Id}}", NEWER));
+  expect((await fetch(newer.url)).status).toBe(200);
+  expect((await fetch(first.url)).status).toBe(404); // the old container's token: its URL died with it
+  // A new key (SESSION_TOKEN_SECRET rotated): the proxy is made anew with it, and so is the sandbox.
+  const rekeyed = { ...options, image: NEWER, previewKey: "another-preview-key-".padEnd(40, "1") };
+  const after = await startSandbox(id, rekeyed);
+  expect(after.url).not.toBe(newer.url);
+  expect((await fetch(after.url)).status).toBe(200);
+  expect((await fetch(newer.url)).status).toBe(404);
+  // Back to the file's key for the tests after this one: the proxy follows again.
+  await startSandbox(newDocument(), options);
+}, 120_000);
 
-test("the URL names the address the port is bound to, so a listener on ::1 cannot answer for it", async () => {
+test("the URL names the proxy's loopback address, so a listener on ::1 cannot answer for it", async () => {
   // `localhost` may resolve to ::1 first, where Docker did not bind and anything else may listen.
-  expect((await startSandbox(newDocument(), options)).url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/u);
+  expect((await startSandbox(newDocument(), options)).url).toMatch(TOKENED);
 }, 60_000);
 
-test("the container is confined: loopback-only port, no root, no capabilities, no swap, a small /tmp, its own network", async () => {
+test("the container is confined: no published port, no root, no capabilities, no swap, a read-only image, sized tmpfs, its own internal network", async () => {
   const id = newDocument();
   await startSandbox(id, options);
-  const inspect = JSON.parse(await docker("container", "inspect", sandboxName(id))) as [{ HostConfig: { PortBindings: Record<string, { HostIp: string }[]>; CapDrop: string[]; SecurityOpt: string[]; Memory: number; MemorySwap: number; Tmpfs: Record<string, string>; NetworkMode: string; Init: boolean } }];
+  const inspect = JSON.parse(await docker("container", "inspect", sandboxName(id))) as [{ HostConfig: { PortBindings: Record<string, unknown[]> | null; CapDrop: string[]; SecurityOpt: string[]; Memory: number; MemorySwap: number; Tmpfs: Record<string, string>; NetworkMode: string; ReadonlyRootfs: boolean } }];
   const config = inspect[0].HostConfig;
-  expect(Object.values(config.PortBindings).flat().map((binding) => binding.HostIp)).toEqual(["127.0.0.1"]);
+  expect(Object.values(config.PortBindings ?? {}).flat()).toEqual([]);
   expect(config.CapDrop).toEqual(["ALL"]);
   expect(config.SecurityOpt).toContain("no-new-privileges");
   expect(config.MemorySwap).toBe(config.Memory); // equal = no swap on top of the memory limit
+  expect(config.ReadonlyRootfs).toBe(true);
+  expect(config.Tmpfs["/app"]).toMatch(/size=256m/u);
   expect(config.Tmpfs["/tmp"]).toMatch(/size=/u);
-  expect(config.NetworkMode).toBe("noon-sandboxes");
+  expect(config.NetworkMode).toBe(sandboxName(id));
+  expect(await docker("network", "inspect", "--format", "{{.Internal}}", sandboxName(id))).toBe("true");
   expect(await docker("exec", sandboxName(id), "id", "-u")).not.toBe("0");
+  // The proxy: the pool's one published port, on the loopback only, confined the same way.
+  const proxy = (JSON.parse(await docker("container", "inspect", `noon-sandbox-proxy-${pool}`)) as [{ HostConfig: { PortBindings: Record<string, { HostIp: string; HostPort: string }[]>; CapDrop: string[]; ReadonlyRootfs: boolean } }])[0].HostConfig;
+  expect(Object.values(proxy.PortBindings).flat()).toEqual([{ HostIp: "127.0.0.1", HostPort: "21000" }]);
+  expect(proxy.CapDrop).toEqual(["ALL"]);
+  expect(proxy.ReadonlyRootfs).toBe(true);
 }, 60_000);
 
-test("one sandbox cannot reach another's dev server", async () => {
+/** What the sandbox's own Node sees when it dials `url`: "reached <status>" or "refused". */
+const dial = (id: string, url: string): Promise<string> =>
+  docker("exec", sandboxName(id), "node", "-e", `fetch('${url}', { signal: AbortSignal.timeout(3000) }).then((r) => console.log('reached ' + r.status), () => console.log('refused'))`);
+
+test("a sandbox reaches nothing outside: no internet, no host.docker.internal (the api, Postgres, Redis on the host)", async () => {
+  const id = newDocument();
+  await startSandbox(id, options);
+  expect(await dial(id, "http://example.com/")).toBe("refused");
+  expect(await dial(id, "http://1.1.1.1/")).toBe("refused"); // no DNS needed: no route either
+  expect(await dial(id, "http://host.docker.internal:3000/health")).toBe("refused");
+}, 60_000);
+
+test("the disk quota: the working tree fills up at its size, and nothing else is writable", async () => {
+  const id = newDocument();
+  await startSandbox(id, options);
+  await expect(docker("exec", sandboxName(id), "sh", "-c", "dd if=/dev/zero of=big bs=1M count=300")).rejects.toThrow(/No space left/u);
+  await docker("exec", sandboxName(id), "rm", "-f", "big");
+  for (const path of ["/home/node/x", "/app/node_modules/x", "/home/node/seed.git/x"]) {
+    await expect(docker("exec", sandboxName(id), "touch", path), path).rejects.toThrow(/Read-only file system/u);
+  }
+  expect((await fetch((await startSandbox(id, options)).url)).status).toBe(200); // and it still serves
+}, 60_000);
+
+test("one sandbox cannot reach another's dev server: not directly, and not through the proxy with a document id", async () => {
   const [a, b] = [newDocument(), newDocument()];
   await Promise.all([startSandbox(a, options), startSandbox(b, options)]);
   const ip = await docker("container", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", sandboxName(b));
   expect(ip).toMatch(/^\d+\.\d+\.\d+\.\d+$/u);
-  const probe = `fetch('http://${ip}:5173/', { signal: AbortSignal.timeout(2000) }).then(() => console.log('reached'), () => console.log('refused'))`;
-  expect(await docker("exec", sandboxName(a), "node", "-e", probe)).toBe("refused");
+  expect(await dial(a, `http://${ip}:5173/`)).toBe("refused");
+  expect(await dial(a, `http://${sandboxName(b)}:5173/`)).toBe("refused");
+  // The proxy is on a's network too (it has to be): without b's token it opens nothing.
+  expect(await dial(a, `http://noon-sandbox-proxy-${pool}:8080/preview/${b}/`)).toBe("reached 404");
+  expect(await dial(a, `http://noon-sandbox-proxy-${pool}:8080/preview/${b}/${previewToken("guessed-key".padEnd(32, "x"), b, "0000000000000000")}/`)).toBe("reached 404");
+}, 60_000);
+
+test("through the proxy, a document id alone opens nothing, nor does another document's token", async () => {
+  const [a, b] = [newDocument(), newDocument()];
+  const [sa, sb] = await Promise.all([startSandbox(a, options), startSandbox(b, options)]);
+  expect((await fetch(`http://127.0.0.1:21000/preview/${a}/noon-preview/?doc=${a}`)).status).toBe(404);
+  const tokenOfB = new URL(sb.url).pathname.split("/")[3] ?? "";
+  expect((await fetch(`http://127.0.0.1:21000/preview/${a}/${tokenOfB}/`)).status).toBe(404);
+  expect((await fetch(sa.url)).status).toBe(200);
 }, 60_000);
 
 test("docker stop takes a sandbox down at once, not after the 10 s grace (Vite handles SIGTERM itself: no --init needed)", async () => {
@@ -328,10 +394,14 @@ test.each(Object.entries(HOSTILE_CONFIGS))("a customer vite.config cannot open t
   const id = newDocument();
   const sandbox = await startSandbox(id, options);
   await pushPage(id, page("guarded"), options);
-  const onHost = join(mkdtempSync(join(tmpdir(), "hostile-config-")), "vite.config.ts");
-  writeFileSync(onHost, config);
-  await docker("cp", onHost, `${sandboxName(id)}:/app/vite.config.ts`);
-  await docker("restart", sandboxName(id));
+  // Not `docker restart`: the working tree is a tmpfs, and a restart would clone the seed's config back.
+  // Changing OUR config makes Vite restart in place, loading the customer's again (measured).
+  const restarts = async (): Promise<number> => (await docker("logs", sandboxName(id)).catch(() => "")).split("server restarted").length;
+  const before = await restarts();
+  await write(id, "vite.config.ts", config);
+  await docker("exec", sandboxName(id), "sh", "-c", "echo '// reload' >> noon-preview/vite.config.mjs");
+  for (let i = 0; i < 100 && (await restarts()) === before; i++) await new Promise((r) => setTimeout(r, 200));
+  expect(await restarts()).toBeGreaterThan(before);
   const answers = async (origin: string): Promise<string | null> => {
     for (let i = 0; i < 100; i++) {
       const res = await fetch(new URL("noon-preview/main.tsx", sandbox.url), { headers: { origin } }).catch(() => undefined);
@@ -363,14 +433,14 @@ test("a push to a sandbox that is not running fails by name, never silently", as
 test("the reaper sweeps only its own pool: another stack's sandbox, not in use HERE, is left alone", async () => {
   // The compose stack's reaper once removed the test suite's sandboxes: same daemon, same label.
   const theirs = newDocument();
-  await startSandbox(theirs, { ...options, pool: testPool() });
+  await startSandbox(theirs, otherPool());
   expect(await reapSandboxes(() => Promise.resolve(new Set()), options)).not.toContain(theirs);
   expect(await isRunning(theirs, options)).toBe(true);
 }, 60_000);
 
 test("the reaper lists the containers BEFORE it asks what is in use: a sandbox started in between is never removed", async () => {
   // The race: Postgres answers "not in use", a job starts the document's sandbox, THEN docker ps lists it.
-  const own = { ...options, pool: testPool() };
+  const own = otherPool();
   const late = newDocument();
   const removed = await reapSandboxes(async () => {
     await startSandbox(late, own); // started after the list, so it is not in it
@@ -394,6 +464,9 @@ test("the reaper removes every sandbox whose document is not in use, and only th
   expect(removed).not.toContain(inUse);
   const left = (await docker("ps", "--all", "--filter", `label=noon.sandbox=${pool}`, "--format", `{{.Label "noon.document"}}`)).split("\n").filter(Boolean);
   expect(left).toEqual([inUse]);
+  // Their networks too: each spends one of the daemon's few address pools.
+  const networks = (await docker("network", "ls", "--filter", `label=noon.sandbox=${pool}`, "--format", `{{.Label "noon.document"}}`)).split("\n").filter(Boolean);
+  expect(networks).toEqual([inUse]);
   // A second sweep with nothing idle removes nothing.
   expect(await reapSandboxes(() => Promise.resolve(new Set([inUse])), options)).toEqual([]);
 }, 90_000);

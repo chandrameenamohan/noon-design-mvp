@@ -66,22 +66,22 @@ export type PreviewOutput = z.infer<typeof PreviewOutput>;
 // `new URL()` that throws inside a refine makes safeParse THROW. A stored row must never be a 500.
 const onLoopback = (url: string): boolean => URL.canParse(url) && new URL(url).hostname === "127.0.0.1";
 /**
- * Where a sandbox answers, as the worker stores it: this machine's loopback, nowhere else. Until the
- * per-document proxy (noon-9gz) every preview is http://127.0.0.1:<port>, and a row that said otherwise
- * must never frame another site.
+ * Where a sandbox answers, as the worker stores it: this machine's loopback, nowhere else. Every preview
+ * is http://127.0.0.1:<the stack's sandbox proxy>/preview/<document>/<token>/ (noon-9gz), and a row that
+ * said otherwise must never frame another site.
  */
 export const SandboxUrl = PreviewOutput.shape.url.refine(onLoopback, "a preview answers on 127.0.0.1");
 /**
  * A document's preview as the canvas reads it (F15): its newest sandbox job. `none` = never opened.
  * `url` is set only while the job runs and the sandbox answers; null while it (re)starts = "rebuilding".
  * The stored loopback address, or, when the app is reached through one public URL (noon-l96), the same
- * path on the canvas's own origin, which carries it as /preview/<document>/<port>/. That host is the
+ * path on the canvas's own origin, which carries it as /preview/<document>/<token>/. That host is the
  * api's configuration, not the row's; the canvas frames only its own origin or the loopback.
  */
 export const Preview = z.strictObject({
   status: z.enum(["none", ...RunStatus.options]),
   url: PreviewOutput.shape.url
-    .refine((url) => onLoopback(url) || (URL.canParse(url) && /^\/preview\/[0-9a-f-]{36}\/\d+\//u.test(new URL(url).pathname)), "a preview answers on 127.0.0.1, or under /preview/")
+    .refine((url) => onLoopback(url) || (URL.canParse(url) && /^\/preview\/[0-9a-f-]{36}\/[0-9a-f]{16}\.[0-9a-f]{32}\//u.test(new URL(url).pathname)), "a preview answers on 127.0.0.1, or under /preview/")
     .nullable(),
 });
 export type Preview = z.infer<typeof Preview>;

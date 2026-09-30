@@ -57,7 +57,7 @@ services:
       # Hosting: SYNC_PUBLIC_URL=wss://<public host>/sync, set in the shell, not .env (init.sh smoke-tests locally).
       SYNC_PUBLIC_URL: "${SYNC_PUBLIC_URL:-ws://localhost:${SYNC_PORT:-3001}}"
       # Hosting, too: PREVIEW_PUBLIC_URL=https://<public host>, and the canvas frames the preview through
-      # Vite's /preview/ proxy (started with PUBLIC_HOST). Empty: the loopback address, as on this machine.
+      # Vite's /preview/ proxy (started with PUBLIC_HOST). Empty: the sandbox proxy's loopback address.
       PREVIEW_PUBLIC_URL: "${PREVIEW_PUBLIC_URL:-}"
       # The app connects as noon_app: data access only, not a superuser, cannot alter the schema.
       # init.sh generates hex passwords, so the value is safe inside a URL without escaping.
@@ -119,7 +119,9 @@ services:
   # the Docker socket, which is root on the host: it runs no model and no customer code, only docker
   # commands for sandboxes (the sandboxes themselves run on their own network, never this one).
   # Never merge it with `worker`: that one runs the Agent SDK's subprocess (E4.2a security review).
-  # ponytail: the raw socket; a socket proxy allowing only the sandbox's calls narrows it (noon-9gz).
+  # ponytail: the raw socket. A socket proxy that filters by API section does not narrow it (containers
+  # create + exec is still root on the host: `run --privileged -v /:/host`); an authz plugin allowing
+  # exactly sandbox.ts's calls and flags does. Before anything but our own code can reach this service.
   worker-sandbox:
     build: .
     command: ["node", "apps/worker/src/main.ts"]
@@ -135,6 +137,9 @@ services:
       # This stack's sandboxes, and the only ones its reaper removes: `make clean-clone` and the test
       # suites run their own sandboxes on the same Docker daemon.
       SANDBOX_POOL: "${COMPOSE_PROJECT_NAME:-noon-design-mvp}"
+      # The pool's sandbox proxy, on the host's 127.0.0.1: every preview of this stack answers there, and
+      # the canvas's dev server forwards /preview/ to it (noon-9gz). One per stack: e2e and clean-clone move theirs.
+      SANDBOX_PROXY_PORT: "${SANDBOX_PROXY_PORT:-20000}"
     volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
     depends_on:
       migrate: { condition: service_completed_successfully }

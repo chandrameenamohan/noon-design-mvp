@@ -95,6 +95,17 @@ test("one org holds at most 4 previews at once: the fifth document is refused by
   expect((await open("bea@example.com", docs[4] as Document)).status).toBe(201);
 });
 
+// noon-9gz (E4.2b note 3): the cap was a count inside the insert, and opens at the same instant passed it together.
+test("ten documents of one org opened at the same instant: exactly 4 previews, the rest refused by name", async () => {
+  const org = await anOrg("dan@example.com");
+  const docs = await Promise.all(Array.from({ length: 10 }, () => aDocumentIn("dan@example.com", org)));
+  const answers = await Promise.all(docs.map(async (doc) => (await open("dan@example.com", doc)).status));
+  expect(answers.filter((status) => status === 201)).toHaveLength(4);
+  expect(answers.filter((status) => status === 409)).toHaveLength(6);
+  const running = (await ctx.db.rawQuery("select count(*)::int as n from jobs where org_id = $1 and queue = 'sandbox' and status in ('queued', 'running')", [org.org.id])) as { rows: { n: number }[] };
+  expect(running.rows[0]?.n).toBe(4);
+});
+
 test("a stored URL that no parser can read is 'no URL', never a 500 (a refine must not throw)", async () => {
   const doc = await aDocumentIn("ann@example.com", await anOrg("ann@example.com"));
   await open("ann@example.com", doc);
@@ -130,11 +141,11 @@ test("behind one public URL (PREVIEW_PUBLIC_URL) both answers give the same path
   const [job] = await jobsOf(doc);
   const key = { queue: "sandbox" as const, jobId: job?.id ?? "", orgId: doc.orgId };
   await ctx.db.db.jobStore().claim(key);
-  const stored = `http://127.0.0.1:20001/preview/${doc.id}/20001/noon-preview/?doc=${doc.id}&started=5`;
+  const stored = `http://127.0.0.1:20000/preview/${doc.id}/0123456789abcdef.0123456789abcdef0123456789abcdef/noon-preview/?doc=${doc.id}&started=5`;
   await ctx.db.db.jobStore().report(key, { url: stored });
 
   const hosted = buildApp({ db: ctx.db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve(), previewOrigin: "https://noon.example.com" });
-  const public_ = `https://noon.example.com/preview/${doc.id}/20001/noon-preview/?doc=${doc.id}&started=5`;
+  const public_ = `https://noon.example.com/preview/${doc.id}/0123456789abcdef.0123456789abcdef0123456789abcdef/noon-preview/?doc=${doc.id}&started=5`;
   for (const method of ["GET", "POST"]) {
     const res = await hosted.request(`/documents/${doc.id}/preview`, { method, headers: { "x-dev-user": "ann@example.com" } });
     expect(Preview.parse(await res.json()), method).toEqual({ status: "running", url: public_ });

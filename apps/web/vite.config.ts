@@ -11,6 +11,8 @@ const api = process.env["API_TARGET"] ?? "http://localhost:3000";
 // http://127.0.0.1:<port> is the visitor's OWN loopback, and mixed content under https besides.
 // ponytail: Vite's dev server as the public front; a static build behind a real proxy when traffic matters.
 const publicHost = process.env["PUBLIC_HOST"];
+// The worker's sandbox proxy (its SANDBOX_PROXY_PORT): the one address every preview of the stack answers on.
+const sandboxProxy = process.env["SANDBOX_PROXY_URL"] ?? "http://127.0.0.1:20000";
 
 export default defineConfig({
   plugins: [react()],
@@ -19,7 +21,7 @@ export default defineConfig({
     proxy: {
       "/api": { target: api, rewrite: (path) => path.replace(/^\/api/, "") },
       "/sync": { target: "ws://localhost:3001", ws: true, rewrite: (path) => path.replace(/^\/sync/, "") },
-      ...(publicHost === undefined ? {} : previewProxy),
+      ...(publicHost === undefined ? {} : previewProxy(sandboxProxy)),
     },
   },
 });

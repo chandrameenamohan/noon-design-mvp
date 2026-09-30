@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { DatabaseUrl, parseEnv } from "@noon/process/env";
 import { RedisUrl } from "@noon/queue";
@@ -29,15 +30,21 @@ const Env = z.object({
   SANDBOX_POOL: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/u, "SANDBOX_POOL must be lowercase letters, digits and hyphens").default("default"),
   // Each running sandbox job holds a container (1 CPU, 1 GiB) while its document is open: this is the cap.
   SANDBOX_CONCURRENCY: z.string().regex(/^[1-9]\d{0,3}$/u, "SANDBOX_CONCURRENCY must be a whole number from 1").transform(Number).default(8),
+  // The pool's sandbox proxy, on 127.0.0.1: every preview of this stack answers here (noon-9gz). The
+  // canvas's dev server forwards /preview/ to it (apps/web: SANDBOX_PROXY_URL).
+  SANDBOX_PROXY_PORT: z.string().regex(/^\d{4,5}$/u, "SANDBOX_PROXY_PORT must be a port number").transform(Number).refine((port) => port >= 1024 && port <= 65535, "SANDBOX_PROXY_PORT must be from 1024 to 65535").default(20000),
 });
 
 export function loadConfig(env: Record<string, string | undefined>): {
   databaseUrl: string; redisUrl: string; sessions: { secret: string; syncUrl: string }; oauthToken: string | undefined; model: string;
-  queue: "ai" | "sandbox"; sandbox: { image: string; docker: string; pool: string; concurrency: number };
+  queue: "ai" | "sandbox"; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string };
 } {
   const parsed = parseEnv(Env, env);
+  // The preview tokens' key, derived and not a new secret in .env: the sync server's secret never leaves
+  // this process (the proxy gets only the derived key), and a stack whose .env predates noon-9gz starts.
+  const previewKey = createHmac("sha256", parsed.SESSION_TOKEN_SECRET).update("noon-sandbox-preview-key").digest("hex");
   return {
     databaseUrl: parsed.DATABASE_URL, redisUrl: parsed.REDIS_URL, sessions: { secret: parsed.SESSION_TOKEN_SECRET, syncUrl: parsed.SYNC_URL }, oauthToken: parsed.CLAUDE_CODE_OAUTH_TOKEN, model: parsed.AI_MODEL,
-    queue: parsed.WORKER_QUEUE, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY },
+    queue: parsed.WORKER_QUEUE, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY, proxyPort: parsed.SANDBOX_PROXY_PORT, previewKey },
   };
 }

@@ -10,7 +10,12 @@ export default function teardown(): void {
   const path = `${process.env["PATH"] ?? ""}:/Applications/Docker.app/Contents/Resources/bin`;
   execFileSync("docker", ["compose", "exec", "-T", "postgres", "psql", "-U", "noon", "-d", "noon", "-qc", sql], { env: { ...process.env, PATH: path }, stdio: "ignore" });
   // The e2e sandbox worker's containers (pool noon-e2e, playwright.config.ts): their documents are gone now.
-  const leftovers = execFileSync("docker", ["ps", "--all", "--quiet", "--filter", "label=noon.sandbox=noon-e2e"], { env: { ...process.env, PATH: path }, encoding: "utf8" }).split("\n").filter(Boolean);
+  // Its proxy too, and then their networks (noon-9gz): each holds one of the daemon's few address pools,
+  // and one with the proxy still on it cannot be removed.
+  const list = (...args: string[]): string[] => execFileSync("docker", args, { env: { ...process.env, PATH: path }, encoding: "utf8" }).split("\n").filter(Boolean);
+  const leftovers = [...list("ps", "--all", "--quiet", "--filter", "label=noon.sandbox=noon-e2e"), ...list("ps", "--all", "--quiet", "--filter", "label=noon.proxy-pool=noon-e2e")];
   if (leftovers.length > 0) execFileSync("docker", ["rm", "--force", ...leftovers], { env: { ...process.env, PATH: path }, stdio: "ignore" });
+  const networks = list("network", "ls", "--quiet", "--filter", "label=noon.sandbox=noon-e2e");
+  if (networks.length > 0) execFileSync("docker", ["network", "rm", ...networks], { env: { ...process.env, PATH: path }, stdio: "ignore" });
   execFileSync("docker", ["compose", "start", "worker", "worker-sandbox"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped them
 }

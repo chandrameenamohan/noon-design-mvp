@@ -38,7 +38,7 @@ test("the preview follows an edit within 3 s, without reloading the page", async
   await expect(page.locator("iframe[title='Preview of this page']")).toHaveAttribute("sandbox", "allow-scripts");
   // Through the canvas's own origin, as a visitor behind a tunnel gets it (noon-l96): page, modules, and
   // the HMR socket the edit below arrives on all pass the dev server's /preview/ proxy.
-  await expect(page.locator("iframe[title='Preview of this page']")).toHaveAttribute("src", new RegExp(`^${baseURL ?? ""}/preview/${documentId}/\\d+/noon-preview/`, "u"));
+  await expect(page.locator("iframe[title='Preview of this page']")).toHaveAttribute("src", new RegExp(`^${baseURL ?? ""}/preview/${documentId}/[0-9a-f]{16}\\.[0-9a-f]{32}/noon-preview/`, "u"));
   // Marks THIS page load. A full reload (or a new iframe) would lose it.
   await preview(page).locator("body").evaluate(() => { (window as unknown as { noonMark: string }).noonMark = "same load"; });
 

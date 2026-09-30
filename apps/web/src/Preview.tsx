@@ -9,18 +9,18 @@ const live = (state: PreviewState | "busy" | undefined): boolean => state !== "b
 /**
  * The running page (F15): the document's own sandbox, in an iframe.
  *
- * The URL is ASKED FOR once a second, never kept: a sandbox that comes back after its container died
- * may answer on another port, and Vite's own self-heal only reloads the SAME origin. No URL while the
+ * The URL is ASKED FOR once a second, never kept: a sandbox made anew (reaped, a new image) answers
+ * under a new token (noon-9gz), and Vite's own self-heal cannot know that. No URL while the
  * job is live = the worker is (re)starting the container: "rebuilding". A preview that ended (nobody
  * was here for a minute, the worker restarted) is simply opened again.
  *
  * Opened on request, not with every canvas: a preview holds a container (1 CPU, 1 GiB) for as long as
  * the document is open, and most visits to a document only edit it.
  *
- * `sandbox="allow-scripts"` and NOT allow-same-origin: every preview is http://127.0.0.1:<port>, so
- * without an opaque origin one document's page could read storage another left on a reused port. Behind
- * one public URL it is this canvas's own origin (/preview/...), and there the opaque origin is what keeps
- * the page away from the canvas itself.
+ * `sandbox="allow-scripts"` and NOT allow-same-origin: every preview of the stack shares ONE origin (the
+ * sandbox proxy's http://127.0.0.1:<port>, noon-9gz), so without an opaque origin one document's page
+ * could read what another's left in storage, and fetch the other's source. Behind one public URL it is
+ * this canvas's own origin (/preview/...), and there the opaque origin also keeps the page away from the canvas.
  * ponytail: polling. A pushed "the URL changed" (SSE) is the upgrade if a second of lag ever matters.
  */
 export function Preview({ documentId }: { documentId: string }) {
