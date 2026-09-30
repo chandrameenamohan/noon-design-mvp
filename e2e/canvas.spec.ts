@@ -11,10 +11,13 @@ async function open(browser: Browser, url: string): Promise<Page> {
   await expect(page.getByRole("status")).toHaveText("live");
   return page;
 }
-/** The tree as the page shows it: nested [component, children]. Two pages that agree print the same thing. */
+/**
+ * The tree as the page shows it: nested [component, children]. Two pages that agree print the same thing.
+ * A node's children are the wrappers whose nearest wrapper ancestor it is: the real component sits in between (E10.2).
+ */
 const treeOf = (page: Page): Promise<string> =>
   page.evaluate(() => {
-    const walk = (el: Element): unknown => [...el.querySelectorAll(":scope > [data-children] > [data-node-id]")].map((child) => [child.getAttribute("data-node-id"), child.getAttribute("data-component"), walk(child)]);
+    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-node-id"), child.getAttribute("data-component"), walk(child)]);
     const root = document.querySelector("[data-node-id=root]");
     return JSON.stringify(root ? walk(root) : "no root");
   });

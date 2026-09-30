@@ -10,6 +10,7 @@ import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
 import { ShipPanel } from "./ShipPanel.tsx";
+import { Surface } from "./Surface.tsx";
 import { usePeer } from "./usePeer.ts";
 
 type Component = Manifest["components"][number];
@@ -25,49 +26,25 @@ function requiredProps(component: Component): Extract<Op, { type: "add_node" }>[
 }
 
 /**
- * A name for every node that a person (and a screen reader) can tell apart: "Stack 2" is the second
- * Stack in reading order. Iterative: a tree walk that recurses is one deep document away from a crash.
+ * Every node in reading order, with a name a person (and a screen reader) can tell apart, "Stack 2"
+ * being the second Stack in that order, and how deep it sits. Iterative: a tree walk that recurses is
+ * one deep document away from a crash.
  */
-function labelsOf(doc: Doc): Map<string, string> {
-  const labels = new Map<string, string>([[doc.rootId, "Page"]]);
+function layersOf(doc: Doc): { id: string; label: string; depth: number }[] {
+  const rows = [{ id: doc.rootId, label: "Page", depth: 0 }];
+  const seen = new Set([doc.rootId]);
   const counts = new Map<string, number>();
-  const stack = [...(doc.nodes[doc.rootId]?.children ?? [])].reverse();
-  for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
-    const node = doc.nodes[id];
-    if (!node || labels.has(id)) continue;
+  const stack = [...(doc.nodes[doc.rootId]?.children ?? [])].reverse().map((id) => ({ id, depth: 1 }));
+  for (let next = stack.pop(); next !== undefined; next = stack.pop()) {
+    const node = doc.nodes[next.id];
+    if (!node || seen.has(next.id)) continue;
+    seen.add(next.id);
     const nth = (counts.get(node.component) ?? 0) + 1;
     counts.set(node.component, nth);
-    labels.set(id, `${node.component} ${String(nth)}`);
-    stack.push(...[...node.children].reverse());
+    rows.push({ id: next.id, label: `${node.component} ${String(nth)}`, depth: next.depth });
+    stack.push(...[...node.children].reverse().map((id) => ({ id, depth: next.depth + 1 })));
   }
-  return labels;
-}
-
-/**
- * One node as a wireframe: its name, its props, its children. NOT the real component: the real app
- * is rendered by the sandbox preview (epic 4). ponytail: every node re-rendered on every change (the
- * document is at most 64 deep and checkDoc'd on arrival); memo per node, keyed on the node object
- * (which keeps its identity while untouched), is the upgrade when a big document lags.
- */
-function NodeView({ doc, node, labels, selected, selectedBy, onSelect }: { doc: Doc; node: DocNode; labels: Map<string, string>; selected: string; selectedBy: Map<string, Presence[]>; onSelect: (id: string) => void }) {
-  const direction = node.props["direction"] === "row" ? "row" : "column";
-  const others = selectedBy.get(node.id) ?? [];
-  return (
-    <div data-node-id={node.id} data-component={node.component} className={node.id === selected ? "node selected" : "node"} {...(others[0] ? { "data-selected-by": others.map((p) => p.name).join(", "), style: { outline: `2px solid ${colourOf(others[0].peerId)}` } } : {})}>
-      <button type="button" className="node-name" aria-pressed={node.id === selected} onClick={() => { onSelect(node.id); }}>
-        <span className="visually-hidden">Select </span>
-        {labels.get(node.id) ?? node.component}
-      </button>
-      {others.map((p) => <span key={p.peerId} className="selected-by" style={{ "--peer-colour": colourOf(p.peerId) } as CSSProperties}>{p.name}</span>)}
-      <span className="node-props">{Object.entries(node.props).map(([key, value]) => `${key}=${String(value)}`).join(" ")}</span>
-      <div data-children style={{ flexDirection: direction }}>
-        {node.children.map((id) => {
-          const child = doc.nodes[id];
-          return child ? <NodeView key={id} doc={doc} node={child} labels={labels} selected={selected} selectedBy={selectedBy} onSelect={onSelect} /> : null;
-        })}
-      </div>
-    </div>
-  );
+  return rows;
 }
 
 export function Canvas({ documentId }: { documentId: string }) {
@@ -90,7 +67,8 @@ export function Canvas({ documentId }: { documentId: string }) {
   if (!root) return null;
   // DERIVED, not stored: if someone else removes the selected node, the selection is simply the page again.
   const node = doc.nodes[wanted] ?? root;
-  const labels = labelsOf(doc);
+  const layers = layersOf(doc);
+  const labels = new Map(layers.map((row) => [row.id, row.label]));
   const selectedBy = Map.groupBy(peer.others.filter((p) => p.selection !== null), (p) => p.selection ?? "");
   const point = (next: Presence["cursor"]): void => { cursor.current = next; peer.setPresence({ cursor: next, selection }); };
   const holdsChildren = (each: DocNode): boolean => each.parentId === null || componentOf(each.component)?.acceptsChildren === true;
@@ -142,7 +120,19 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       left={
         <>
-          <Panel title="Layers"><p className="hint">Select an element on the canvas to edit it.</p></Panel>
+          {/* Every node as a button, indented by depth: the keyboard's and the screen reader's way to any node until E10.3's tree. */}
+          <Panel title="Layers">
+            <ul className="layers">
+              {layers.map((row) => (
+                <li key={row.id} style={{ "--depth": row.depth } as CSSProperties}>
+                  <button type="button" className="layer" aria-pressed={row.id === node.id} onClick={() => { setSelected(row.id); }}>
+                    <span className="visually-hidden">Select </span>
+                    {row.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Panel>
           <Panel title="Library">
             <div role="toolbar" aria-label="Add a component">
               {manifest.components.map((component) => <button key={component.name} type="button" disabled={readOnly} onClick={() => { add(component); }}>Add {component.name}</button>)}
@@ -152,21 +142,11 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       centre={
         <>
-          <section
-            aria-label="Canvas"
-            className="canvas"
-            onPointerMove={(event) => {
-              const box = event.currentTarget.getBoundingClientRect();
-              // A FRACTION of the canvas, not pixels: the other window is a different size.
-              point({ x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)), y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)) });
-            }}
-            onPointerLeave={() => { point(null); }}
-          >
-            <NodeView doc={doc} node={root} labels={labels} selected={node.id} selectedBy={selectedBy} onSelect={setSelected} />
+          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} onSelect={setSelected} onPoint={point}>
             {peer.others.map((p) => p.cursor && (
               <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
             ))}
-          </section>
+          </Surface>
           <Preview documentId={documentId} />
         </>
       }

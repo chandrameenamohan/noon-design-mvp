@@ -43,6 +43,7 @@
   --canvas-dot: #c4cad3;
   --border: #d5d9e0;
   --border-strong: #6b7684;
+  --frame-shadow: 0 1px 4px rgb(0 0 0 / 0.18);
 
   /* text */
   --fg: #1c2430;
@@ -76,6 +77,7 @@
   --canvas-dot: #2f3740;
   --border: #2c333d;
   --border-strong: #7b8694;
+  --frame-shadow: 0 2px 8px rgb(0 0 0 / 0.6);
 
   --fg: #e6e9ee;
   --fg-muted: #a3adba;

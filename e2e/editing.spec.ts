@@ -6,7 +6,8 @@ const user = `e2e-${String(Date.now())}-edit@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const treeOf = (page: Page): Promise<string> =>
   page.evaluate(() => {
-    const walk = (el: Element): unknown => [...el.querySelectorAll(":scope > [data-children] > [data-node-id]")].map((child) => [child.getAttribute("data-node-id"), child.querySelector(":scope > .node-props")?.textContent, walk(child)]);
+    // A node's children are the wrappers whose nearest wrapper ancestor it is: the real component sits in between (E10.2).
+    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-node-id"), child.querySelector(":scope > .node-props")?.textContent, walk(child)]);
     const root = document.querySelector("[data-node-id=root]");
     return JSON.stringify(root ? walk(root) : "no root");
   });
@@ -58,9 +59,9 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
   // Reorder among siblings: the page holds [Card, Button]; Button moves up.
   await button(page, "Select Button 1").click();
   await button(page, "Move up").click();
-  await expect(other.locator("[data-node-id=root] > [data-children] > [data-node-id]").first()).toHaveAttribute("data-component", "Button");
+  await expect(other.locator("[data-node-id=root] [data-node-id]").first()).toHaveAttribute("data-component", "Button");
   await button(page, "Move down").click();
-  await expect(other.locator("[data-node-id=root] > [data-children] > [data-node-id]").first()).toHaveAttribute("data-component", "Card");
+  await expect(other.locator("[data-node-id=root] [data-node-id]").first()).toHaveAttribute("data-component", "Card");
 
   // Clearing an optional prop removes it (set_prop with null).
   await button(page, "Select Text 1").click();
@@ -84,7 +85,7 @@ test("an edit the document's rules forbid never leaves the page, and says why", 
   await page.getByLabel("Move into", { exact: true }).selectOption({ label: "Stack 1" }); // into its own child
   await button(page, "Move").click();
   await expect(page.getByRole("alert")).toHaveText(/cannot be moved inside itself/);
-  await expect(page.locator("[data-node-id=root] > [data-children] > [data-component=Card]")).toHaveCount(1);
+  await expect(page.locator("[data-node-id=root] > [data-component=Card]")).toHaveCount(1);
 });
 
 test("an edit the SERVER refuses is rolled back and its reason is shown; the other browser never sees it", async ({ page, browser }) => {

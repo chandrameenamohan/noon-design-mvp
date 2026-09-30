@@ -1,0 +1,233 @@
+import { createElement, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import type { Doc, DocNode, Presence } from "@noon/contracts";
+import { ROOT_ID } from "@noon/doc-model";
+import { colourOf } from "./colour.ts";
+import { components, FRAME, frameStylesheet } from "./designSystem.ts";
+import { hitTest, step, type Box, type Step } from "./selection.ts";
+import { fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Viewport } from "./viewport.ts";
+
+/**
+ * The canvas (E10.2): the document's REAL components in a page frame on a dotted infinite sheet, with an
+ * editor layer (selection, hover, the others' selections) over them.
+ *
+ * Two layers, one transform. The frame and the outlines both live in `.world`, which carries ONE
+ * `translate() scale()` (viewport.ts); strokes and labels divide by `--zoom` in CSS, so they stay the
+ * same size on the screen at every zoom and nothing is re-measured while zooming or panning.
+ *
+ * The frame is `inert`: the components render for real (a Button IS the sample app's Button) but take
+ * no clicks, no focus and no screen-reader stop. The canvas itself is the one focusable thing; keys move
+ * the selection (selection.ts), the Layers list beside it names every node as a button, and the
+ * inspector's heading and a live sentence say what is selected.
+ *
+ * Nothing here writes to the document: the surface only reports a selection.
+ */
+type Props = {
+  doc: Doc;
+  labels: Map<string, string>;
+  selected: string;
+  /** The others' selections, node id -> who has it selected. */
+  selectedBy: Map<string, Presence[]>;
+  onSelect: (id: string) => void;
+  /** Where this person's pointer is, as a fraction of the canvas (SPEC F7), or null when it left. */
+  onPoint: (cursor: Presence["cursor"]) => void;
+  /** Drawn over the sheet, unscaled: the others' cursors. */
+  children?: ReactNode;
+};
+
+type Outline = { id: string; kind: "selected" | "hovered" | "peer"; label: string; colour?: string; x: number; y: number; width: number; height: number };
+type Drag = { kind: "pan" | "click"; x: number; y: number };
+
+const propsText = (node: DocNode): string => Object.entries(node.props).map(([key, value]) => `${key}=${String(value)}`).join(" ");
+const selectedByAttr = (others: Presence[]) => (others[0] ? { "data-selected-by": others.map((p) => p.name).join(", ") } : {});
+
+/**
+ * One node: the real component, its children rendered the same way INSIDE it, so the design system
+ * lays them out exactly as the running page would. The wrapper is `display: contents`: it names the
+ * node for the editor (data-node-id, data-component, data-depth) and takes no box of its own, so a
+ * Stack's flex items are the components themselves. `.node-props` is the node's props as text, for the
+ * tests' eyes (the e2e suites read it); the frame is inert, so nobody else meets it.
+ * ponytail: every node re-rendered on every change (documents are at most 64 deep and small); memo per
+ * node, keyed on the node object, is the upgrade when a big document lags.
+ */
+function NodeView({ doc, node, depth, selectedBy }: { doc: Doc; node: DocNode; depth: number; selectedBy: Map<string, Presence[]> }) {
+  const Component = components[node.component];
+  const children = node.children.flatMap((id) => { const child = doc.nodes[id]; return child ? [<NodeView key={id} doc={doc} node={child} depth={depth + 1} selectedBy={selectedBy} />] : []; });
+  return (
+    <div data-node-id={node.id} data-component={node.component} data-depth={depth} className="node" {...selectedByAttr(selectedBy.get(node.id) ?? [])}>
+      {Component ? createElement(Component, node.props, children) : <div className="unknown-component">{node.component}</div>}
+      <span className="node-props">{propsText(node)}</span>
+    </div>
+  );
+}
+
+/** A wrapper's box on the screen: the component's own element (the wrapper has none), the frame itself for the page. */
+const rectOf = (wrapper: Element): DOMRect | undefined => (wrapper.getAttribute("data-node-id") === ROOT_ID ? wrapper : wrapper.firstElementChild)?.getBoundingClientRect();
+const boxesOf = (view: HTMLElement): Box[] =>
+  [...view.querySelectorAll("[data-node-id]")].flatMap((wrapper) => {
+    const rect = rectOf(wrapper);
+    return rect ? [{ id: wrapper.getAttribute("data-node-id") ?? "", depth: Number(wrapper.getAttribute("data-depth")), left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }] : [];
+  });
+const hundredths = (n: number): number => Math.round(n * 100) / 100;
+const fraction = (n: number): number => Math.min(1, Math.max(0, n));
+
+export function Surface({ doc, labels, selected, selectedBy, onSelect, onPoint, children }: Props) {
+  const view = useRef<HTMLElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const hintId = useId();
+  const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [outlines, setOutlines] = useState<Outline[]>([]);
+  // Space held: the next drag pans instead of selecting. Panning: a pan drag is under way.
+  const [panMode, setPanMode] = useState(false);
+  const [panning, setPanning] = useState(false);
+  // A ref, not state: the drag's last point changes with every pointer event and nothing renders from it.
+  const drag = useRef<Drag | null>(null);
+  const root = doc.nodes[doc.rootId];
+
+  const fitted = (): Viewport => {
+    const v = view.current;
+    const f = frame.current;
+    return v && f ? fit({ width: v.clientWidth, height: v.clientHeight }, { width: f.offsetWidth, height: f.offsetHeight }) : { x: 0, y: 0, zoom: 1 };
+  };
+  const centre = () => ({ x: (view.current?.clientWidth ?? 0) / 2, y: (view.current?.clientHeight ?? 0) / 2 });
+  const zoomBy = (direction: 1 | -1): void => { const at = centre(); setViewport((v) => zoomAt(v, zoomStep(v.zoom, direction), at)); };
+
+  // The first sight of a document is the whole page, centred.
+  useLayoutEffect(() => { setViewport(fitted()); }, []);
+
+  // A native listener, not onWheel: it must preventDefault (ctrl+wheel is otherwise the browser's own
+  // zoom, plain wheel the pane's scroll), and React does not promise a non-passive wheel listener.
+  useEffect(() => {
+    const el = view.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent): void => {
+      event.preventDefault();
+      const box = el.getBoundingClientRect();
+      if (event.ctrlKey || event.metaKey) setViewport((v) => zoomAt(v, wheelZoom(v.zoom, event.deltaY), { x: event.clientX - box.left, y: event.clientY - box.top }));
+      else setViewport((v) => panBy(v, -event.deltaX, -event.deltaY));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => { el.removeEventListener("wheel", onWheel); };
+  }, []);
+
+  // On the canvas `data-component` names a NODE (the tests count nodes by it); the sample app's components
+  // also stamp it on their own root element, which would double every count. Taken off after each render:
+  // React never rewrites a prop that did not change, so it stays off until a remount, which lands here again.
+  useLayoutEffect(() => { frame.current?.querySelectorAll("[data-component]:not([data-node-id])").forEach((el) => { el.removeAttribute("data-component"); }); });
+
+  // The outlines follow the components' real boxes, measured after every render and kept in WORLD
+  // coordinates, so zooming and panning move them by CSS alone. Set only when something moved: a
+  // measure that finds the same boxes must not render again.
+  useLayoutEffect(() => {
+    const el = view.current;
+    if (!el) return;
+    const box = el.getBoundingClientRect();
+    const wanted: Pick<Outline, "id" | "kind" | "label" | "colour">[] = [
+      { id: selected, kind: "selected", label: labels.get(selected) ?? "" },
+      ...(hovered !== null && hovered !== selected ? [{ id: hovered, kind: "hovered" as const, label: labels.get(hovered) ?? "" }] : []),
+      ...[...selectedBy].flatMap(([id, peers]) => peers.map((p) => ({ id, kind: "peer" as const, label: p.name === "" ? p.actor.kind : p.name, colour: colourOf(p.peerId) }))),
+    ];
+    const next = wanted.flatMap((w) => {
+      const wrapper = el.querySelector(`[data-node-id="${CSS.escape(w.id)}"]`);
+      const rect = wrapper ? rectOf(wrapper) : undefined;
+      if (!rect) return [];
+      const at = toWorld(viewport, { x: rect.left - box.left, y: rect.top - box.top });
+      return [{ ...w, x: hundredths(at.x), y: hundredths(at.y), width: hundredths(rect.width / viewport.zoom), height: hundredths(rect.height / viewport.zoom) }];
+    });
+    setOutlines((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
+  });
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
+    if (event.button === 1 || (event.button === 0 && panMode)) {
+      drag.current = { kind: "pan", x: event.clientX, y: event.clientY };
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* a pointer the browser no longer tracks: the drag still pans, it just ends at the edge */ }
+      setPanning(true);
+      event.preventDefault(); // the middle button's autoscroll
+    } else if (event.button === 0) {
+      drag.current = { kind: "click", x: event.clientX, y: event.clientY };
+    }
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLElement>): void => {
+    const d = drag.current;
+    if (d?.kind === "pan") {
+      setViewport((v) => panBy(v, event.clientX - d.x, event.clientY - d.y));
+      d.x = event.clientX;
+      d.y = event.clientY;
+      return;
+    }
+    const box = event.currentTarget.getBoundingClientRect();
+    // A FRACTION of the canvas, not pixels: the other window is a different size (E10.6 moves this into world coordinates).
+    onPoint({ x: fraction((event.clientX - box.left) / box.width), y: fraction((event.clientY - box.top) / box.height) });
+    setHovered(hitTest(boxesOf(event.currentTarget), { x: event.clientX, y: event.clientY }));
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLElement>): void => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d) return;
+    if (d.kind === "pan") { setPanning(false); return; }
+    // A click, not the start of a drag that changed its mind: the node under the pointer, or the page.
+    if (Math.hypot(event.clientX - d.x, event.clientY - d.y) < 4) onSelect(hitTest(boxesOf(event.currentTarget), { x: event.clientX, y: event.clientY }) ?? ROOT_ID);
+  };
+  const onPointerLeave = (): void => { onPoint(null); setHovered(null); };
+
+  const STEPS: Record<string, Step> = { ArrowRight: "next", ArrowDown: "next", ArrowLeft: "previous", ArrowUp: "previous" };
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    if (event.target !== event.currentTarget || event.ctrlKey || event.metaKey || event.altKey) return;
+    const to = STEPS[event.key];
+    if (to) onSelect(step(doc, selected, to));
+    else if (event.key === "Enter") onSelect(step(doc, selected, event.shiftKey ? "out" : "in"));
+    else if (event.key === "Escape") onSelect(ROOT_ID);
+    else if (event.key === "+" || event.key === "=") zoomBy(1);
+    else if (event.key === "-" || event.key === "_") zoomBy(-1);
+    else if (event.key === "0") setViewport(fitted());
+    else if (event.key === " ") setPanMode(true);
+    else return;
+    event.preventDefault();
+  };
+
+  if (!root) return null;
+  return (
+    <div className="stage">
+      <section
+        ref={view}
+        aria-label="Canvas"
+        aria-describedby={hintId}
+        tabIndex={0}
+        className="canvas"
+        data-panning={panning ? "dragging" : panMode ? "ready" : undefined}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => { drag.current = null; setPanning(false); }}
+        onPointerLeave={onPointerLeave}
+        onKeyDown={onKeyDown}
+        onKeyUp={(event) => { if (event.key === " ") setPanMode(false); }}
+        onBlur={() => { setPanMode(false); }}
+      >
+        <style>{frameStylesheet}</style>
+        <div className="world" data-zoom={viewport.zoom.toFixed(2)} style={{ transform: `translate(${String(viewport.x)}px, ${String(viewport.y)}px) scale(${String(viewport.zoom)})`, "--zoom": viewport.zoom } as CSSProperties}>
+          <div ref={frame} className={FRAME} inert data-node-id={root.id} data-component={root.component} data-depth={0} {...selectedByAttr(selectedBy.get(root.id) ?? [])}>
+            {root.children.flatMap((id) => { const child = doc.nodes[id]; return child ? [<NodeView key={id} doc={doc} node={child} depth={1} selectedBy={selectedBy} />] : []; })}
+            <span className="node-props">{propsText(root)}</span>
+          </div>
+          <div className="editor-layer" aria-hidden="true">
+            {outlines.map((o) => (
+              <div key={`${o.kind}:${o.id}:${o.label}`} className={`outline outline-${o.kind}`} data-outline={o.kind} style={{ left: o.x, top: o.y, width: o.width, height: o.height, ...(o.colour === undefined ? {} : { "--peer-colour": o.colour }) }}>
+                <span className="outline-label">{o.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        {children}
+        <p id={hintId} className="visually-hidden">Arrow keys move between neighbouring elements, Enter goes into an element, Shift and Enter goes to its parent, Escape selects the page. Plus and minus zoom, 0 fits the page. Hold Space and drag to pan.</p>
+        <p aria-live="polite" className="visually-hidden">{labels.get(selected) ?? "Page"} selected</p>
+      </section>
+      <div className="zoom-bar" role="group" aria-label="Zoom">
+        <button type="button" aria-label="Zoom out" onClick={() => { zoomBy(-1); }}>−</button>
+        <span className="zoom-level" aria-live="polite">{percent(viewport.zoom)}</span>
+        <button type="button" aria-label="Zoom in" onClick={() => { zoomBy(1); }}>+</button>
+        <button type="button" onClick={() => { setViewport(fitted()); }}>Fit</button>
+      </div>
+    </div>
+  );
+}
