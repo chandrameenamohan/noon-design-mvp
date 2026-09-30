@@ -71,7 +71,8 @@ export function AiPanel({ documentId, hidden = false }: { documentId: string; hi
       {/* Not role="status": the page already has one (the connection), and this one is said politely too. */}
       <p id="ai-status" aria-live="polite" data-run-status={run?.status ?? ""}>{run ? sentence(run) : ""}</p>
       {run && run.steps.length > 0 && (
-        <ol className="ai-steps" aria-label="What the AI has done">
+        // tabIndex: the list scrolls past 10rem (max-height), and a scrolling region must be reachable by the keyboard (axe scrollable-region-focusable).
+        <ol className="ai-steps" aria-label="What the AI has done" tabIndex={0}>
           {/* Text only: `detail` is the model's own words. The key is the position: steps are only ever appended (the oldest drop off past 50). */}
           {run.steps.map((step, at) => <li key={at} data-ok={step.ok}>{stepText(step)}</li>)}
         </ol>
