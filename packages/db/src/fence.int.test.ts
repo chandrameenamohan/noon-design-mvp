@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import type { Op, SequencedOp } from "@noon/contracts";
+import type { SequencedOp } from "@noon/contracts";
 import { Fenced } from "./index.ts";
-import { createTestDb, TEST_DATABASE_URL, type TestDb } from "./testing.ts";
+import { addNode as add, createTestDb, TEST_DATABASE_URL, type TestDb } from "./testing.ts";
 
 // integration:append-stale-token-rejected (E7.3, F22). Two owners of one document: A (lease token 1) is the
 // zombie, B (token 2) took the room after A's lease ran out. B claims the document, reads the journal, and numbers
@@ -15,7 +15,6 @@ beforeAll(async () => {
 });
 afterAll(() => t.drop());
 
-const add = (nodeId: string): Op => ({ type: "add_node", nodeId, parentId: "root", index: 0, component: "Stack", props: {} });
 const row = (seq: number, actorId: string): SequencedOp => ({ seq, opId: randomUUID(), actor: { kind: "user", id: actorId }, op: add(`${actorId}-${String(seq)}`) });
 const seqs = async (documentId: string): Promise<{ seq: number; actor: string }[]> =>
   ((await t.rawQuery("select seq::int as seq, actor_id as actor from op_journal where document_id = $1 order by seq", [documentId])) as { rows: { seq: number; actor: string }[] }).rows;

@@ -196,6 +196,28 @@ export const UsageReport = z.object({
 });
 export type UsageReport = z.infer<typeof UsageReport>;
 
+// --- Audit (F26) -----------------------------------------------------------------------------------
+export const AuditAction = z.enum(["signed_in", "role_changed", "share_granted", "share_revoked", "run_started", "ship_started", "push_rejected"]);
+export type AuditAction = z.infer<typeof AuditAction>;
+/**
+ * One row of an org's audit trail: who (a person, as their email was then; a push to git; the system), what (the
+ * action, the document, and a few flat facts such as the new role or the run's instruction) and when. `detail` holds
+ * what people typed (an instruction, a file name from a push): the view renders it as TEXT, never as markup.
+ */
+export const AuditEntry = z.strictObject({
+  id: Id,
+  orgId: Id,
+  actor: z.strictObject({ kind: z.enum(["user", "git", "system"]), id: Id.nullable(), email: z.string().max(320).nullable() }),
+  action: AuditAction,
+  documentId: Id.nullable(),
+  detail: z.record(z.string().max(40), z.string().max(4000)),
+  at: Timestamp,
+});
+export type AuditEntry = z.infer<typeof AuditEntry>;
+/** GET /orgs/:orgId/audit: one page, newest first. Owners only; there is no route that changes or removes an entry. */
+export const AuditPage = z.strictObject({ items: z.array(AuditEntry), nextCursor: z.string().nullable() });
+export type AuditPage = z.infer<typeof AuditPage>;
+
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
   error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),

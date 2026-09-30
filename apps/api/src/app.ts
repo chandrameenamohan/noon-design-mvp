@@ -281,7 +281,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // none). A new member is added the same way: the api has no email to invite with, so it takes a user who signed up.
   // The change is committed BEFORE it is announced, so a sync node that hears of it reads the new role.
   org.put("/members", need("owner"), async (c) => {
-    const member = await c.var.scope.setMember(await body(c, SetMemberBody));
+    const member = await c.var.scope.setMember({ ...(await body(c, SetMemberBody)), by: c.var.user.id });
     if (member === "no_user") return notFound(c);
     if (member === "last_owner") return fail(c, 409, "last_owner");
     await announce(c, { orgId: c.var.org.id, userId: member.userId });
@@ -321,6 +321,14 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   org.get("/usage", need("owner"), async (c) => {
     const report = await c.var.scope.usage(pageQuery(c));
     return report ? c.json(report) : badCursor(c);
+  });
+
+  // F26: the org's audit trail (sign-ins, role and share changes, AI runs, ships, rejected pushes), newest first. Owners
+  // only, as usage is. Read-only by construction: no route changes or removes an entry, and the database refuses the
+  // app's role both anyway. Each entry was written by the action itself, in the same statement or transaction.
+  org.get("/audit", need("owner"), async (c) => {
+    const page = await c.var.scope.audit(pageQuery(c));
+    return page ? c.json(page) : badCursor(c);
   });
 
   app.route("/orgs/:orgId", org);
@@ -370,14 +378,14 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // revoked one is closed. A token minted before the revoke is refused at the upgrade, which reads the row too.
   document.put("/shares", need("owner"), async (c) => {
     const { email, role } = await body(c, ShareBody);
-    const member = await db.forOrg(c.var.doc.orgId).share({ documentId: c.var.doc.id, email, role });
+    const member = await db.forOrg(c.var.doc.orgId).share({ documentId: c.var.doc.id, email, role, by: c.var.user.id });
     if (!member) return notFound(c); // nobody has that email (the api has no email to invite with)
     await announce(c, { orgId: c.var.doc.orgId, userId: member.userId });
     return c.json(member);
   });
   document.delete("/shares/:userId", need("owner"), async (c) => {
     const userId = c.req.param("userId");
-    if (!(await db.forOrg(c.var.doc.orgId).unshare(c.var.doc.id, userId))) return notFound(c);
+    if (!(await db.forOrg(c.var.doc.orgId).unshare(c.var.doc.id, userId, c.var.user.id))) return notFound(c);
     await announce(c, { orgId: c.var.doc.orgId, userId });
     return c.body(null, 204);
   });

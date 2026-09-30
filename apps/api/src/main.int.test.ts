@@ -1,29 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { afterEach, expect, test } from "vitest";
-import { TEST_DATABASE_URL } from "../../../packages/db/src/testing.ts";
+import { expect, test } from "vitest";
+import { useApiProcess } from "./testing.ts";
 
 // The REAL entry point in a REAL process. The other tests hand an identity strategy to startServer
 // themselves, so they would stay green if main.ts wired the wrong one. This one would not.
-const MAIN = new URL("./main.ts", import.meta.url).pathname;
-let child: ChildProcess | undefined;
-afterEach(() => child?.kill("SIGKILL"));
-
-async function boot(env: Record<string, string>): Promise<{ url: string; stderr: () => string }> {
-  const port = String(20000 + Math.floor(Math.random() * 20000));
-  let stderr = "";
-  // A clean environment: nothing from the test runner (such as NODE_ENV=test) leaks into the child.
-  child = spawn(process.execPath, [MAIN], { env: { PATH: process.env["PATH"] ?? "", DATABASE_URL: TEST_DATABASE_URL, PORT: port, SESSION_TOKEN_SECRET: "m".repeat(32), SYNC_PUBLIC_URL: "ws://localhost:3001", REDIS_URL: "redis://localhost:6380", ...env } });
-  child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-  const url = `http://127.0.0.1:${port}`;
-  for (let i = 0; i < 100; i++) {
-    try {
-      if ((await fetch(`${url}/health`)).ok) return { url, stderr: () => stderr };
-    } catch {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-  }
-  throw new Error(`api did not start: ${stderr}`);
-}
+const boot = useApiProcess();
 
 test.each([["unset", {}], ["production", { NODE_ENV: "production" }], ["test", { NODE_ENV: "test" }]])(
   "with NODE_ENV %s the running api refuses the dev header",

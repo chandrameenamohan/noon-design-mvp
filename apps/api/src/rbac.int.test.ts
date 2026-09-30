@@ -5,7 +5,7 @@ import { useTestServer } from "./testing.ts";
 
 // integration:rbac-matrix (E8.2, F24). Every org and document route, as an owner, an editor, a viewer and a
 // stranger: a member without the role gets 403 (they can see the thing), a stranger 404 (F2: never confirm it
-// exists). Reads are open to every member; writes need an editor; roles, shares and usage need an owner. The sync side of
+// exists). Reads are open to every member; writes need an editor; roles, shares, usage and the audit trail need an owner. The sync side of
 // the matrix (a viewer's ops) is apps/sync/src/role-change.int.test.ts.
 const announced: { orgId: string; userId: string }[] = [];
 const ctx = useTestServer({ accessChanged: (change) => { announced.push(change); return Promise.resolve(); } });
@@ -43,6 +43,7 @@ test("every route, every role: reads for every member, writes for editors, roles
     ["POST", `/orgs/${org.id}/workspaces`, { name: "more" }, "editor"],
     ["POST", `/orgs/${org.id}/workspaces/${ws.id}/documents`, { title: "more" }, "editor"],
     ["GET", `/orgs/${org.id}/usage`, undefined, "owner"],
+    ["GET", `/orgs/${org.id}/audit`, undefined, "owner"],
     ["PUT", `/orgs/${org.id}/members`, { email: who.viewer, role: "viewer" }, "owner"], // unchanged: the matrix must not move roles
     ["POST", `/documents/${doc.id}/session`, undefined, "viewer"],
     ["GET", `/documents/${doc.id}/runs/${run.id}`, undefined, "viewer"],

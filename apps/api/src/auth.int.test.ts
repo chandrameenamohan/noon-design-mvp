@@ -1,10 +1,9 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ErrorBody, Me, Org, User } from "@noon/contracts";
 import { createTestDb, TEST_DATABASE_URL, type TestDb } from "../../../packages/db/src/testing.ts";
 import { sessionIdentity } from "./identity.ts";
 import { startServer, type RunningServer } from "./server.ts";
-import { TEST_SESSIONS } from "./testing.ts";
+import { TEST_SESSIONS, useApiProcess } from "./testing.ts";
 
 // E8.1 (F23). Real Postgres; the api with the strategy every non-development process gets.
 let t: TestDb, api: RunningServer;
@@ -101,27 +100,11 @@ describe("integration:auth-flows", () => {
 // The REAL entry point in a REAL process, as main.int.test.ts does: a test that hands startServer a strategy
 // cannot prove main.ts wires the right one.
 describe("integration:dev-header-no-longer-authenticates", () => {
-  const MAIN = new URL("./main.ts", import.meta.url).pathname;
-  let child: ChildProcess | undefined;
-  afterEach(() => child?.kill("SIGKILL"));
-  async function boot(env: Record<string, string>): Promise<string> {
-    const port = String(20000 + Math.floor(Math.random() * 20000));
-    let stderr = "";
-    // This file's own migrated schema (libpq's options in the URL), so the child sees the sign-in tables whatever
-    // state the shared database is in, and every row it writes goes when the schema is dropped.
-    const database = `${TEST_DATABASE_URL}${TEST_DATABASE_URL.includes("?") ? "&" : "?"}options=${encodeURIComponent(`-c search_path=${t.schema}`)}`;
-    child = spawn(process.execPath, [MAIN], { env: { PATH: process.env["PATH"] ?? "", DATABASE_URL: database, PORT: port, SESSION_TOKEN_SECRET: "m".repeat(32), SYNC_PUBLIC_URL: "ws://localhost:3001", REDIS_URL: "redis://localhost:6380", ...env } });
-    child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    const url = `http://127.0.0.1:${port}`;
-    for (let i = 0; i < 100; i++) {
-      try {
-        if ((await fetch(`${url}/health`)).ok) return url;
-      } catch {
-        await new Promise((r) => setTimeout(r, 50));
-      }
-    }
-    throw new Error(`api did not start: ${stderr}`);
-  }
+  const spawnApi = useApiProcess();
+  // This file's own migrated schema (libpq's options in the URL), so the child sees the sign-in tables whatever
+  // state the shared database is in, and every row it writes goes when the schema is dropped.
+  const boot = async (env: Record<string, string>): Promise<string> =>
+    (await spawnApi({ DATABASE_URL: `${TEST_DATABASE_URL}${TEST_DATABASE_URL.includes("?") ? "&" : "?"}options=${encodeURIComponent(`-c search_path=${t.schema}`)}`, ...env })).url;
 
   test.each([["unset", {}], ["production", { NODE_ENV: "production" }], ["test", { NODE_ENV: "test" }]])(
     "with NODE_ENV %s the header is 401 on every route, and signing in is the way in",

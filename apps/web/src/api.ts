@@ -1,5 +1,5 @@
-import { Document, DocumentConflict, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, User, Workspace } from "@noon/contracts";
-import type { z } from "zod";
+import { AuditPage, Document, DocumentConflict, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, User, Workspace } from "@noon/contracts";
+import { z } from "zod";
 
 // The caller is whoever signed in (E8.1): the session is an HttpOnly cookie the browser sends by itself on
 // these same-origin requests. In development only, `?user=` still names the caller in a header (SPEC §2.16),
@@ -124,4 +124,31 @@ export async function readShip(documentId: string): Promise<Ship | null> {
   const res = await fetch(`/api/documents/${documentId}/ship`, { headers: devHeaders });
   if (!res.ok) throw new Error(`GET ship answered ${String(res.status)}`);
   return DocumentShip.parse(await res.json()).ship;
+}
+
+// --- Audit (F26) -----------------------------------------------------------------------------------
+/** The orgs the signed-in person belongs to. ponytail: the first page only (50); ceiling: a 51st org is not listed; upgrade: page on. */
+export async function listOrgs(): Promise<Org[]> {
+  const res = await fetch("/api/orgs", { headers: devHeaders });
+  if (!res.ok) throw new Error(`GET /orgs answered ${String(res.status)}`);
+  return z.object({ items: z.array(Org) }).parse(await res.json()).items;
+}
+/** The org, or "gone": not found or not a member (404). */
+export async function readOrg(orgId: string): Promise<Org | "gone"> {
+  const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}`, { headers: devHeaders });
+  if (res.status === 404) return "gone";
+  if (!res.ok) throw new Error(`GET org answered ${String(res.status)}`);
+  return Org.parse(await res.json());
+}
+/**
+ * One page of the org's audit trail, newest first, parsed with the contract (its details are what people typed).
+ * "forbidden": a member who is not an owner (403). "gone": not found or not a member (404).
+ */
+export async function readAudit(orgId: string, cursor?: string): Promise<AuditPage | "forbidden" | "gone"> {
+  const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/audit${query}`, { headers: devHeaders });
+  if (res.status === 403) return "forbidden";
+  if (res.status === 404) return "gone";
+  if (!res.ok) throw new Error(`GET audit answered ${String(res.status)}`);
+  return AuditPage.parse(await res.json());
 }

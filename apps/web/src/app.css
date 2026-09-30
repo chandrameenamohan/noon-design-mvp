@@ -41,3 +41,7 @@ input, select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid #5b6472
 .sign-in-actions { display: flex; gap: 0.5rem; }
 .sign-in button:disabled { color: #5b6472; cursor: not-allowed; }
 input:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
+.audit { border-collapse: collapse; background: #fff; width: 100%; max-width: 72rem; }
+.audit caption { text-align: start; padding-block: 0.5rem; color: #3d4654; }
+.audit th, .audit td { border: 1px solid #c9ced6; padding: 0.4rem 0.6rem; text-align: start; vertical-align: top; overflow-wrap: anywhere; }
+a:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }

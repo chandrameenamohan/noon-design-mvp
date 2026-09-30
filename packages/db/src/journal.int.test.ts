@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { Op, SequencedOp } from "@noon/contracts";
-import { createTestDb, type TestDb } from "./testing.ts";
+import { addNode as add, createTestDb, type TestDb } from "./testing.ts";
 
 // E6.1a: the op journal's two unique keys, told apart by constraint name, and its org scoping.
 let t: TestDb;
@@ -10,7 +10,6 @@ beforeAll(async () => {
 });
 afterAll(() => t.drop());
 
-const add = (nodeId: string): Op => ({ type: "add_node", nodeId, parentId: "root", index: 0, component: "Stack", props: {} });
 const row = (seq: number, op: Op, actorId = "u1"): SequencedOp => ({ seq, opId: randomUUID(), actor: { kind: "agent", id: actorId, runId: "run-1" }, op });
 
 const aDocument = () => t.createDocument("Journal");

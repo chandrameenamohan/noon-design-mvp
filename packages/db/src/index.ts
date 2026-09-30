@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
-import { Client, Pool, type QueryResultRow } from "pg";
-import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { Client, Pool, type PoolClient, type QueryResultRow } from "pg";
+import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -16,7 +16,10 @@ export type Db = {
   signUp(input: { email: string; name: string; passwordHash: string }): Promise<User | "taken">;
   /** The user with this email and their password hash; undefined when there is none, or they have no password. */
   credentialsFor(email: string): Promise<{ user: User; passwordHash: string } | undefined>;
-  /** Records a signed-in browser by the SHA-256 of its token, and forgets this user's sessions that have expired. */
+  /**
+   * Records a signed-in browser by the SHA-256 of its token, and forgets this user's sessions that have expired. The
+   * same statement writes the sign-in into the audit trail of every org the user is a member of (F26).
+   */
   startSession(input: { userId: string; tokenHash: Buffer; ttlSeconds: number }): Promise<void>;
   /** Who holds this session, if it exists and has not expired. A pure READ: asked on every request. */
   userForSession(tokenHash: Buffer): Promise<User | undefined>;
@@ -161,11 +164,11 @@ type OrgScope = {
    * E8.2 (F24): makes the user with this email a member at `role`, or changes their role. "no_user": nobody has
    * that email. "last_owner": it would leave the org without an owner. One change at a time per org.
    */
-  setMember(input: { email: string; role: Role }): Promise<Member | "no_user" | "last_owner">;
+  setMember(input: { email: string; role: Role; by: string | undefined }): Promise<Member | "no_user" | "last_owner">;
   /** E8.3 (F25): shares this org's document with the user with this email, or changes their share. Undefined: no such user (or document). */
-  share(input: { documentId: string; email: string; role: ShareRole }): Promise<Member | undefined>;
+  share(input: { documentId: string; email: string; role: ShareRole; by: string | undefined }): Promise<Member | undefined>;
   /** E8.3: the share goes. False: there was none. */
-  unshare(documentId: string, userId: string): Promise<boolean>;
+  unshare(documentId: string, userId: string, by: string | undefined): Promise<boolean>;
   createWorkspace(input: { name: string }): Promise<Workspace>;
   /** Undefined means the cursor is not one this server issued. */
   listWorkspaces(page?: PageInput): Promise<Page<Workspace> | undefined>;
@@ -200,6 +203,8 @@ type OrgScope = {
   cancelRun(documentId: string, id: string): Promise<Run | undefined>;
   /** Everything this org has consumed: totals over all of it, and one page of the records. Undefined = a bad cursor. */
   usage(page?: PageInput): Promise<UsageReport | undefined>;
+  /** E8.4 (F26): one page of this org's audit trail, newest first. Undefined = a bad cursor. Nothing here changes an entry. */
+  audit(page?: PageInput): Promise<Page<AuditEntry> | undefined>;
 };
 
 // Rows arrive as `any` from the driver. Each is parsed once, here, at the database boundary.
@@ -225,6 +230,16 @@ const accessOf = (userParam: string): string =>
 
 const MemberRow = z.object({ id: z.string(), email: z.string(), name: z.string(), role: z.string() })
   .transform((r): Member => Member.parse({ userId: r.id, email: r.email, name: r.name, role: r.role }));
+
+// E8.4 (F26): every audited action inserts into audit_log IN ITS OWN STATEMENT (a CTE) or transaction, never after it.
+const AUDIT_COLUMNS = "(org_id, actor_kind, actor_id, actor_email, action, document_id, detail)";
+/** The actor columns for the user id in parameter `p` (null: the system acted), with their email as it is now. */
+const actorOf = (p: string): string =>
+  `case when ${p}::uuid is null then 'system' else 'user' end, ${p}::uuid, (select email from users where id = ${p}::uuid)`;
+const AuditRow = z
+  .object({ id: z.string(), org_id: z.string(), actor_kind: z.string(), actor_id: z.string().nullable(), actor_email: z.string().nullable(), action: z.string(), document_id: z.string().nullable(), detail: z.unknown(), created_at: timestamp })
+  .transform((r): AuditEntry =>
+    AuditEntry.parse({ id: r.id, orgId: r.org_id, actor: { kind: r.actor_kind, id: r.actor_id, email: r.actor_email }, action: r.action, documentId: r.document_id, detail: r.detail, at: r.created_at }));
 
 // seq is a bigint: a string from the driver, a number from here on.
 const JournalRow = z
@@ -322,15 +337,16 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     return result.rows.map((row) => parser.parse(row));
   }
   /** `from` names the paged table as alias `t`; `where` must be ready for " and ..."; the cursor adds two params. */
-  async function page<T>(parser: z.ZodType<T>, from: string, where: string, params: unknown[], input: PageInput = {}): Promise<Page<T> | undefined> {
+  async function page<T>(parser: z.ZodType<T>, from: string, where: string, params: unknown[], input: PageInput = {}, newestFirst = false): Promise<Page<T> | undefined> {
     const limit = input.limit ?? 50;
     const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
     if (input.cursor !== undefined && after === undefined) return undefined;
     const n = params.length;
     const result = await pool.query<QueryResultRow & { cursor_ts: string; id: string }>(
       `select t.*, t.created_at::text as cursor_ts from ${from} where ${where}` +
-        (after ? ` and (t.created_at, t.id) > ($${String(n + 1)}::timestamptz, $${String(n + 2)}::uuid)` : "") +
-        ` order by t.created_at, t.id limit ${String(limit + 1)}`, // one extra row tells us whether another page exists
+        (after ? ` and (t.created_at, t.id) ${newestFirst ? "<" : ">"} ($${String(n + 1)}::timestamptz, $${String(n + 2)}::uuid)` : "") +
+        (newestFirst ? " order by t.created_at desc, t.id desc" : " order by t.created_at, t.id") +
+        ` limit ${String(limit + 1)}`, // one extra row tells us whether another page exists
       after ? [...params, after.ts, after.id] : params,
     );
     const pageRows = result.rows.slice(0, limit);
@@ -340,14 +356,14 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       nextCursor: result.rows.length > limit && last ? encodeCursor(last.cursor_ts, last.id) : null,
     };
   }
-  /** One statement, returning ids, in a transaction that holds the org's advisory lock: one at a time per org. */
-  async function inOrgTurn(orgId: string, sql: string, params: unknown[]): Promise<{ id: string }[]> {
+  /** `work` in one transaction that holds the advisory lock named `lock`: whatever else takes that lock waits its turn. */
+  async function inTurn<T>(lock: string, work: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await pool.connect();
     let broken: Error | undefined;
     try {
       await client.query("begin");
-      await client.query("select pg_advisory_xact_lock(hashtext('noon:preview:' || $1))", [orgId]);
-      const result = (await client.query<QueryResultRow>(sql, params)).rows.map((row) => z.object({ id: z.string() }).parse(row));
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [lock]);
+      const result = await work(client);
       await client.query("commit");
       return result;
     } catch (err) {
@@ -358,6 +374,9 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       client.release(broken); // after a failure the connection's transaction state is unknown: destroyed
     }
   }
+  /** One statement, returning ids, holding the org's preview lock: one at a time per org. */
+  const inOrgTurn = (orgId: string, sql: string, params: unknown[]): Promise<{ id: string }[]> =>
+    inTurn(`noon:preview:${orgId}`, async (client) => (await client.query<QueryResultRow>(sql, params)).rows.map((row) => z.object({ id: z.string() }).parse(row)));
   async function one<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T | undefined> {
     return (await rows(parser, sql, params))[0];
   }
@@ -438,8 +457,10 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       await pool.query(
         // ponytail: expired rows are swept at the owner's next sign-in; ceiling: someone who never signs in again
         // keeps dead rows; upgrade: a periodic delete by expires_at.
-        "with gone as (delete from auth_sessions where user_id = $1 and expires_at <= now()) " +
-          "insert into auth_sessions (user_id, token_hash, expires_at) values ($1, $2, now() + make_interval(secs => $3))",
+        "with gone as (delete from auth_sessions where user_id = $1 and expires_at <= now()), " +
+          "s as (insert into auth_sessions (user_id, token_hash, expires_at) values ($1, $2, now() + make_interval(secs => $3)) returning user_id) " +
+          // One row per org, not one global row: an org's trail shows its members' sign-ins, and nobody else's.
+          `insert into audit_log ${AUDIT_COLUMNS} select m.org_id, 'user', u.id, u.email, 'signed_in', null, '{}' from s join users u on u.id = s.user_id join memberships m on m.user_id = u.id`,
         [userId, tokenHash, ttlSeconds],
       );
     },
@@ -624,9 +645,13 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         if (!isId(documentId)) return;
         const c = ConflictInput.parse(input);
         // Selected from documents: a document deleted meanwhile inserts nothing instead of failing on the foreign key.
+        // The rejected push goes into the document's org's audit trail in the same statement (F26). ponytail: the actor
+        // is "git" and the commit, not the person who pushed; ceiling: the trail cannot name them; upgrade: keep the
+        // webhook's pusher on git_events and copy it here.
         await pool.query(
-          "insert into document_conflicts (document_id, commit_sha, file, reason, detail) select id, $2, $3, $4, $5 from documents where id = $1 " +
-            "on conflict (document_id) do update set commit_sha = excluded.commit_sha, file = excluded.file, reason = excluded.reason, detail = excluded.detail, created_at = now()",
+          "with c as (insert into document_conflicts (document_id, commit_sha, file, reason, detail) select id, $2, $3, $4, $5 from documents where id = $1 " +
+            "on conflict (document_id) do update set commit_sha = excluded.commit_sha, file = excluded.file, reason = excluded.reason, detail = excluded.detail, created_at = now() returning document_id) " +
+            `insert into audit_log ${AUDIT_COLUMNS} select d.org_id, 'git', null, null, 'push_rejected', d.id, jsonb_build_object('commit', $2::text, 'file', $3::text, 'reason', $4::text) from c join documents d on d.id = c.document_id`,
           [documentId, c.commit, c.file, c.reason, c.detail],
         );
       },
@@ -666,55 +691,55 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       // Postgres 22P02 error (which would surface as a 500 and echo the caller's input).
       const orgExists = isId(orgId);
       return {
-        setMember: async ({ email, role }) => {
-          if (!orgExists) throw new Error("cannot set a member: invalid org id");
+        setMember: async ({ email, role, by }) => {
+          if (!orgExists || (by !== undefined && !isId(by))) throw new Error("cannot set a member: invalid org or actor id");
           const input = { email: User.shape.email.parse(email), role: Role.parse(role) };
-          const client = await pool.connect();
-          let broken: Error | undefined;
-          try {
-            await client.query("begin");
-            // One change at a time per org: two owners demoting each other at once must not both see the other
-            // still an owner (under read committed, each statement would) and leave the org with none.
-            await client.query("select pg_advisory_xact_lock(hashtext('noon:members:' || $1))", [orgId]);
+          // One change at a time per org: two owners demoting each other at once must not both see the other
+          // still an owner (under read committed, each statement would) and leave the org with none.
+          return inTurn(`noon:members:${orgId}`, async (client) => {
             const found = z.object({ id: z.string(), role: Role.nullable(), owners: count }).optional().parse((await client.query<QueryResultRow>(
               "select u.id, m.role, (select count(*) from memberships where org_id = $1 and role = 'owner') as owners " +
                 "from users u left join memberships m on m.user_id = u.id and m.org_id = $1 where u.email = lower($2)",
               [orgId, input.email],
             )).rows[0]);
-            let result: Member | "no_user" | "last_owner";
-            if (!found) result = "no_user";
-            else if (found.role === "owner" && input.role !== "owner" && found.owners <= 1) result = "last_owner";
-            else {
-              result = MemberRow.parse((await client.query<QueryResultRow>(
-                "with m as (insert into memberships (org_id, user_id, role) values ($1, $2, $3) on conflict (org_id, user_id) do update set role = excluded.role returning user_id, role) " +
-                  "select u.id, u.email, u.name, m.role from m join users u on u.id = m.user_id",
-                [orgId, found.id, input.role],
-              )).rows[0]);
+            if (!found) return "no_user";
+            if (found.role === "owner" && input.role !== "owner" && found.owners <= 1) return "last_owner";
+            const member = MemberRow.parse((await client.query<QueryResultRow>(
+              "with m as (insert into memberships (org_id, user_id, role) values ($1, $2, $3) on conflict (org_id, user_id) do update set role = excluded.role returning user_id, role) " +
+                "select u.id, u.email, u.name, m.role from m join users u on u.id = m.user_id",
+              [orgId, found.id, input.role],
+            )).rows[0]);
+            // In the same transaction (F26). Setting the role someone already has changes nothing, and is not recorded.
+            if (found.role !== input.role) {
+              await client.query(
+                `insert into audit_log ${AUDIT_COLUMNS} select $1, ${actorOf("$2")}, 'role_changed', null, jsonb_build_object('email', $3::text, 'role', $4::text, 'previous', $5::text)`,
+                [orgId, by ?? null, member.email, member.role, found.role ?? "none"],
+              );
             }
-            await client.query("commit");
-            return result;
-          } catch (err) {
-            await client.query("rollback").catch(() => undefined);
-            broken = err instanceof Error ? err : new Error(String(err));
-            throw err;
-          } finally {
-            client.release(broken); // after a failure the connection's transaction state is unknown: destroyed
-          }
+            return member;
+          });
         },
-        share: async ({ documentId, email, role }) => {
+        share: async ({ documentId, email, role, by }) => {
           const input = ShareBody.parse({ email, role });
-          if (!orgExists || !isId(documentId)) return undefined;
+          if (!orgExists || !isId(documentId) || (by !== undefined && !isId(by))) return undefined;
           return one(
             MemberRow,
-            // insert ... select: a row only when the document is this org's and the user exists.
+            // insert ... select: a row only when the document is this org's and the user exists; audited in the same statement.
             "with s as (insert into document_shares (org_id, document_id, user_id, role) select d.org_id, d.id, u.id, $4 from documents d, users u " +
-              "where d.org_id = $1 and d.id = $2 and u.email = lower($3) on conflict (document_id, user_id) do update set role = excluded.role returning user_id, role) " +
+              "where d.org_id = $1 and d.id = $2 and u.email = lower($3) on conflict (document_id, user_id) do update set role = excluded.role returning user_id, role), " +
+              `a as (insert into audit_log ${AUDIT_COLUMNS} select $1, ${actorOf("$5")}, 'share_granted', $2, jsonb_build_object('email', u.email, 'role', s.role) from s join users u on u.id = s.user_id) ` +
               "select u.id, u.email, u.name, s.role from s join users u on u.id = s.user_id",
-            [orgId, documentId, input.email, input.role],
+            [orgId, documentId, input.email, input.role, by ?? null],
           );
         },
-        unshare: async (documentId, userId) =>
-          orgExists && isId(documentId) && isId(userId) && (await pool.query("delete from document_shares where org_id = $1 and document_id = $2 and user_id = $3", [orgId, documentId, userId])).rowCount === 1,
+        unshare: async (documentId, userId, by) =>
+          orgExists && isId(documentId) && isId(userId) && (by === undefined || isId(by)) &&
+          (await pool.query(
+            // The audit row is inserted FROM the deleted row: no share, no row, and the count says which.
+            `with d as (delete from document_shares where org_id = $1 and document_id = $2 and user_id = $3 returning org_id, document_id, user_id) ` +
+              `insert into audit_log ${AUDIT_COLUMNS} select d.org_id, ${actorOf("$4")}, 'share_revoked', d.document_id, jsonb_build_object('email', u.email) from d join users u on u.id = d.user_id`,
+            [orgId, documentId, userId, by ?? null],
+          )).rowCount === 1,
         createWorkspace: async ({ name }) => {
           if (!orgExists) throw new Error("cannot create a workspace: invalid org id");
           return exactlyOne(WorkspaceRow, "insert into workspaces (org_id, name) values ($1, $2) returning *", [orgId, Name.parse(name)]);
@@ -746,8 +771,10 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           try {
             return await one(
               RunRow,
-              // insert ... select: the row is only created if the document exists in this org.
-              "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *",
+              // insert ... select: the row is only created if the document exists in this org. Audited in the same statement.
+              "with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *), " +
+                `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf("j.created_by")}, 'run_started', j.document_id, jsonb_build_object('run', j.id::text, 'instruction', j.input ->> 'instruction') from j) ` +
+                "select * from j",
               [orgId, documentId, JSON.stringify(input), createdBy ?? null],
             );
           } catch (err) {
@@ -786,6 +813,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           );
           return { totals, ...items };
         },
+        audit: async (input) => (orgExists ? page(AuditRow, "audit_log t", "t.org_id = $1", [orgId], input, true) : { items: [], nextCursor: null }),
         openPreview: async ({ documentId, createdBy }) => {
           if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
           // `on conflict do nothing`: the document's unfinished job, if any, is the answer as it is.
@@ -822,7 +850,10 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           // `on conflict do nothing`: a ship already waiting for this document is the answer (jobs_one_queued_ship_per_document).
           const inserted = await one(
             z.object({ id: z.string() }),
-            "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ship', '{}', $3 from documents d where d.org_id = $1 and d.id = $2 on conflict do nothing returning id",
+            // Audited only when this press made the ship: one that joins the waiting ship changes nothing.
+            "with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ship', '{}', $3 from documents d where d.org_id = $1 and d.id = $2 on conflict do nothing returning id, org_id, document_id, created_by), " +
+              `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf("j.created_by")}, 'ship_started', j.document_id, jsonb_build_object('ship', j.id::text) from j) ` +
+              "select id from j",
             [orgId, documentId, createdBy ?? null],
           );
           // A second statement, so it sees the winner's commit. Not "the queued one": it may have been claimed in
@@ -898,6 +929,9 @@ export async function provisionAppRole({ ownerUrl, schema = "public", role, pass
     await owner.query(`alter default privileges in schema ${s} grant select, insert, update, delete on tables to ${r}`);
     await owner.query(`alter default privileges in schema ${s} grant usage, select on sequences to ${r}`);
     await owner.query(`revoke all on ${s}.schema_migrations from ${r}`);
+    // F26: the app may add to the audit trail and read it, never change or remove it (the table's trigger refuses
+    // everyone else). Revoked AFTER the grant above, on every provisioning: a deploy restores it if anyone widened it.
+    await owner.query(`revoke update, delete, truncate on ${s}.audit_log from ${r}`);
 
     // Postgres gives everyone CONNECT and TEMP on every database by default. The app needs neither
     // beyond its own database: no scratch disk writes, and a leaked password opens one database only.

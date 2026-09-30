@@ -134,7 +134,7 @@ test("a node that missed the announcement reads every live session's role again 
   const editor = browser("editor", doc.id);
   try {
     await until(() => editor.status === "live", "editor live");
-    await t.db.forOrg(org.id).setMember({ email: email("editor"), role: "viewer" }); // behind the api's back: nothing announced
+    await t.db.forOrg(org.id).setMember({ email: email("editor"), role: "viewer", by: undefined }); // behind the api's back: nothing announced
     const before = editor.submit(add());
     expect(before.ok && (await before.settled)).toMatchObject({ ok: true }); // nobody told the node yet
     await sync.recheck("all");
@@ -157,7 +157,7 @@ test("a token for someone who is not a member of the document's org is refused a
 
 test("an AI run acting for a viewer is refused like the viewer; the git peer (the service itself) is not asked", async () => {
   const { doc } = await world({ viewer: "viewer" });
-  const viewerId = (await t.db.forOrg(doc.orgId).setMember({ email: email("viewer"), role: "viewer" }));
+  const viewerId = (await t.db.forOrg(doc.orgId).setMember({ email: email("viewer"), role: "viewer", by: undefined }));
   if (typeof viewerId === "string") throw new Error(viewerId);
   const peerAs = (userId: string, actor: { kind: "agent" | "git"; runId: string }) => connectPeer({
     manifest,
@@ -273,7 +273,7 @@ test("a revoke nobody announced (Redis away at the api) still closes the session
   const outsider = browser("outsider", doc.id, swept);
   try {
     await until(() => outsider.status === "live", "outsider live");
-    expect(await t.db.forOrg(doc.orgId).unshare(doc.id, shared.userId)).toBe(true); // behind the api's back: nothing announced
+    expect(await t.db.forOrg(doc.orgId).unshare(doc.id, shared.userId, undefined)).toBe(true); // behind the api's back: nothing announced
     await until(() => outsider.status === "closed", "closed by the sweep");
     expect(outsider.closedBecause).toBe("4404");
   } finally {

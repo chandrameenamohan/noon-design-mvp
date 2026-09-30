@@ -1,6 +1,7 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
-import { HealthResponse, type ErrorBody, type User } from "@noon/contracts";
-import { createDocument, signIn, signOut, signUp, whoAmI } from "./api.ts";
+import { HealthResponse, type ErrorBody, type Org, type User } from "@noon/contracts";
+import { createDocument, listOrgs, signIn, signOut, signUp, whoAmI } from "./api.ts";
+import { AuditView } from "./AuditView.tsx";
 import { Canvas } from "./Canvas.tsx";
 
 const selfCheck = HealthResponse.parse({ status: "ok", service: "web" });
@@ -14,9 +15,12 @@ const refusals: Partial<Record<ErrorBody["error"], string>> = {
 };
 
 export function App() {
-  // ponytail: the address bar is the router. ?doc=<id> is a document; anything else is home.
-  const documentId = new URLSearchParams(location.search).get("doc");
+  // ponytail: the address bar is the router. ?doc=<id> is a document, ?audit=<orgId> an org's audit trail; anything else is home.
+  const params = new URLSearchParams(location.search);
+  const documentId = params.get("doc");
   if (documentId) return <Canvas documentId={documentId} />;
+  const auditOrg = params.get("audit");
+  if (auditOrg) return <AuditView orgId={auditOrg} />;
   return <Home />;
 }
 
@@ -24,9 +28,13 @@ function Home() {
   // undefined: still asking the api who this is.
   const [me, setMe] = useState<User | null>();
   const [error, setError] = useState<string>();
+  const [orgs, setOrgs] = useState<Org[]>([]);
   useEffect(() => {
     whoAmI().then(setMe, (problem: unknown) => { setError(problem instanceof Error ? problem.message : String(problem)); });
   }, []);
+  useEffect(() => {
+    if (me) listOrgs().then(setOrgs, () => undefined); // the list is a convenience: without it, home still works
+  }, [me]);
 
   const create = async (owner: User): Promise<void> => {
     try {
@@ -57,6 +65,16 @@ function Home() {
           <p>Signed in as {me.name} ({me.email})</p>
           <button type="button" onClick={() => void create(me)}>New document</button>{" "}
           <button type="button" onClick={() => void leave()}>Sign out</button>
+          {orgs.length > 0 && (
+            <section aria-labelledby="orgs-heading">
+              <h2 id="orgs-heading">Your organisations</h2>
+              <ul>
+                {orgs.map((org) => (
+                  <li key={org.id}><a href={`/?audit=${org.id}`}>Audit trail of {org.name}</a></li>
+                ))}
+              </ul>
+            </section>
+          )}
         </>
       )}
       {error !== undefined && <p role="alert">{error}</p>}

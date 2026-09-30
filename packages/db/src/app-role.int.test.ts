@@ -1,47 +1,30 @@
-import { randomBytes } from "node:crypto";
 import { Client } from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { createDb, provisionAppRole, type Db } from "./index.ts";
-import { createTestDb, TEST_DATABASE_URL, type TestDb } from "./testing.ts";
+import { provisionAppRole } from "./index.ts";
+import { createAppRole, createTestDb, TEST_DATABASE_URL, type AppRole, type TestDb } from "./testing.ts";
 
 // The api must not connect as the database owner: a superuser bypasses every permission, which
-// would make "audit rows cannot be changed" (F26) impossible to promise later.
-const role = `noon_app_test_${randomBytes(4).toString("hex")}`;
-const password = "test-only-password";
+// would make "audit rows cannot be changed" (F26) impossible to promise.
 let t: TestDb;
-let appUrl: string;
-let asApp: Db;
+let app: AppRole;
+let role: string, password: string, appUrl: string;
 
 beforeAll(async () => {
   t = await createTestDb();
-  await provisionAppRole({ ownerUrl: TEST_DATABASE_URL, schema: t.schema, role, password });
-  const u = new URL(TEST_DATABASE_URL);
-  u.username = role;
-  u.password = password;
-  appUrl = u.toString();
-  asApp = createDb({ connectionString: appUrl, schema: t.schema });
+  app = await createAppRole(t);
+  ({ role, password, url: appUrl } = app);
 });
 afterAll(async () => {
-  await asApp.close();
-  await t.rawQuery(`drop owned by ${role}`);
-  await t.rawQuery(`drop role ${role}`);
+  await app.drop();
   await t.drop();
 });
 
-async function asAppRaw(sql: string): Promise<unknown> {
-  const c = new Client({ connectionString: appUrl, options: `-c search_path=${t.schema}` });
-  await c.connect();
-  try {
-    return await c.query(sql);
-  } finally {
-    await c.end();
-  }
-}
+const asAppRaw = (sql: string): Promise<unknown> => app.raw(sql);
 
 test("the app role can do the product's work", async () => {
-  const org = await asApp.createOrg({ name: "Via app role", ownerId: (await asApp.upsertUser({ email: "app@example.com", name: "App" })).id });
-  const ws = await asApp.forOrg(org.id).createWorkspace({ name: "ws" });
-  expect(await asApp.forOrg(org.id).listWorkspaces()).toMatchObject({ items: [ws] });
+  const org = await app.db.createOrg({ name: "Via app role", ownerId: (await app.db.upsertUser({ email: "app@example.com", name: "App" })).id });
+  const ws = await app.db.forOrg(org.id).createWorkspace({ name: "ws" });
+  expect(await app.db.forOrg(org.id).listWorkspaces()).toMatchObject({ items: [ws] });
 });
 
 test("the app role is not a superuser and cannot change the schema or the migration history", async () => {
@@ -52,12 +35,12 @@ test("the app role is not a superuser and cannot change the schema or the migrat
   await expect(asAppRaw("drop table documents")).rejects.toMatchObject({ code: "42501" });
   await expect(asAppRaw("alter table orgs disable trigger all")).rejects.toMatchObject({ code: "42501" });
   await expect(asAppRaw("delete from schema_migrations")).rejects.toMatchObject({ code: "42501" });
-  await expect(asApp.migrate()).rejects.toThrow();
+  await expect(app.db.migrate()).rejects.toThrow();
 });
 
 test("provisioning twice is safe and updates the password", async () => {
   await provisionAppRole({ ownerUrl: TEST_DATABASE_URL, schema: t.schema, role, password });
-  await asApp.ping();
+  await app.db.ping();
 });
 
 test("re-provisioning strips privileges and memberships a role picked up some other way", async () => {

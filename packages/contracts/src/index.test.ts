@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { HealthResponse, includes, Preview, Role, SandboxUrl, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
+import { AuditEntry, HealthResponse, includes, Preview, Role, SandboxUrl, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
 
 const valid = { status: "ok", service: "api" };
 
@@ -80,4 +80,18 @@ test("a document is shared at editor or viewer, and never at owner", () => {
   const share = (role: string) => ShareBody.safeParse({ email: "outside@example.com", role }).success;
   expect(["editor", "viewer", "owner", ""].map(share)).toEqual([true, true, false, false]);
   expect(ShareBody.safeParse({ email: "outside@example.com", role: "viewer", orgId: "x" }).success).toBe(false);
+});
+
+test("an audit entry's detail is flat text, and its action and actor kind are ones the view has words for", () => {
+  const entry = {
+    id: "0f9c7a0e-1b2c-4d3e-8f00-000000000001", orgId: "0f9c7a0e-1b2c-4d3e-8f00-000000000002",
+    actor: { kind: "user", id: "0f9c7a0e-1b2c-4d3e-8f00-000000000003", email: "o@example.com" },
+    action: "run_started", documentId: null, detail: { instruction: "<b>markup stays text</b>" }, at: "2026-09-30T00:00:00.000Z",
+  };
+  expect(AuditEntry.parse(entry)).toEqual(entry);
+  expect(AuditEntry.safeParse({ ...entry, detail: { nested: { x: "y" } } }).success).toBe(false);
+  expect(AuditEntry.safeParse({ ...entry, detail: { count: 3 } }).success).toBe(false);
+  expect(AuditEntry.safeParse({ ...entry, action: "made_up" }).success).toBe(false);
+  expect(AuditEntry.safeParse({ ...entry, actor: { ...entry.actor, kind: "robot" } }).success).toBe(false);
+  expect(AuditEntry.safeParse({ ...entry, extra: 1 }).success).toBe(false);
 });

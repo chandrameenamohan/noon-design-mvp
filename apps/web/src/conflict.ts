@@ -38,6 +38,9 @@ const SENTENCES: Record<ConflictReason, string> = {
   not_a_file: "The page's file is no longer a regular file.",
 };
 
+/** Why a push was refused, as one sentence (the audit trail says it too). */
+export const refusalSentence = (reason: ConflictReason): string => SENTENCES[reason];
+
 /** What the banner says, as plain strings: the caller renders them as TEXT (commit and file are an engineer's). */
 export function conflictWords(conflict: Conflict): { commit: string; file: string; why: string } {
   return { commit: conflict.commit, file: conflict.file, why: conflict.detail === "" ? SENTENCES[conflict.reason] : `${SENTENCES[conflict.reason]} (${conflict.detail})` };
