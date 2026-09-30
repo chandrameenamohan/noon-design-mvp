@@ -69,7 +69,9 @@ class OutOfShape extends Error {
 export function parse(tsx: string, manifest: Manifest): Parsed {
   try {
     if (typeof tsx !== "string") return { ok: false, reason: "malformed_doc", detail: "the file is not text" };
-    if (tsx.length > MAX_BYTES) return { ok: false, reason: "too_large", detail: `larger than ${String(MAX_BYTES)} bytes` };
+    // Bytes, as git.ts counts the blob: a CJK character is 1 UTF-16 unit and 3 bytes. A UTF-8 string is
+    // never shorter in bytes than in units, so the cheap length check first spares encoding a huge file.
+    if (tsx.length > MAX_BYTES || new TextEncoder().encode(tsx).length > MAX_BYTES) return { ok: false, reason: "too_large", detail: `larger than ${String(MAX_BYTES)} bytes` };
     const doc = read(tsx);
     // The contract is the trust boundary for everything a document may hold: node ids, prop values
     // (control characters, -0), sizes. What the room would refuse from an op is refused here too.

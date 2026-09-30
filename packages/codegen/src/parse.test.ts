@@ -176,6 +176,11 @@ test("unit:parse-shape-breakers: a file larger than the cap is refused before it
   expect(refusal(page(`<Button data-node-id="b" label={"${"x".repeat(3 * 1024 * 1024)}"} />`))).toBe("too_large");
 });
 
+test("unit:parse-shape-breakers: the cap counts UTF-8 bytes, as git does, not UTF-16 units", () => {
+  const cjk = "中".repeat(1024 * 1024); // 1 M units, 3 MB: under the cap in units, over it in bytes
+  expect(refusal(page(`<Button data-node-id="b" label={"${cjk}"} />`))).toBe("too_large");
+});
+
 test("unit:parse-shape-breakers: more nodes than a room holds are refused", () => {
   const body = Array.from({ length: 5000 }, (_, i) => `<Alert data-node-id="a${String(i)}" />`).join("\n");
   expect(refusal(page(body))).toBe("too_large");
