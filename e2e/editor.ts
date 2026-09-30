@@ -31,10 +31,12 @@ export const emptySpot = async (page: Page): Promise<{ x: number; y: number }> =
 /** The page's direct children on the canvas, in order. */
 export const pageChildren = (page: Page) => page.locator(".page-frame > [data-node-id]");
 export const componentsOf = async (rows: Locator): Promise<string[]> => rows.evaluateAll((els) => els.map((el) => el.getAttribute("data-component") ?? ""));
+/** The canvas's tree as nested [component, children]. A layers row (E10.3) carries data-node-id too and comes first
+ * in the page, so every selector names the canvas's nodes (data-component), or the root lookup finds a row and prints "[]". */
 export const treeOf = (page: Page): Promise<string> =>
   page.evaluate(() => {
-    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-component"), walk(child)]);
-    const root = document.querySelector("[data-node-id=root]");
+    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id][data-component]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-component"), walk(child)]);
+    const root = document.querySelector("[data-node-id=root][data-component]");
     return JSON.stringify(root ? walk(root) : "no root");
   });
 

@@ -95,6 +95,8 @@ export function Canvas({ documentId }: { documentId: string }) {
   const [carry, setCarry] = useState<Carry | null>(null);
   // A ref, not state: the pointer moves sixty times a second and nothing on OUR screen depends on it.
   const cursor = useRef<Presence["cursor"]>(null);
+  // Where the keyboard was when the replica refused an edit: Dismiss unmounts itself, so focus goes back there, not to <body>.
+  const refusedFrom = useRef<HTMLElement | null>(null);
   const selection = peer && wanted !== ROOT_ID && peer.doc.nodes[wanted] ? wanted : null;
   useEffect(() => { peer?.setPresence({ cursor: cursor.current, selection }); }, [peer, selection]);
   // An add of this person's was refused (by the replica at once, or by the room later): the node it selected is
@@ -127,7 +129,7 @@ export function Canvas({ documentId }: { documentId: string }) {
   const submit = (op: Op): boolean => {
     if (op.type === "set_prop") for (const each of refusals) if (each.op?.type === "set_prop" && each.op.nodeId === op.nodeId && each.op.key === op.key) dismiss(each.id);
     const result = peer.submit(op);
-    if (!result.ok) refuse(result.reason, op);
+    if (!result.ok) { refusedFrom.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; refuse(result.reason, op); }
     return result.ok;
   };
   // The selected node's refused prop edits, latest per prop, for the inspector to repeat beside the control.
@@ -198,7 +200,7 @@ export function Canvas({ documentId }: { documentId: string }) {
           <ConflictBanner documentId={documentId} />
           {refusals.map((refusal) => (
             <p key={refusal.id} role="alert" className="refusal">
-              {sentenceFor(refusal.reason)} <button type="button" onClick={() => { dismiss(refusal.id); }}>Dismiss</button>
+              {sentenceFor(refusal.reason)} <button type="button" onClick={() => { dismiss(refusal.id); if (refusedFrom.current?.isConnected) refusedFrom.current.focus(); }}>Dismiss</button>
             </p>
           ))}
           {/* Said, not shown: someone who cannot see the canvas still learns that their selection is gone. */}

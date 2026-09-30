@@ -49,7 +49,7 @@ test("the tree mirrors the canvas both ways; drag reorders and nests as ONE move
   await tile(page, "Stack").click();
   await layer(page, "Page").click(); // the new stack is selected (E10.5); the text is to land beside it
   await tile(page, "Text").click();
-  await expect(other.locator("[data-node-id]")).toHaveCount(5);
+  await expect(other.locator("[data-node-id][data-component]")).toHaveCount(5); // the canvas's nodes: a layers row carries data-node-id too
 
   // An ARIA tree: levels, expanded state on rows with children only, one tab stop.
   const tree = page.getByRole("tree", { name: "Layers" });
@@ -135,8 +135,8 @@ test("the tree mirrors the canvas both ways; drag reorders and nests as ONE move
   await expect(layer(page, "Card 1")).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(heading(page)).toHaveText("Button 1");
-  await page.keyboard.press("ArrowLeft"); // a leaf: to its parent
-  await expect(heading(page)).toHaveText("Card 1");
+  await page.keyboard.press("ArrowLeft"); // a leaf: to its parent, the page (the drag above took the button out of the card)
+  await expect(heading(page)).toHaveText("Page");
   await layer(page, "Page").click();
   await page.keyboard.press("ArrowDown"); // Card 1
   await page.keyboard.press("ArrowDown"); // Button 1

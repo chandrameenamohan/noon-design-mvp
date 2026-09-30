@@ -77,8 +77,10 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
   /** One move_node, said as well as sent: a new parent is named, a new place among the same siblings is numbered. */
   const move = (op: ReturnType<typeof dropToMoveOp>): void => {
     if (!op) return;
+    // Worded BEFORE the submit: the replica applies the op to `doc` in place, so afterwards every move looks like a reorder.
+    const sentence = `${labelOf(op.nodeId)} moved ${op.newParentId === doc.nodes[op.nodeId]?.parentId ? `to position ${String(op.index + 1)}` : `into ${labelOf(op.newParentId)}`}`;
     submit(op);
-    setSaid(`${labelOf(op.nodeId)} moved ${op.newParentId === doc.nodes[op.nodeId]?.parentId ? `to position ${String(op.index + 1)}` : `into ${labelOf(op.newParentId)}`}`);
+    setSaid(sentence);
   };
 
   // --- the pointer: press selects; a press that travels becomes a drag --------------------------
