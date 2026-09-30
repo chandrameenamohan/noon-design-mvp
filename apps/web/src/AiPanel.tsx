@@ -33,7 +33,7 @@ const active = (run: Run | undefined): run is Run => run?.status === "queued" ||
  * the canvas the same way another person's do. A reload picks the document's newest run up again.
  * ponytail: the steps ride that 1 s poll (a step shows up to a second late); a push channel if that is ever too slow.
  */
-export function AiPanel({ documentId }: { documentId: string }) {
+export function AiPanel({ documentId, hidden = false }: { documentId: string; hidden?: boolean }) {
   const [instruction, setInstruction] = useState("");
   const [run, setRun] = useState<Run>();
   const [problem, setProblem] = useState("");
@@ -59,8 +59,9 @@ export function AiPanel({ documentId }: { documentId: string }) {
     );
   };
 
+  // `hidden` (the top bar's AI button closed it): the run keeps being followed, only the panel is out of view.
   return (
-    <form className="ai-panel" aria-label="Ask the AI" onSubmit={(event) => { event.preventDefault(); start(); }}>
+    <form id="ai-panel" className="ai-panel" aria-label="Ask the AI" hidden={hidden} onSubmit={(event) => { event.preventDefault(); start(); }}>
       <label htmlFor="ai-instruction">Ask the AI to change this page</label>
       <textarea id="ai-instruction" rows={2} maxLength={4000} value={instruction} onChange={(event) => { setInstruction(event.target.value); }} placeholder="Add a payment card with a card-number input and a primary Pay button" />
       <div className="ai-actions">

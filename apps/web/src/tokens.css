@@ -1,0 +1,96 @@
+/*
+ * Design tokens (E10.1). Every colour, type size, space and radius the web app uses is a custom property
+ * declared HERE and nowhere else; app.css only refers to them. One accent (selection, focus, links, the
+ * primary button), neutral surfaces, a sans face for the UI and a mono face for code and props.
+ *
+ * Theme: `html[data-theme]` carries the RESOLVED theme ("light" | "dark"), set by useTheme.ts from the
+ * remembered choice or, without one, the OS (prefers-color-scheme), before the first render. So the
+ * light block is the default and the dark block keys on the attribute alone; there is no second copy
+ * of the dark tokens under a media query.
+ *
+ * Contrast (WCAG AA): every text colour reads at 4.5:1 or better on the surface it is used on, and
+ * every border and focus ring at 3:1 or better, in BOTH themes (theme.test.ts recomputes the text pairs).
+ */
+:root {
+  color-scheme: light;
+
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  --bar-height: 2.75rem;
+  --pane-width: 16rem;
+  --inspector-width: 19rem;
+  --canvas-dot-gap: 16px;
+
+  /* surfaces */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #eceef2;
+  --canvas: #f9fafb;
+  --canvas-dot: #c4cad3;
+  --border: #d5d9e0;
+  --border-strong: #6b7684;
+
+  /* text */
+  --fg: #1c2430;
+  --fg-muted: #4b5563;
+
+  /* the ONE accent */
+  --accent: #1d4ed8;
+  --on-accent: #ffffff;
+  --accent-soft: #e8efff;
+  --focus: var(--accent);
+
+  /* notices */
+  --danger-bg: #fdecea;
+  --danger-border: #b42318;
+  --danger-fg: #7a1c12;
+  --warning-bg: #fff4e5;
+  --warning-border: #93370d;
+  --warning-fg: #5c2306;
+  --info-bg: #eef4ff;
+  --info-border: #1d4ed8;
+  --info-fg: #1c2430;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #21262e;
+  --canvas: #13161b;
+  --canvas-dot: #2f3740;
+  --border: #2c333d;
+  --border-strong: #7b8694;
+
+  --fg: #e6e9ee;
+  --fg-muted: #a3adba;
+
+  --accent: #8ab4ff;
+  --on-accent: #0b1220;
+  --accent-soft: #1b2a4a;
+
+  --danger-bg: #3a1512;
+  --danger-border: #f08a80;
+  --danger-fg: #fbd5d1;
+  --warning-bg: #3a2408;
+  --warning-border: #f0b070;
+  --warning-fg: #fde2c0;
+  --info-bg: #14213d;
+  --info-border: #8ab4ff;
+  --info-fg: #e6e9ee;
+}

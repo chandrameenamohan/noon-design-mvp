@@ -1,5 +1,6 @@
 import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, UsageReport, User, Workspace } from "@noon/contracts";
 import { z } from "zod";
+import type { AuthRefusal } from "./signIn.ts";
 
 // The caller is whoever signed in (E8.1): the session is an HttpOnly cookie the browser sends by itself on
 // these same-origin requests. In development only, `?user=` still names the caller in a header (SPEC §2.16),
@@ -65,12 +66,17 @@ export async function whoAmI(): Promise<User | null> {
   if (!res.ok) throw new Error(`GET /auth/me answered ${String(res.status)}`);
   return Me.parse(await res.json()).user;
 }
-/** The signed-in user, or the api's error NAME (invalid_credentials, email_taken, invalid_body...) for the form to explain. */
-async function authenticate(path: string, body: unknown): Promise<User | ErrorBody["error"]> {
+/**
+ * The signed-in user, or the api's refusal (its error NAME: invalid_credentials, email_taken, invalid_body...) for the
+ * form to explain. Over the attempt limit (429) the body carries the same wait as the Retry-After header (E9.6), so the
+ * form can say how long, not "a minute".
+ */
+async function authenticate(path: string, body: unknown): Promise<User | AuthRefusal> {
   const res = await fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   if (res.ok) return User.parse(await res.json());
   const error = ErrorBody.safeParse(await res.json().catch(() => undefined));
-  return error.success ? error.data.error : "internal";
+  if (!error.success) return { error: "internal" };
+  return error.data.retryAfterSeconds === undefined ? { error: error.data.error } : { error: error.data.error, retryAfterSeconds: error.data.retryAfterSeconds };
 }
 export const signUp = (body: { email: string; name: string; password: string }) => authenticate("/auth/signup", body);
 export const signIn = (body: { email: string; password: string }) => authenticate("/auth/signin", body);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Doc, DocNode, Manifest, Op, Presence } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
@@ -8,6 +8,7 @@ import { ConflictBanner } from "./ConflictBanner.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
+import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
 import { ShipPanel } from "./ShipPanel.tsx";
 import { usePeer } from "./usePeer.ts";
 
@@ -57,7 +58,7 @@ function NodeView({ doc, node, labels, selected, selectedBy, onSelect }: { doc: 
         <span className="visually-hidden">Select </span>
         {labels.get(node.id) ?? node.component}
       </button>
-      {others.map((p) => <span key={p.peerId} className="selected-by" style={{ color: colourOf(p.peerId) }}>{p.name}</span>)}
+      {others.map((p) => <span key={p.peerId} className="selected-by" style={{ "--peer-colour": colourOf(p.peerId) } as CSSProperties}>{p.name}</span>)}
       <span className="node-props">{Object.entries(node.props).map(([key, value]) => `${key}=${String(value)}`).join(" ")}</span>
       <div data-children style={{ flexDirection: direction }}>
         {node.children.map((id) => {
@@ -72,14 +73,16 @@ function NodeView({ doc, node, labels, selected, selectedBy, onSelect }: { doc: 
 export function Canvas({ documentId }: { documentId: string }) {
   const { peer, refusals, refuse, dismiss } = usePeer(documentId);
   const [wanted, setSelected] = useState(ROOT_ID);
+  // The AI panel is open until the person closes it (the top bar's AI button); not remembered, a session's choice.
+  const [aiOpen, setAiOpen] = useState(true);
   // A ref, not state: the pointer moves sixty times a second and nothing on OUR screen depends on it.
   const cursor = useRef<Presence["cursor"]>(null);
   const selection = peer && wanted !== ROOT_ID && peer.doc.nodes[wanted] ? wanted : null;
   useEffect(() => { peer?.setPresence({ cursor: cursor.current, selection }); }, [peer, selection]);
-  if (!peer) return <main><h1>Noon MVP</h1><p><span role="status">connecting</span></p></main>;
+  if (!peer) return <Page><h1>Document</h1><p><span role="status">connecting</span></p></Page>;
   if (peer.status === "closed") {
     // The peer ended for good (peer.closedBecause: no session, a fatal close code, a corrupt document).
-    return <main><h1>Noon MVP</h1><p role="alert">This document cannot be opened ({peer.closedBecause ?? "closed"}). <a href="/">Back to start</a></p></main>;
+    return <Page><h1>Document</h1><p role="alert" className="refusal">This document cannot be opened ({peer.closedBecause ?? "closed"}). <a href="/">Back to start</a></p></Page>;
   }
   const doc = peer.doc;
   const readOnly = peer.status === "live" && peer.readOnly;
@@ -103,49 +106,76 @@ export function Canvas({ documentId }: { documentId: string }) {
   // The id is minted HERE, random and never reused (SPEC §2.4). `index` is the node's final position: the end.
   const add = (component: Component): void => { submit({ type: "add_node", nodeId: crypto.randomUUID(), parentId: parent.id, index: parent.children.length, component: component.name, props: requiredProps(component) }); };
 
+  // The shell (E10.1): the top bar says how the document is doing and who is here, and holds Ship and AI;
+  // layers left (E10.3 fills it; the component toolbar sits there until E10.5's library replaces it), the
+  // canvas in the centre, the inspector right with the AI panel under it. Share arrives with E10.8.
   return (
-    <main>
-      <h1>Noon MVP</h1>
-      <p>
-        <span role="status" data-read-only={readOnly}>{readOnly ? "read-only" : peer.status}</span> · <span>{peer.pendingCount === 0 ? "saved" : `${readOnly ? "waiting to save" : "saving"} ${String(peer.pendingCount)}…`}</span>
-      </p>
-      {/* E6.1b: the room's storage is down. An alert, so a screen reader says it the moment it happens. */}
-      {readOnly && <p role="alert" className="read-only">Read-only: the server cannot save edits right now. Edits you already made are kept and will be saved when it can; new edits are paused.</p>}
-      <div role="toolbar" aria-label="Add a component">
-        {manifest.components.map((component) => <button key={component.name} type="button" disabled={readOnly} onClick={() => { add(component); }}>Add {component.name}</button>)}
-      </div>
-      <ConflictBanner documentId={documentId} />
-      <ShipPanel documentId={documentId} />
-      <AiPanel documentId={documentId} />
-      {refusals.map((refusal) => (
-        <p key={refusal.id} role="alert" className="refusal">
-          {sentenceFor(refusal.reason)} <button type="button" onClick={() => { dismiss(refusal.id); }}>Dismiss</button>
-        </p>
-      ))}
-      <ul aria-label="Also here" className="also-here">
-        {peer.others.map((p) => <li key={p.peerId} style={{ color: colourOf(p.peerId) }}>{p.name === "" ? p.actor.kind : p.name}</li>)}
-      </ul>
-      {/* Said, not shown: someone who cannot see the canvas still learns that their selection is gone. */}
-      <p aria-live="polite" className="visually-hidden">{wanted !== ROOT_ID && !doc.nodes[wanted] ? "The element you had selected was removed by someone else." : ""}</p>
-      <div className="workspace">
-        <section
-          aria-label="Canvas"
-          className="canvas"
-          onPointerMove={(event) => {
-            const box = event.currentTarget.getBoundingClientRect();
-            // A FRACTION of the canvas, not pixels: the other window is a different size.
-            point({ x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)), y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)) });
-          }}
-          onPointerLeave={() => { point(null); }}
-        >
-          <NodeView doc={doc} node={root} labels={labels} selected={node.id} selectedBy={selectedBy} onSelect={setSelected} />
-          {peer.others.map((p) => p.cursor && (
-            <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
+    <Shell
+      topBar={
+        <TopBar>
+          <h1 className="visually-hidden">Document</h1>
+          <p className="doc-status">
+            <span role="status" data-read-only={readOnly}>{readOnly ? "read-only" : peer.status}</span> · <span>{peer.pendingCount === 0 ? "saved" : `${readOnly ? "waiting to save" : "saving"} ${String(peer.pendingCount)}…`}</span>
+          </p>
+          <ul aria-label="Also here" className="also-here">
+            {peer.others.map((p) => <li key={p.peerId} style={{ "--peer-colour": colourOf(p.peerId) } as CSSProperties}>{p.name === "" ? p.actor.kind : p.name}</li>)}
+          </ul>
+          <div className="top-bar-actions">
+            <ShipPanel documentId={documentId} />
+            <button type="button" aria-pressed={aiOpen} aria-controls="ai-panel" onClick={() => { setAiOpen((open) => !open); }}>AI</button>
+          </div>
+        </TopBar>
+      }
+      notices={
+        <>
+          {/* E6.1b: the room's storage is down. An alert, so a screen reader says it the moment it happens. */}
+          {readOnly && <p role="alert" className="read-only">Read-only: the server cannot save edits right now. Edits you already made are kept and will be saved when it can; new edits are paused.</p>}
+          <ConflictBanner documentId={documentId} />
+          {refusals.map((refusal) => (
+            <p key={refusal.id} role="alert" className="refusal">
+              {sentenceFor(refusal.reason)} <button type="button" onClick={() => { dismiss(refusal.id); }}>Dismiss</button>
+            </p>
           ))}
-        </section>
-        <Inspector key={node.id} doc={doc} node={node} label={labels.get(node.id) ?? node.component} component={componentOf(node.component)} containers={containers} submit={submit} />
-      </div>
-      <Preview documentId={documentId} />
-    </main>
+          {/* Said, not shown: someone who cannot see the canvas still learns that their selection is gone. */}
+          <p aria-live="polite" className="visually-hidden">{wanted !== ROOT_ID && !doc.nodes[wanted] ? "The element you had selected was removed by someone else." : ""}</p>
+        </>
+      }
+      left={
+        <>
+          <Panel title="Layers"><p className="hint">Select an element on the canvas to edit it.</p></Panel>
+          <Panel title="Library">
+            <div role="toolbar" aria-label="Add a component">
+              {manifest.components.map((component) => <button key={component.name} type="button" disabled={readOnly} onClick={() => { add(component); }}>Add {component.name}</button>)}
+            </div>
+          </Panel>
+        </>
+      }
+      centre={
+        <>
+          <section
+            aria-label="Canvas"
+            className="canvas"
+            onPointerMove={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
+              // A FRACTION of the canvas, not pixels: the other window is a different size.
+              point({ x: Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)), y: Math.min(1, Math.max(0, (event.clientY - box.top) / box.height)) });
+            }}
+            onPointerLeave={() => { point(null); }}
+          >
+            <NodeView doc={doc} node={root} labels={labels} selected={node.id} selectedBy={selectedBy} onSelect={setSelected} />
+            {peer.others.map((p) => p.cursor && (
+              <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
+            ))}
+          </section>
+          <Preview documentId={documentId} />
+        </>
+      }
+      right={
+        <>
+          <Inspector key={node.id} doc={doc} node={node} label={labels.get(node.id) ?? node.component} component={componentOf(node.component)} containers={containers} submit={submit} />
+          <AiPanel documentId={documentId} hidden={!aiOpen} />
+        </>
+      }
+    />
   );
 }

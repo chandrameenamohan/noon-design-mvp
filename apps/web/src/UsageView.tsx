@@ -1,5 +1,6 @@
 import type { UsageReport } from "@noon/contracts";
 import { readUsage } from "./api.ts";
+import { Page } from "./Shell.tsx";
 import { tokens, usd } from "./usage.ts";
 import { useOrgReport } from "./useOrgReport.ts";
 
@@ -46,8 +47,7 @@ export function UsageView({ orgId }: { orgId: string }) {
   const runs = pages.flatMap((page) => page.items);
 
   return (
-    <main>
-      <p><a href="/">Home</a></p>
+    <Page bar={<a href="/">Home</a>}>
       <h1>AI usage{org ? ` of ${org.name}` : ""}</h1>
       {refused !== undefined && <p role="alert" className="refusal">{REFUSED[refused]}</p>}
       {report && refused === undefined && (
@@ -107,6 +107,6 @@ export function UsageView({ orgId }: { orgId: string }) {
       )}
       {refused === undefined && !loading && runs.length === 0 && <p>No AI run has finished in this organisation yet.</p>}
       {refused === undefined && next !== null && <button type="button" disabled={loading} onClick={more}>Show older runs</button>}
-    </main>
+    </Page>
   );
 }

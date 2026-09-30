@@ -1,19 +1,13 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
-import { HealthResponse, type ErrorBody, type Org, type User } from "@noon/contracts";
+import { HealthResponse, type Org, type User } from "@noon/contracts";
 import { createDocument, listOrgs, signIn, signOut, signUp, whoAmI } from "./api.ts";
 import { AuditView } from "./AuditView.tsx";
 import { Canvas } from "./Canvas.tsx";
+import { Page } from "./Shell.tsx";
+import { refusalWords } from "./signIn.ts";
 import { UsageView } from "./UsageView.tsx";
 
 const selfCheck = HealthResponse.parse({ status: "ok", service: "web" });
-
-/** What the api's refusal NAME means to the person at the form. The api never says which of email or password was wrong. */
-const refusals: Partial<Record<ErrorBody["error"], string>> = {
-  invalid_credentials: "That email and password do not match an account.",
-  email_taken: "An account with that email already exists. Sign in instead.",
-  invalid_body: "Enter a valid email, a name, and a password of 8 to 128 characters.",
-  too_many_attempts: "Too many attempts. Wait a minute, then try again.",
-};
 
 export function App() {
   // ponytail: the address bar is the router. ?doc=<id> is a document, ?audit=<orgId> an org's audit trail, ?usage=<orgId>
@@ -58,16 +52,16 @@ function Home() {
     }
   };
   return (
-    <main>
+    <Page>
       <h1>Noon MVP</h1>
-      <p>
+      <p className="hint">
         {selfCheck.service}: {selfCheck.status}
       </p>
       {me === null && <SignIn onSignedIn={setMe} />}
       {me && (
         <>
           <p>Signed in as {me.name} ({me.email})</p>
-          <button type="button" onClick={() => void create(me)}>New document</button>{" "}
+          <button type="button" className="primary" onClick={() => void create(me)}>New document</button>{" "}
           <button type="button" onClick={() => void leave()}>Sign out</button>
           {orgs.length > 0 && (
             <section aria-labelledby="orgs-heading">
@@ -81,8 +75,8 @@ function Home() {
           )}
         </>
       )}
-      {error !== undefined && <p role="alert">{error}</p>}
-    </main>
+      {error !== undefined && <p role="alert" className="refusal">{error}</p>}
+    </Page>
   );
 }
 
@@ -101,7 +95,7 @@ function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
     setBusy(true);
     try {
       const result = creating ? await signUp({ email: field("email"), name: field("name"), password: field("password") }) : await signIn({ email: field("email"), password: field("password") });
-      if (typeof result === "string") setRefusal(refusals[result] ?? "Something went wrong. Try again.");
+      if ("error" in result) setRefusal(refusalWords(result));
       else onSignedIn(result);
     } catch {
       setRefusal("The server could not be reached. Try again.");
@@ -122,10 +116,10 @@ function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
       </label>
       <p id="name-hint">Only needed to sign up: the name others see in a document.</p>
       <div className="sign-in-actions">
-        <button type="submit" value="signin" disabled={busy}>Sign in</button>
+        <button type="submit" value="signin" className="primary" disabled={busy}>Sign in</button>
         <button type="submit" value="signup" disabled={busy}>Sign up</button>
       </div>
-      {refusal !== undefined && <p role="alert">{refusal}</p>}
+      {refusal !== undefined && <p role="alert" className="refusal">{refusal}</p>}
     </form>
   );
 }

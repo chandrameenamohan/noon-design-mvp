@@ -1,5 +1,6 @@
 import { readAudit } from "./api.ts";
 import { auditWords } from "./audit.ts";
+import { Page } from "./Shell.tsx";
 import { useOrgReport } from "./useOrgReport.ts";
 
 const REFUSED = {
@@ -17,8 +18,7 @@ export function AuditView({ orgId }: { orgId: string }) {
   const entries = pages.flatMap((page) => page.items);
 
   return (
-    <main>
-      <p><a href="/">Home</a></p>
+    <Page bar={<a href="/">Home</a>}>
       <h1>Audit trail{org ? ` of ${org.name}` : ""}</h1>
       {refused !== undefined && <p role="alert" className="refusal">{REFUSED[refused]}</p>}
       {refused === undefined && (
@@ -44,6 +44,6 @@ export function AuditView({ orgId }: { orgId: string }) {
       )}
       {refused === undefined && !loading && entries.length === 0 && <p>Nothing has happened in this organisation yet.</p>}
       {refused === undefined && next !== null && <button type="button" disabled={loading} onClick={more}>Show older entries</button>}
-    </main>
+    </Page>
   );
 }
