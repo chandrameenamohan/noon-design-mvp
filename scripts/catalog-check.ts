@@ -62,7 +62,8 @@ export function catalogProblems({ files, catalog, lineCount, a0 = A0 }: Book): s
     const evidence = (fields.get("evidence") ?? "").split(",").map((each) => each.trim()).filter(Boolean);
     if (evidence.length === 0) problems.push(`${id}: evidence is missing (the test or chaos script that exercises it today)`);
     for (const path of evidence) if (lineCount(path.split(":")[0] ?? "") === undefined) problems.push(`${id}: evidence ${path} does not exist`);
-    if (!new RegExp(`\\b${id}\\b`).test(catalog)) problems.push(`${id}: not listed in property-catalog.md`);
+    // The antithesis-research skill's catalog format: one `### <slug> — <Property Name>` section per property.
+    if (!catalog.split("\n").some((line) => line.startsWith(`### ${id} — `))) problems.push(`${id}: property-catalog.md has no section ### ${id} — <name>`);
     const invariant = fields.get("a0");
     if (invariant) covered.add(Number(invariant));
   }

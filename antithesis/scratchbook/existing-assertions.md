@@ -1,3 +1,18 @@
+---
+sut_path: /Users/cm/100x/personal/noon-design-mvp
+commit: 764ad75a3db71d412bee986f08a5ff58aeca7200
+updated: 2026-10-01
+external_references:
+  - path: /Users/cm/100x/personal/noon-design-mvp/SPEC.md
+    why: §4a names the seven A0 invariants this catalog starts from; §4 (failure modes) and §8 (end-to-end scenario) give the P1 properties
+  - path: https://github.com/antithesishq/antithesis-skills/tree/main/antithesis-research
+    why: the antithesis-research skill; its references/property-catalog.md and scratchbook-artifacts.md fix this file's format
+  - path: /Users/cm/repos/ai-engine/antithesis/scratchbook/
+    why: the owner's scratchbook for Conduit, made with the same skill; its catalog rows (Priority, SUT instrumentation) are copied here
+  - path: /Users/cm/repos/ai-engine/deploy/antithesis/README.md
+    why: the owner's harness and its property table (P1..P11 always, S2..S6 sometimes vacuity guards)
+---
+
 # Existing assertions
 
 No Antithesis SDK is imported anywhere in the SUT (`grep -r antithesis apps packages` is empty at commit 764ad75).

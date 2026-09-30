@@ -18,7 +18,7 @@ evidence: scripts/chaos/no-loss.ts
 body
 `;
 const lines = new Map([["apps/sync/src/room.ts", 428], ["scripts/chaos/no-loss.ts", 75]]);
-const check = (files: Record<string, string>, catalog = "op-applied-at-most-once", a0 = [3]) =>
+const check = (files: Record<string, string>, catalog = "### op-applied-at-most-once — Op applied at most once", a0 = [3]) =>
   catalogProblems({ files: new Map(Object.entries(files)), catalog, lineCount: (path) => lines.get(path), a0 });
 
 test("a complete always, listed in the catalog, passes", () => {
@@ -50,14 +50,14 @@ test("a site must point at a real line or a test-template command; evidence must
 
 test("a sometimes needs no guard; a bad type or priority, an unlisted id and a missing A0 invariant are named", () => {
   const sometimes = complete.replace("type: always", "type: sometimes").replace(/^guard.*\n/gm, "").replace("a0: 3\n", "");
-  expect(check({ "op-applied-at-most-once.md": sometimes }, "op-applied-at-most-once", [])).toEqual([]);
-  expect(check({ "op-applied-at-most-once.md": complete.replace("type: always", "type: usually").replace("P0", "high") }, "", [3, 4])).toEqual([
+  expect(check({ "op-applied-at-most-once.md": sometimes }, undefined, [])).toEqual([]);
+  expect(check({ "op-applied-at-most-once.md": complete.replace("type: always", "type: usually").replace("P0", "high") }, "| op-applied-at-most-once | always |", [3, 4])).toEqual([
     "op-applied-at-most-once: type usually is not always, sometimes, unreachable, reachability or eventually",
     "op-applied-at-most-once: priority high is not P0, P1 or P2",
-    "op-applied-at-most-once: not listed in property-catalog.md",
+    "op-applied-at-most-once: property-catalog.md has no section ### op-applied-at-most-once — <name>",
     "A0 invariant 4 has no property",
   ]);
-  expect(check({ "x.md": complete }, "op-applied-at-most-once", [])).toEqual(["x.md: id op-applied-at-most-once does not match its file name"]);
+  expect(check({ "x.md": complete }, undefined, [])).toEqual(["x.md: id op-applied-at-most-once does not match its file name"]);
 });
 
 test("the real scratchbook is complete", () => {
