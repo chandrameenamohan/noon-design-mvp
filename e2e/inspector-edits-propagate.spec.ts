@@ -39,9 +39,12 @@ test("sections from the manifest; every control kind edits as one set_prop that 
   await tile(page, "Text").click();
   await layer(page, "Page").click();
   await tile(page, "Card").click();
-  await expect(other.locator("[data-node-id]")).toHaveCount(5);
+  // Canvas nodes only: a layers row (E10.3) carries data-node-id too, but not data-component.
+  await expect(other.locator("[data-node-id][data-component]")).toHaveCount(5);
 
   // The page itself has no props to edit; a node's inspector has the three sections, from the manifest.
+  // An add selects the new node (E10.5), so select the page first.
+  await layer(page, "Page").click();
   await expect(inspector(page).getByRole("heading", { level: 3 })).toHaveCount(0);
   await layer(page, "Stack 1").click();
   await expect(inspector(page).getByRole("heading", { level: 3 })).toHaveText(["Component", "Layout", "Props"]);
