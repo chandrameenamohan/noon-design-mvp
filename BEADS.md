@@ -123,6 +123,20 @@ N's handbook bead (never more than one chapter behind).
 | E9.6 | Every authenticated HTTP route has a per-user rate limit and unauthenticated routes a per-address one; over the limit is `429` with a retry time; minting session tokens (`POST /documents/:id/session`) has its own tighter limit, so a revoked collaborator cannot hammer it (found by the E1.5 review: no bead owned generic HTTP limits; F31 covers AI runs only) | integration:http-rate-limit-429-retry-after · integration:session-mint-limit | a WAF, IP reputation | E9.5 | apps/api | R |
 | E9.H | Chapter 9 + drills | check:drills-red · check:chapter-recorded | — | E9.2b, E9.6 | docs/handbook, drills/ | |
 
+## E10 — Polished editor
+Every row: keyboard path for every mouse action, axe-clean light and dark, edits only through `peer.submit(op)`, no new UI framework or drag/canvas library.
+| key | outcome | checks | out of scope | deps | touches | R |
+|---|---|---|---|---|---|---|
+| E10.1 | A document opens in a three-pane shell (layers left, canvas centre, inspector right, top bar with status, presence, Share, Ship, AI); colours/type/spacing are CSS tokens; light and dark follow the OS with a remembered toggle; home and sign-in use the tokens | unit:theme-preference · e2e:shell-light-dark | resizable panes, a logo | E9.2b, E9.6, E8.H | apps/web, e2e | |
+| E10.2 | The canvas renders the design system's REAL components (inert) on a dotted infinite surface; zoom at the pointer (10–400 %, fit), pan, click/keyboard selection with outline and label | unit:viewport-math · unit:hit-test · e2e:canvas-zoom-pan-select | resize handles, multi-select, marquee, other design systems | E10.1 | apps/web | |
+| E10.3 | Layers panel is an ARIA tree synced with the canvas selection; drag or Alt+arrows reorder/nest/outdent as ONE `move_node`; Delete removes; others' moves appear live | unit:drop-to-move-op · e2e:layers-drag-and-keyboard-reorder | rename, hide/lock, multi-drag | E10.2 | apps/web, e2e | |
+| E10.4 | Inspector generated from the manifest in sections, one control per prop kind with defaults and Reset (`set_prop null`); declared layout props (direction, gap, padding, align) get auto-layout controls that shade the space on the canvas | unit:control-for-every-manifest-prop · unit:layout-props-detected · e2e:inspector-edits-propagate | free width/height, constraints, colour pickers | E10.3 | apps/web, e2e | |
+| E10.5 | Library panel with search and live thumbnails; drag onto the canvas or the layers adds ONE `add_node` at the shown index; Enter adds into/after the selection; replaces the toolbar | unit:drop-to-add-op · e2e:library-drag-to-canvas | user components, assets, templates | E10.4 | apps/web, e2e | |
+| E10.6 | Cursors travel in canvas coordinates (agree across zoom), with name tags and idle fade; top-bar avatars jump to a person's selection; the AI's cursor sits on the node its last accepted op touched | unit:cursor-world-coords · unit:ai-cursor-follows-last-op · e2e:cursors-agree-across-zoom · e2e:ai-cursor-on-touched-node | follow mode, cursor chat | E10.5 | apps/web, e2e | |
+| E10.7 | Preview opens as a split in phone/tablet/desktop frames; all shortcuts live in one registry that drives handlers and a `?` sheet | unit:shortcut-registry-no-collisions · e2e:preview-split-device-frames · e2e:shortcut-sheet | custom sizes, rebinding | E10.6 | apps/web, e2e | |
+| E10.8 | Home lists orgs; org page lists members and lets an owner add by email and change roles; Share dialog lists, adds and revokes shares; audit uses the shell. Adds `GET /orgs/:id/members` and `GET /documents/:id/shares` | integration:members-and-shares-listed · e2e:members-role-change · e2e:share-dialog | invites by email, document browser, org creation UI | E10.7 | apps/web, apps/api, packages/contracts, packages/db | R |
+| E10.H | Lesson 10 + drills | check:drills-red · check:chapter-recorded | — | E10.8 | docs/handbook, drills/ | |
+
 ## Z — Final verification
 | key | outcome | checks | out of scope | deps | touches | R |
 |---|---|---|---|---|---|---|

@@ -71,5 +71,15 @@
  "Z.2a": "noon-cs6.2",
  "Z.2b": "noon-cs6.4",
  "E9.6": "noon-elo.7",
- "E2.9": "noon-cxb.13"
+ "E2.9": "noon-cxb.13",
+ "E10": "noon-2h1",
+ "E10.1": "noon-2h1.1",
+ "E10.2": "noon-2h1.2",
+ "E10.3": "noon-2h1.3",
+ "E10.4": "noon-2h1.4",
+ "E10.5": "noon-2h1.5",
+ "E10.6": "noon-2h1.6",
+ "E10.7": "noon-2h1.7",
+ "E10.8": "noon-2h1.8",
+ "E10.H": "noon-2h1.9"
 }
