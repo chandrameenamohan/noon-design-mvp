@@ -1,0 +1,111 @@
+<title>TypeScript Lesson Six</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 to 6 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+/* Lessons 5 and 6: the verification status is a fact the reader must not miss, so it is red-bordered, not accent. */
+.status { border: 1px solid var(--bad); background: var(--bad-wash); padding: 12px 16px; margin: 24px 0; font-size: 0.95rem; }
+.status p { margin: 0 0 8px; max-width: none; } .status p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 6 · Epic 6</p>
+  <h1>Durability: the journal, the snapshot, and what "no loss" means</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, why an acknowledgement may only be given after a durable append and what goes wrong one line earlier; how at-least-once delivery plus a unique key keyed by sender becomes exactly-once across a restart; why a room that cannot write says so to everyone, acknowledges nothing, and reads the log before it writes again; why a snapshot is written once with a conditional put and named in Postgres only after it exists; and what a chaos run has to record for "no acknowledged op is lost" to be a checked fact rather than a hope; and you can point at the line of code for every claim.</p>
+
+  <div class="status">
+    <p><strong>Verification status, honestly.</strong> Every commit in this chapter passed lint, the type checker and the unit tests (the room's journal, read-only and recovery rules; peer-client's hold; the snapshotter; the chaos checker on synthetic ledgers). The integration suites (<span class="mono">packages/db journal.int</span>, <span class="mono">sync journal.int</span>, <span class="mono">read-only.int</span>, <span class="mono">snapshot.int</span> including the 10,000-row open under 2 s, and the E6.1b additions to the worker's <span class="mono">push.test</span> and <span class="mono">git.int</span>) and both chaos checks (<span class="mono">postgres-down-read-only</span>, <span class="mono">kill-sync-no-loss</span>) are written and committed and <em>have not been run</em>: the host was too loaded to run Docker suites beside other work. They run on <span class="mono">build/epics</span> before anything merges to <span class="mono">main</span>. Where this page says "measured", it was measured in a learning test or an earlier epic; where it says "the test asserts", the test exists and is unrun. Section 7 is the by-hand demo to run first.</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what is committed. Sections 1, 3 and 4 are the ones a distributed-systems interview will dig into; section 5 is the one that turns the promise into a checked fact.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now also MinIO on 127.0.0.1:9005; sync makes its bucket at start<br>pnpm exec vitest run apps/sync/src/room.test.ts apps/sync/src/snapshots.test.ts packages/peer-client/src/peer.test.ts scripts/chaos/no-loss.test.ts&nbsp;&nbsp;# the pure halves<br>docker compose kill --signal SIGKILL sync &amp;&amp; docker compose start sync&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the F18 fault, by hand; the canvas reconnects unaided</p>
+    <p>Try it, once the stack is up: section 7 walks the two faults by hand, then the suites and the chaos runs, with the exact commands and what each should show.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-6/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-6/check.sh</span> shows your progress. Neither needs Docker.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> The canvas says "read-only" and holds the person's edits, but not since when. Carry the moment from the room's <em>lent</em> clock to the screen: the <code>status</code> message gains a required <code>at</code> and the welcome an optional <code>readOnlySince</code> (<code>packages/contracts</code>); <code>storageFailed</code> and <code>recover</code> stamp them from <code>now()</code>, never <code>Date.now</code>, and a peer joining meanwhile is told since when; peer-client exposes <code>readOnlySince</code> and clears it as it clears <code>readOnly</code>; <code>readOnlyFor(since, now)</code> in <code>apps/web/src/reasons.ts</code> says "5 s" or "2 min", never negative; the canvas's alert reads "Read-only for 2 min", as text. <span class="mono">make check</span> must stay green: the type checker will name every place a status is built without <code>at</code>, and <code>room.test.ts</code>, <code>peer.test.ts</code> and <code>wire.test.ts</code> will name every expectation that changed. That list is the drill.</p>
+      <p>Predict first: why must the room take the moment from the clock it was lent, and what would a test that winds the clock by hand be unable to check if it used <code>Date.now</code>?</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-6/d2-durable-room/room.ts</span> is the room cut down to durability (queue, dedupe, journal, read-only, recover) with one bug from this chapter planted in it. Its first test fails the database's write and asks who heard of the op. Read the failing assertion and say, before you open the code, what the room believes its own <code>seq</code> is now and why that is worse than the lost broadcast. The fix moves one line.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. The room could apply and broadcast an op, then journal it, and refuse it if the write fails. That is faster for the sender. Why is the acknowledgement given only after the append, and why is the sequence number taken only then?</summary>
+        <p>Because an acknowledgement is a promise about the future: "after a crash this will still be true". Only the database can make that promise, so the room may only relay it after the database has spoken. Announce first and three things break at once. Every other peer applies an op that may not exist after a restart, so two tabs diverge from the truth. The sender's client marks the op confirmed and forgets it, so nothing will ever resend it: the op is lost <em>while everyone saw it</em>. And the room's <code>seq</code> has moved for a row that is not in the journal, so the next append's number is one ahead of the table, which is the room's own signal for a rival writer; under the reversed order it becomes a permanent read-only after the first failed write. Taking the number inside <code>accept</code>, after the append resolved, means a failed write leaves no gap and the next op simply gets the same number. The cost is one database round trip per op inside the room's queue, which is the price of the promise. Drill 2 plants the reverse order; its first assertion is peer B having received seq 2.</p></details>
+      <details class="recall"><summary>2. When the journal fails, the room could ping Postgres every second and say "writable" when it answers. Instead <code>recover()</code> reads <code>since(seq)</code> and replays it first. Why, and what exactly does "no acknowledged op is lost, none is applied twice" require of the client and the journal together?</summary>
+        <p>Because "the database answers" and "the room agrees with the database" are different facts. A rejected append may have landed (the connection died after the commit) and a timed-out one may land later; a rival row may sit at the room's next seq. If the room goes writable without reading, the landed op is in the journal and in nobody's document, and the next append from anyone breaks <code>op_journal_seq</code> and puts the room back into read-only for ever. Replaying through <code>accept</code> applies and announces what landed, moves the room's seq past it, and only then says writable; the sender's held resend is then answered from memory with the seq it got. The promise needs three things. From the journal: a unique key on <code>(document, sender, opId)</code>, and the original row returned when it is broken, so a second sending gets the first answer. From the client: keep the op under the same opId until it is answered, and re-offer it after every welcome and every "writable", in order. From the room: acknowledge only what is durable, refuse everything while it cannot write, and read the journal before it writes again. Remove any one and the promise is gone: no key, and a resend is applied twice; no held resend, and an in-flight op is lost; no replay, and a landed op is heard by nobody.</p></details>
+      <details class="recall"><summary>3. Snapshots are written to MinIO with <code>IfNoneMatch: "*"</code>, and <code>documents.snapshot_seq</code> is updated only afterwards and only forwards. A failed snapshot is logged and never retried, and F8's idle save was deleted. Defend each of those four choices in one sentence, then say what a snapshot <em>is</em>.</summary>
+        <p>A snapshot is a materialised prefix of the log, so everything follows from the journal being the truth. <em>Conditional put</em>: two rooms (or one room twice, after a crash) may reach the same seq, and the same journal prefix gives the same document, so the loser of the race loses nothing and a plain overwrite would only open a window where the object is half-written. <em>Pointer after the object, forwards only</em>: a crash between the two writes leaves an orphaned object (harmless) rather than a pointer to nothing (a document that cannot open), and a slow write of an older snapshot finishing late must not move the document backwards. <em>Never retried</em>: a snapshot that failed to write costs nothing but more rows to replay at the next open, so a retry loop would be complexity spent protecting a copy. <em>F8 deleted</em>: F8 had to retry for ever because the room's memory was the only copy of the edits since the last save; with the journal that is never true, and keeping two save paths means two truths. The key is zero-padded because S3 sorts strings, and the newest snapshot is found by the pointer rather than by listing because S3 lists ascending in pages of 1000, measured. What it is: a cache of the log that may be lost but must never be wrong, which is why the document is encoded in the same tick as its seq.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the three things the room does to an op after the journal accepts it, in order, and who the sender's acknowledgement is. Then name the two starting points a document can open from and what is replayed after either. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>After the append resolves, <code>accept</code>: applies the op to the in-memory document, takes the sequence number (only now), remembers the op under <code>sender:opId</code>, and broadcasts it to every peer; the sender's own copy of that broadcast is its acknowledgement. Two starting points: the newest snapshot in MinIO (named by <code>documents.snapshot_seq</code>), or what F8's idle save wrote before E6.2 if that is newer; after either, <code>since(seq)</code> replays only the journal rows past that seq, and the room starts at the last replayed seq.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. The room builds <code>sequenced</code> with <code>seq + 1</code> before the append. When is the number actually taken, and why does it matter?</p>
+      <button id="q1a" data-correct>Inside <code>accept</code>, after the append resolved: a failed write leaves no gap and the next op gets the same number</button><button id="q1b">When <code>sequenced</code> is built: the journal needs it to write the row</button><button id="q1c">When the broadcast is sent, so peers see numbers in order</button><button id="q1d">When the client's <code>baseSeq</code> catches up</button>
+      <p class="why" hidden>Under the reversed order a failed write would move the room one ahead of the table, and the next append would break <code>op_journal_seq</code>.</p></div>
+    <div class="quiz"><p class="q">2. Both unique constraints fail with SQLSTATE 23505. How does <code>append</code> tell a resend from a rival writer, and what does it do for each?</p>
+      <button id="q2a" data-correct>By the constraint's <em>name</em> on the error: <code>op_journal_op</code> is a resend and the original row is returned; <code>op_journal_seq</code> is a rival and the error propagates</button><button id="q2b">By retrying the insert and seeing which one fails twice</button><button id="q2c">By comparing the op's JSON with the existing row</button><button id="q2d">It cannot: both are refused as <code>unavailable</code></button>
+      <p class="why" hidden>Measured in <code>learning-tests/postgres</code>: the driver exposes <code>err.constraint</code>. <code>"constraint" in err</code> narrows the type so the compare compiles without a cast.</p></div>
+    <div class="quiz"><p class="q">3. Why is the journal's dedupe key <code>(document, actor, opId)</code> and not <code>(document, opId)</code>?</p>
+      <button id="q3a" data-correct>Every broadcast shows every opId to every peer, so another peer could send one as its own; a bare-opId key would call that a resend and answer with the other peer's op</button><button id="q3b">Because uuids collide often enough to matter</button><button id="q3c">So that the AI's runs get their own numbering</button><button id="q3d">Postgres requires three columns in a unique key on a partitioned table</button>
+      <p class="why" hidden>The database test proves two senders may share an opId and both rows are written.</p></div>
+    <div class="quiz"><p class="q">4. A journal append fails. In what order do peers hear about it, and what does a read-only room acknowledge?</p>
+      <button id="q4a" data-correct>One <code>status</code> to every peer first, then the refusal to the sender; while read-only it acknowledges nothing: not a fresh op, not a no-op, not a resend it remembers</button><button id="q4b">The refusal to the sender first, then a status to the others</button><button id="q4c">Only the sender hears; the others find out from their own next op</button><button id="q4d">It acknowledges remembered resends from memory, since those were durable</button>
+      <p class="why" hidden>Even an answer from memory is an acknowledgement. The order lets the sender's client treat the refusal as "hold", not "resync".</p></div>
+    <div class="quiz"><p class="q">5. What does <code>recover()</code> do before it tells peers "writable", and why is a bare health probe wrong?</p>
+      <button id="q5a" data-correct>It replays <code>since(seq)</code> through <code>accept</code>: an append that landed although it threw, or a rival's row, is applied and announced; a probe would go writable with the room behind the journal and the next append would break <code>op_journal_seq</code></button><button id="q5b">It re-sends every refused op itself</button><button id="q5c">It clears the room's memory so no stale answer is given</button><button id="q5d">It reloads the document from the newest snapshot</button>
+      <p class="why" hidden>"The database answers" and "the room agrees with the database" are different facts. The test with <code>committedAnyway</code> is the lost-reply case.</p></div>
+    <div class="quiz"><p class="q">6. Why is the snapshot written to MinIO <em>before</em> <code>documents.snapshot_seq</code> is updated, and what does <code>where snapshot_seq &lt; $3</code> add?</p>
+      <button id="q6a" data-correct>So the pointer never names a missing object: a crash between the two leaves an orphaned object, not an unopenable document; the <code>&lt;</code> keeps the pointer monotonic when a slow older write finishes late</button><button id="q6b">Because MinIO is faster than Postgres</button><button id="q6c">So that the listing can find the newest object</button><button id="q6d">Postgres would reject the update while the object is still uploading</button>
+      <p class="why" hidden>A 412 on the put is treated as success: the same journal prefix gives the same document.</p></div>
+    <div class="quiz"><p class="q">7. A snapshot fails to write. What happens?</p>
+      <button id="q7a" data-correct>It is logged and not retried; the journal holds every accepted op, so the next open replays more rows and loses nothing</button><button id="q7b">The room goes read-only until MinIO answers</button><button id="q7c">It is retried every second until it lands, as F8's save was</button><button id="q7d">The document is marked corrupt (4500)</button>
+      <p class="why" hidden>F8 had to retry for ever because the room's memory was the only copy. That is no longer true, so its retry loop was deleted with it.</p></div>
+    <div class="quiz"><p class="q">8. The kill-sync chaos run reports PASS. What must its ledger have contained for that PASS to mean anything?</p>
+      <button id="q8a" data-correct>At least one op acknowledged before the fault and at least one in flight at it; otherwise the vacuity guards report the run as proving nothing</button><button id="q8b">At least 100 ops, so the statistics are meaningful</button><button id="q8c">One op from each kind of peer</button><button id="q8d">A snapshot taken during the run</button>
+      <p class="why" hidden>SPEC §4a: every <code>always</code> needs a <code>sometimes</code>. The kill is synchronous so the burst is guaranteed in flight.</p></div>
+  </section>
+
+  <footer>Next: Lesson 7, after epic 7. Multi-node: a lease per document so exactly one node owns a room, a fencing token checked by the journal append so a node paused past its lease cannot write, and clients that follow the room to its new node through <code>/session</code>; the ledger from this chapter, unchanged, checks the failover.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>

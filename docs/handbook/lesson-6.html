@@ -1,0 +1,1167 @@
+<title>TypeScript Lesson Six</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.prose { max-width: 36rem; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h2 code { font-size: 0.92em; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+pre.out { background: var(--surface); color: var(--slate); border-style: dashed; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 9rem; }
+.break { border: 1px solid var(--bad); background: var(--bad-wash); padding: 4px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.break .label { color: var(--bad); } .break pre { background: var(--surface); }
+.break p { font-size: 0.95rem; margin: 10px 0 0; }
+.recall { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; max-width: 36rem; }
+summary { cursor: pointer; font: 500 15px var(--sans); color: var(--accent); }
+.recall p { margin: 12px 0 0; font-size: 0.95rem; }
+#score { font: 500 13px var(--mono); color: var(--slate); min-height: 1.4em; margin: 0 0 4px; }
+.quiz { border-top: 1px solid var(--rule); padding: 22px 0 8px; display: grid; gap: 8px; max-width: 36rem; }
+.quiz .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.quiz button { text-align: left; padding: 11px 14px; font: 400 16px/1.35 var(--serif); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; cursor: pointer; }
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; color: var(--slate); }
+.quiz button.right { border-color: var(--good); color: var(--good); font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.quiz .why { font-size: 0.92rem; color: var(--slate); margin: 4px 0 0; }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media print {
+  body { font-size: 11.5pt; padding: 0; background: #fff; }
+  main { max-width: none; } p, ul, ol, .lede, .prose, .recall, .quiz, footer { max-width: none; }
+  /* Paper cannot scroll sideways: wrap long code lines instead of clipping them. */
+  .scroll { overflow: visible; } pre { white-space: pre-wrap; overflow-wrap: anywhere; width: auto; min-width: 0; font-size: 8.6pt; }
+  h2 { break-after: avoid; margin-top: 28pt; } .label { break-after: avoid; }
+  table, .break, .aside, .quiz, .note { break-inside: avoid; }
+  .toc a, a { color: inherit; text-decoration: none; } #score { display: none; }
+}
+@media (max-width: 480px) { body { font-size: 17.5px; padding-block: 36px 72px; } pre { font-size: 12.5px; } }
+</style>
+<style>
+/* Lesson 1 to 6 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+/* Lessons 5 and 6: the verification status is a fact the reader must not miss, so it is red-bordered, not accent. */
+.status { border: 1px solid var(--bad); background: var(--bad-wash); padding: 12px 16px; margin: 24px 0; font-size: 0.95rem; }
+.status p { margin: 0 0 8px; max-width: none; } .status p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 6 · Epic 6</p>
+  <h1>Durability: the journal, the snapshot, and what "no loss" means</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, why an acknowledgement may only be given after a durable append and what goes wrong one line earlier; how at-least-once delivery plus a unique key keyed by sender becomes exactly-once across a restart; why a room that cannot write says so to everyone, acknowledges nothing, and reads the log before it writes again; why a snapshot is written once with a conditional put and named in Postgres only after it exists; and what a chaos run has to record for "no acknowledged op is lost" to be a checked fact rather than a hope; and you can point at the line of code for every claim.</p>
+
+  <div class="status">
+    <p><strong>Verification status, honestly.</strong> Every commit in this chapter passed lint, the type checker and the unit tests (the room's journal, read-only and recovery rules; peer-client's hold; the snapshotter; the chaos checker on synthetic ledgers). The integration suites (<span class="mono">packages/db journal.int</span>, <span class="mono">sync journal.int</span>, <span class="mono">read-only.int</span>, <span class="mono">snapshot.int</span> including the 10,000-row open under 2 s, and the E6.1b additions to the worker's <span class="mono">push.test</span> and <span class="mono">git.int</span>) and both chaos checks (<span class="mono">postgres-down-read-only</span>, <span class="mono">kill-sync-no-loss</span>) are written and committed and <em>have not been run</em>: the host was too loaded to run Docker suites beside other work. They run on <span class="mono">build/epics</span> before anything merges to <span class="mono">main</span>. Where this page says "measured", it was measured in a learning test or an earlier epic; where it says "the test asserts", the test exists and is unrun. Section 7 is the by-hand demo to run first.</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">e72665c</span>, so what you read is what is committed. Sections 1, 3 and 4 are the ones a distributed-systems interview will dig into; section 5 is the one that turns the promise into a checked fact.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now also MinIO on 127.0.0.1:9005; sync makes its bucket at start<br>pnpm exec vitest run apps/sync/src/room.test.ts apps/sync/src/snapshots.test.ts packages/peer-client/src/peer.test.ts scripts/chaos/no-loss.test.ts&nbsp;&nbsp;# the pure halves<br>docker compose kill --signal SIGKILL sync &amp;&amp; docker compose start sync&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the F18 fault, by hand; the canvas reconnects unaided</p>
+    <p>Try it, once the stack is up: section 7 walks the two faults by hand, then the suites and the chaos runs, with the exact commands and what each should show.</p>
+  </div>
+
+  <ol class="toc"><li><a href="#map">The map: what durability means here</a></li><li><a href="#journal">1 · The journal: durable before anyone hears of it</a></li><li><a href="#resend">2 · Exactly once, again: the resend, the forgotten op, and the id that never returns</a></li><li><a href="#readonly">3 · The database is gone: read-only, and the recovery that reads before it writes</a></li><li><a href="#snapshots">4 · Snapshots: a cache of the log, written once, named after it exists</a></li><li><a href="#chaos">5 · Proving the promise: a ledger, the journal, and two faults on the real stack</a></li><li><a href="#testing">6 · Testing durability without a database, and then with one</a></li><li><a href="#demo">7 · Durability by hand: what to run once the stack is up</a></li><li><a href="#limits">8 · What the type system could not see, epic 6 edition</a></li><li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  <section id="map"><h2>The map: what durability means here</h2><p>Epics 2 to 5 built a room that orders every edit and three kinds of peer that write through it. None of it survived a crash: F8 saved the document when a room went idle, and a sync process killed mid-edit lost everything since. Epic 6 makes one promise and keeps it under two faults. <strong>The promise (F18): no acknowledged edit is ever lost, and no edit is ever applied twice.</strong> The faults: the sync process dies (<code>kill -9</code>, no goodbye), and the database goes away (stopped, or paused so that every query hangs). A third feature (F19) makes the promise affordable: a document with ten thousand journaled edits still opens in under two seconds.</p><div class="scroll"><table><tr><th>Step</th><th>Where</th><th>And</th><th>What happens</th></tr><tr><td>1</td><td><span class='mono'>packages/db/migrations/0012_op_journal.sql</span></td><td><span class='mono'>packages/db/src/index.ts</span></td><td>the op journal: an append-only table with two unique keys told apart by name; <code>append</code>, <code>find</code>, <code>everAdded</code>, <code>since</code></td></tr><tr><td>2</td><td><span class='mono'>apps/sync/src/room.ts</span></td><td></td><td>the room's step 3 becomes <em>durable, then applied, then announced</em>; a forgotten resend is asked of the journal; keystone 4 is asked of the journal</td></tr><tr><td>3</td><td><span class='mono'>apps/sync/src/room.ts</span></td><td><span class='mono'>packages/contracts/src/index.ts</span></td><td>a failed append turns the room read-only: one <code>status</code> to everyone, no acknowledgement to anyone, and <code>recover()</code> replays the journal before saying writable</td></tr><tr><td>4</td><td><span class='mono'>apps/sync/src/server.ts</span></td><td><span class='mono'>packages/peer-client/src/peer.ts</span></td><td>a journal call bounded by a timeout; a retry loop that calls <code>recover()</code>; a client that holds its edits, refuses new ones, and sends the held ones on "writable"</td></tr><tr><td>5</td><td><span class='mono'>apps/web/src/Canvas.tsx</span></td><td><span class='mono'>apps/worker/src/tools.ts</span></td><td><span class='mono'>apps/worker/src/push.ts</span>: every kind of peer hears read-only through one contract: the canvas shows an alert, the AI's tool call is refused, the git peer's event waits</td></tr><tr><td>6</td><td><span class='mono'>apps/sync/src/snapshots.ts</span></td><td><span class='mono'>packages/db/migrations/0013_snapshot_seq.sql</span></td><td>snapshots to MinIO on a cadence and on last leave, keyed so that string order is numeric order, written once (<code>IfNoneMatch</code>), named in Postgres only after they exist</td></tr><tr><td>7</td><td><span class='mono'>apps/sync/src/server.ts</span></td><td></td><td>opening a document: the newest snapshot, then only the journal rows after it; F8's idle save is deleted</td></tr><tr><td>8</td><td><span class='mono'>scripts/chaos/no-loss.ts</span></td><td><span class='mono'>scripts/chaos/kill-sync-no-loss.ts</span></td><td><span class='mono'>scripts/chaos/postgres-down-read-only.ts</span>: the promise as a pure check over a ledger and the journal, and two runs that break the real stack</td></tr></table></div><p>Four ideas carry the epic. <strong>A write-ahead log</strong> (section 1): the op is written to a place that survives the process <em>before</em> the process tells anyone, so the acknowledgement a peer sees is a fact about the database, not about memory. <strong>At-least-once plus an idempotent resend is exactly-once</strong> (section 2): a client that never heard its answer sends the same op again with the same id, and the journal's unique key turns the second sending into the first answer. <strong>Fail visibly, recover from the log</strong> (section 3): when the log cannot be written the room stops acknowledging and says so; when it can, the room reads what landed without it before it writes again. <strong>A snapshot is a cache of the log</strong> (section 4): losing one loses nothing, so it is written best-effort and never retried, and the pointer to it is written only after the object exists.</p><div class="scroll"><table><tr><th>This repo</th><th>Java world</th><th>Python world</th></tr><tr><td>an append-only Postgres table as the write-ahead log, the room as the single writer</td><td>Kafka as the log with one producer per partition; or an event store (Axon, EventStoreDB)</td><td>the same table with psycopg; or an event store</td></tr><tr><td>dedupe by <code>(document, sender, opId)</code> unique key, answered with the original row</td><td>an idempotency key table in the same transaction as the write</td><td>the same</td></tr><tr><td>read-only as a broadcast state with a replay-before-writable recovery</td><td>a circuit breaker that half-opens, plus a catch-up read</td><td>the same idea; <code>pybreaker</code> for the breaker</td></tr><tr><td>snapshots as gzipped objects with a conditional put and a pointer row</td><td>an S3 checkpoint with <code>ifNoneMatch("*")</code> in SDK v2; Kafka Streams' state store checkpoint</td><td>boto3 <code>put_object(IfNoneMatch="*")</code></td></tr></table></div></section><section id="journal"><h2>1 · The journal: durable before anyone hears of it</h2><p>The room already had a persist step between validating an op and applying it (lesson 2 awaited it so that ordering under a slow database could be tested). Epic 6 gives that step a table and a contract, and the room's whole promise follows from <em>where</em> the step sits: an op is written to <code>op_journal</code>, and only if the write succeeds is it applied to the in-memory document, remembered, and broadcast. The sender's own copy of the broadcast is its acknowledgement. So an acknowledged op is, by construction, a row that survives the process.</p><p class="label">From <span class="mono">packages/db/migrations/0012_op_journal.sql</span></p><div class="scroll"><pre><code>-- E6.1a (F18): every op the room accepted, written BEFORE anyone hears of it. Append-only: rows are never
+-- updated. Two unique keys, told apart by NAME when an insert breaks one (learning-tests/postgres):
+--   op_journal_seq: one op per number. Broken = a second writer is numbering this document: refuse.
+--   op_journal_op:  one row per sender&#x27;s opId. Broken = a resend the room had forgotten: answer with the
+--                   original row. Keyed by the SENDER, as the room&#x27;s own memory is: every broadcast shows
+--                   every opId to every peer, so another peer&#x27;s opId is not a resend.
+create table op_journal (
+  document_id uuid not null,
+  org_id      uuid not null,
+  seq         bigint not null check (seq &gt;= 1),
+  op_id       uuid not null,
+  actor_kind  text not null check (actor_kind in (&#x27;user&#x27;, &#x27;agent&#x27;, &#x27;git&#x27;)),
+  actor_id    text not null check (length(actor_id) between 1 and 200),
+  run_id      text check (length(run_id) between 1 and 200),
+  op          jsonb not null,
+  created_at  timestamptz not null default now(),
+  constraint op_journal_seq primary key (document_id, seq),
+  constraint op_journal_op unique (document_id, actor_id, op_id),
+  foreign key (document_id, org_id) references documents (id, org_id) on delete cascade
+);
+-- Keystone 4: a node id that was ever added is never added again. The room asks this before each add.
+create index op_journal_added on op_journal (document_id, (op -&gt;&gt; &#x27;nodeId&#x27;)) where op -&gt;&gt; &#x27;type&#x27; = &#x27;add_node&#x27;;</code></pre></div><p>Read the two constraints as two different <em>facts</em>. <code>op_journal_seq</code> on <code>(document_id, seq)</code> says one op per number: if an insert breaks it, someone else is numbering this document, which must never happen with one room per document, and the right answer is to refuse and stop writing. <code>op_journal_op</code> on <code>(document_id, actor_id, op_id)</code> says one row per sender's opId: if an insert breaks it, the room forgot a resend, and the right answer is the original row. Same SQLSTATE (23505, unique violation) for both, so the code cannot tell them apart by <em>code</em>: it reads the <em>constraint name</em> the driver exposes (<code>learning-tests/postgres</code>, finding 1).</p><p class="label">From <span class="mono">learning-tests/postgres/test.ts</span></p><div class="scroll"><pre><code>// 1. Duplicate insert violating a unique constraint fails with code === &#x27;23505&#x27; and the
+//    error exposes which constraint via `.constraint` (and `.table`, `.detail`, `.schema`).
+//    CONFIRMED. Both the (document_id, seq) and (document_id, op_id) unique constraints
+//    produced distinct `.constraint` names, so the app can tell a duplicate seq from a
+//    duplicate op_id by string-comparing `err.constraint`.</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /**
+   * E6.1a: journals an accepted op, BEFORE anyone hears of it. Undefined: written. An op: this sender&#x27;s
+   * opId was journaled already, and that is what it became (a resend the room had forgotten). Rejects
+   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone.
+   */
+  append(orgId: string, documentId: string, op: SequencedOp): Promise&lt;SequencedOp | undefined&gt;;</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async append(orgId, documentId, { seq, opId, actor, op }) {
+        if (!isId(orgId) || !isId(documentId)) throw new Error(&quot;journal: not a document id&quot;);
+        try {
+          // From the document&#x27;s row, so that a document of another org (or one deleted meanwhile) takes no op.
+          const written = await pool.query(
+            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2`,
+            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op)],
+          );
+          if (written.rowCount !== 1) throw new Error(&quot;journal: the document is gone&quot;);
+          return undefined;
+        } catch (err) {
+          // Two unique keys, told apart by NAME: 23505 alone cannot say whether this is a resend or a rival writer.
+          if (err instanceof Error &amp;&amp; &quot;constraint&quot; in err &amp;&amp; err.constraint === &quot;op_journal_op&quot;) {
+            const original = await one(JournalRow, `select ${JOURNAL_COLUMNS} from op_journal where document_id = $1 and actor_id = $2 and op_id = $3`, [documentId, actor.id, opId]);
+            if (original) return original;
+          }
+          throw err;
+        }
+      },</code></pre></div><p>Three TypeScript things in that <code>append</code>. <strong><code>insert ... select ... from documents where org_id = $1 and id = $2</code></strong> is lesson 1's tenancy rule applied to the journal: the row is written <em>from</em> the document's row, so a document of another org (or one deleted meanwhile) takes no op; <code>rowCount !== 1</code> is the tell. <strong><code>"constraint" in err</code></strong> is the <code>in</code> operator used as a type guard: <code>err</code> is <code>unknown</code> in a <code>catch</code>, <code>instanceof Error</code> narrows it to <code>Error</code>, and <code>"constraint" in err</code> narrows it further to <code>Error &amp; Record&lt;"constraint", unknown&gt;</code>, so the comparison compiles without a cast. Java would catch <code>PSQLException</code> and read <code>getServerErrorMessage().getConstraint()</code>; psycopg gives <code>err.diag.constraint_name</code>. <strong>The row type is a Zod schema with a <code>.transform</code></strong>: <code>seq</code> is a <code>bigint</code> in Postgres and the driver hands it over as a <em>string</em> (the same finding lesson 3 hit for usage counts), so <code>JournalRow</code> converts once, at the edge, and the rest of the process sees a number.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// seq is a bigint: a string from the driver, a number from here on.
+const JournalRow = z
+  .object({ seq: z.string().regex(/^\d+$/).transform(Number), op_id: z.string(), actor_kind: z.string(), actor_id: z.string(), run_id: z.string().nullable(), op: z.unknown() })
+  .transform((r): SequencedOp =&gt; SequencedOp.parse({ seq: r.seq, opId: r.op_id, actor: { kind: r.actor_kind, id: r.actor_id, ...(r.run_id === null ? {} : { runId: r.run_id }) }, op: r.op }));</code></pre></div><p>Now the room's side. The <code>Journal</code> type is what the room needs and nothing about Postgres: four functions, injected. Without one (tests, the simulator) nothing is kept, and the room behaves as it did in lesson 2.</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>/**
+ * Where accepted ops are made durable (the op journal, E6.1a). The room&#x27;s memory of what it applied is
+ * bounded and dies with it; the journal&#x27;s is neither, so with one the room can answer ANY resend.
+ */
+export type Journal = {
+  /** Resolves once the op is durable: undefined, or the op this sender&#x27;s opId ALREADY became. Rejects: not durable. */
+  append(op: SequencedOp): Promise&lt;SequencedOp | undefined&gt;;
+  /** What this sender&#x27;s opId became, if it was ever journaled. */
+  find(actorId: string, opId: string): Promise&lt;SequencedOp | undefined&gt;;
+  /** Was this node id ever added (keystone 4: a removed id is never added again)? */
+  everAdded(nodeId: string): Promise&lt;boolean&gt;;
+  /** Every op journaled after `seq`, in order: how a room that went read-only catches up before it writes again. */
+  since(seq: number): Promise&lt;SequencedOp[]&gt;;
+};</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  /**
+   * Makes an op durable BEFORE anyone hears of it. If the append rejects, the op is not applied, nobody
+   * receives it, and its sequence number is not used up. Without one nothing is kept (tests, the simulator).
+   */
+  journal?: Journal;</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>    // 3. Durable first, then applied, then announced. The number is only TAKEN once the op is durable,
+    //    so a failed write leaves no gap. The ACTOR comes from the verified session (SPEC §2.3).
+    const sequenced: SequencedOp = { seq: seq + 1, opId, actor: peer.actor, op };
+    let original;
+    try {
+      original = await journal?.append(sequenced);
+    } catch {
+      refuse(&quot;unavailable&quot;);
+      return;
+    }
+    // A resend the room had forgotten, with a baseSeq that got it past the check above (a buggy or lying
+    // client). The journal&#x27;s unique key caught it: the original answer, and nothing is applied twice.
+    if (original) {
+      peer.send({ type: &quot;op&quot;, ...original });
+      return;
+    }
+    accept(sequenced);
+  }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  /** An op the journal holds and the room does not yet: applied, remembered and announced like a fresh one. */
+  function accept(sequenced: SequencedOp): void {
+    applyOpInto(doc, sequenced.op);
+    seq = sequenced.seq;
+    nodeCount = sequenced.op.type === &quot;add_node&quot; ? nodeCount + 1 : sequenced.op.type === &quot;remove_node&quot; ? Object.keys(doc.nodes).length : nodeCount;
+    remember(`${sequenced.actor.id}:${sequenced.opId}`, sequenced);
+    broadcast({ type: &quot;op&quot;, ...sequenced }); // the sender&#x27;s copy is its acknowledgement
+    onAccepted?.(seq);
+  }</code></pre></div><p>Read step 3 slowly, because the whole epic is in its order. <code>sequenced</code> is built with <code>seq + 1</code>, but <code>seq</code> itself is not moved: the number is only <em>taken</em> inside <code>accept</code>, after the append resolved. A failed write therefore leaves no gap, and the next op gets the same number. <code>journal?.append(sequenced)</code> is optional chaining on a <em>call</em>: with no journal it evaluates to <code>undefined</code> and the <code>await</code> is a no-op. <code>let original;</code> with no type and no initialiser is not <code>any</code>: TypeScript infers its type from the assignments it can see (an "evolving" <code>let</code>), so after the <code>try</code> it is <code>SequencedOp | undefined</code>. And <code>accept</code> is the one function that applies, numbers, remembers and announces, so that <code>recover()</code> in section 3 can do exactly what a fresh op does, to a row it found in the journal.</p><p>The append happens <em>inside</em> the room's one-at-a-time queue. That is what makes the journal's order the broadcast order under concurrent submits: op 2 is not even validated until op 1's append has resolved. It costs one database round trip per op on the critical path (about a millisecond on the same machine, tens over a network), which is the price of the promise; batching appends is the named upgrade, and it would move the acknowledgement, not remove the rule.</p><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>test(&quot;journal: every accepted op is journaled BEFORE it is broadcast, in the order it is broadcast, under concurrent submits&quot;, async () =&gt; {
+  const journal = memoryJournal();
+  const order: string[] = [];
+  const room = createRoom({ doc: emptyDoc(), manifest, journal: { ...journal, append: async (op) =&gt; { await Promise.resolve(); order.push(`journal ${String(op.seq)}`); return journal.append(op); } } });
+  const watcher: Peer = { actor: { kind: &quot;user&quot;, id: &quot;w&quot; }, session: { userId: &quot;w&quot;, orgId: &quot;org&quot;, expiresAt: 0 }, send: (m) =&gt; { if (m.type === &quot;op&quot;) order.push(`broadcast ${String(m.seq)}`); } };
+  const [a, b] = [peer(&quot;a&quot;), peer(&quot;b&quot;)];
+  room.join(a); room.join(b); room.join(watcher);
+  await Promise.all(Array.from({ length: 20 }, (_, i) =&gt; room.submit(i % 2 ? a : b, clientOp(add(`n${String(i)}`)))));
+  expect(order).toEqual(Array.from({ length: 20 }, (_, i) =&gt; [`journal ${String(i + 1)}`, `broadcast ${String(i + 1)}`]).flat());
+  expect(journal.rows.map((r) =&gt; r.seq)).toEqual(ops(a).map((m) =&gt; m.seq));
+});</code></pre></div><p class="label">From <span class="mono">packages/db/src/journal.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a sender&#x27;s opId again is answered with the ORIGINAL row; a taken seq is refused by name&quot;, async () =&gt; {
+  const store = t.db.documentStore();
+  const doc = await aDocument();
+  const first = row(1, add(&quot;n1&quot;));
+  expect(await store.append(doc.orgId, doc.id, first)).toBeUndefined();
+  // The same sender and opId under a new number: a resend. Nothing is written, the original comes back.
+  expect(await store.append(doc.orgId, doc.id, { ...first, seq: 2 })).toEqual(first);
+  // Another sender may use the same opId: every broadcast shows it to everyone, so it is not a resend.
+  expect(await store.append(doc.orgId, doc.id, { ...row(2, add(&quot;n2&quot;), &quot;u2&quot;), opId: first.opId })).toBeUndefined();
+  // A taken number is a rival writer, not a resend.
+  await expect(store.append(doc.orgId, doc.id, row(2, add(&quot;n3&quot;)))).rejects.toMatchObject({ code: &quot;23505&quot;, constraint: &quot;op_journal_seq&quot; });
+  expect(await store.since(doc.orgId, doc.id, 0)).toEqual([first, expect.objectContaining({ seq: 2, actor: { kind: &quot;agent&quot;, id: &quot;u2&quot;, runId: &quot;run-1&quot; } })]);
+  expect(await store.find(doc.orgId, doc.id, &quot;u1&quot;, first.opId)).toEqual(first);
+  expect(await store.find(doc.orgId, doc.id, &quot;u3&quot;, first.opId)).toBeUndefined();
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>"constraint" in err</code> after <code>err instanceof Error</code>: the <code>in</code> operator narrows</td><td><code>catch (PSQLException e) { e.getServerErrorMessage().getConstraint() }</code></td><td><code>except errors.UniqueViolation as e: e.diag.constraint_name</code></td></tr><tr><td><code>let original;</code> typed by its later assignments</td><td>no equivalent; declare the type</td><td>no equivalent; a plain name</td></tr><tr><td><code>journal?.append(op)</code>: optional chaining on a call</td><td><code>Optional.map(j -&gt; j.append(op))</code></td><td><code>journal.append(op) if journal else None</code></td></tr><tr><td>a Zod row schema with <code>.transform</code> to convert <code>bigint</code> text once</td><td>a <code>RowMapper</code> that calls <code>getLong</code></td><td>a <code>typecaster</code> on the cursor, or <code>int()</code> in the mapper</td></tr><tr><td><code>insert ... select from documents where org_id = $1</code>: the tenant check in the write</td><td>the same SQL; JPA cannot express it</td><td>the same SQL</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>E2.3's known limit: a client that resent its own forgotten op with a forged <code>baseSeq</code> got a second seq.</strong></p><p>Lesson 2 named it and could not fix it: the room's memory of applied ops is bounded, and once an op fell out of it a resend looked like a new op. The room's stale guard (<code>baseSeq &lt; forgottenUpTo</code>) caught honest clients, but a client claiming to have seen everything walked past it. The journal's unique key is the fix, and it is free: the append that would have created the duplicate breaks <code>op_journal_op</code>, the original row comes back, and the room answers with it and applies nothing. The test pushes an op out of a two-entry memory and resends it with <code>baseSeq = room.seq</code>.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A key on <code>(document, opId)</code> would have refused legitimate ops.</strong></p><p>The obvious dedupe key is the opId. But every broadcast shows every opId to every peer, so a peer that saw another's opId could send it as its own, and, more to the point, a bare-opId key would treat that as a resend and answer with the other peer's op. Lesson 2's memory was already keyed by sender for this reason; the journal's constraint is keyed the same way, and the database test proves that two senders may use one opId and both are written.</p></div><p class="note"><strong>The principle:</strong> an acknowledgement is a promise about the future ("this will still be true after a crash"), so it may only be given by the thing that will still be there after the crash. The room gives it after the database has spoken, never before. Section 8's first row is what happens when the order is reversed, and drill 2 makes you find it.</p></section><section id="resend"><h2>2 · Exactly once, again: the resend, the forgotten op, and the id that never returns</h2><p>Lesson 2 already had exactly-once over a lying connection: a client keeps its opIds, resends what was not answered, and the room answers a resend from memory. Epic 6 removes the word "memory" from that sentence. With a journal, every question the room used to answer from a bounded map can be answered from a table, including after a restart.</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  // What the room can still vouch for: &quot;sender:opId&quot; -&gt; what it became. Insertion-ordered, so the
+  // oldest is first. Keyed by SENDER too: every broadcast shows every opId to every peer, and a peer
+  // that replayed someone else&#x27;s opId must not get their answer while its own op is thrown away.
+  // With a journal this is only a cache: what fell out of it (or died with the last room) is asked of the journal.
+  const remembered = new Map&lt;string, { op: SequencedOp; bytes: number }&gt;();
+  // Ops that changed nothing, so that a resend gets the same answer instead of a second look at a
+  // document that has moved on. Their OWN small memory: they cost their sender almost nothing, and in
+  // the map above a flood of them would push out real ops and turn honest resends into &quot;stale&quot;.
+  // ponytail: a no-op that falls out of here is judged afresh if it is resent; the worst case is one
+  // old value written late. The journal cannot help (a no-op has no row): keep this.</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>    // 1. Dedupe FIRST. A client that never saw its acknowledgement sends the op again and must get
+    //    the original answer; validating first would turn an ordinary retry into &quot;duplicate_node&quot;.
+    const key = `${peer.actor.id}:${opId}`;
+    const before = remembered.get(key);
+    if (before) {
+      peer.send({ type: &quot;op&quot;, ...before.op });
+      return;
+    }
+    if (rememberedNoOps.has(key)) {
+      peer.send({ type: &quot;ack&quot;, opId });
+      return;
+    }
+    // An op written before the oldest thing the room remembers MAY already have been applied. The
+    // journal can tell: found, it gets its original answer; not found, it never was, and is judged now.
+    // Without a journal the room cannot tell, and applying it twice would move a node twice: resync.
+    if (baseSeq &lt; forgottenUpTo) {
+      if (!journal) {
+        refuse(&quot;stale&quot;);
+        return;
+      }
+      let original;
+      try {
+        original = await journal.find(peer.actor.id, opId);
+      } catch {
+        refuse(&quot;unavailable&quot;);
+        return;
+      }
+      if (original) {
+        peer.send({ type: &quot;op&quot;, ...original });
+        return;
+      }
+    }</code></pre></div><p>The dedupe is a two-level cache. The <code>Map</code> answers most resends in memory. An op whose <code>baseSeq</code> is behind everything the room remembers used to be refused as <code>stale</code> ("I cannot tell whether I applied this"); now the journal is asked with <code>find</code>: found, the original answer; not found, the op is judged now like any other. The <code>stale</code> path is kept for a room without a journal, so the simulator and lesson 2's tests still hold. Note the shape of the error handling: a journal that cannot be <em>read</em> refuses the op as <code>unavailable</code>, the same reason as a failed write, because in both cases the room does not know and must not guess.</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>    // Keystone 4: validate() only sees the document as it is; an id that was removed is in the journal.
+    // ponytail: one indexed read per add (adds are rare next to drags); without a journal, unchecked.
+    if (op.type === &quot;add_node&quot; &amp;&amp; journal) {
+      let reused;
+      try {
+        reused = await journal.everAdded(op.nodeId);
+      } catch {
+        refuse(&quot;unavailable&quot;);
+        return;
+      }
+      if (reused) {
+        refuse(&quot;duplicate_node&quot;);
+        return;
+      }
+    }</code></pre></div><p>Keystone 4 says a node id that was removed is never added again, or an edit meant for the dead node lands on the new one. <code>validate</code> only sees the document as it is; it cannot know what was removed. Lesson 5's git peer worked around it with <code>git log -p</code> for pushed pages. Now the room asks the journal for every actor: one indexed read per add, through a partial index on <code>(document_id, op -&gt;&gt; 'nodeId') where op -&gt;&gt; 'type' = 'add_node'</code>. The query is spelled exactly as the index is, because Postgres uses a partial index only when the query's predicate implies the index's.</p><p>The last piece is <em>opening</em>. A room reloaded from a saved document knows only that document's <code>seq</code>. If the process died after journaling ops the save never saw, the room would number from a stale seq and every append would break <code>op_journal_seq</code>. So opening replays <code>since(seq)</code> before the room exists:</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // The contract checked each node&#x27;s shape. Whether they form a TREE is checkDoc&#x27;s job, and a room
+    // must never open on top of a corrupt document: every later op would build on the damage.
+    if (checkDoc(doc).length &gt; 0) return { closeCode: CLOSE.documentCorrupt };
+    try {
+      for (const row of await store.since(orgId, documentId, seq)) {
+        applyOpInto(doc, row.op);
+        seq = row.seq;
+      }
+    } catch {
+      return { closeCode: CLOSE.unavailable };
+    }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>test(&quot;journal: a client that resends its own forgotten op with a FORGED high baseSeq gets the original seq, not a second one (E2.3 known limit)&quot;, async () =&gt; {
+  const journal = memoryJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal, limits: { rememberedOps: 2 } });
+  const liar = peer(&quot;liar&quot;);
+  room.join(liar);
+  await room.submit(liar, clientOp(add(&quot;n1&quot;)));
+  const setOnce = clientOp(setGap(&quot;n1&quot;, 8), 1);
+  await room.submit(liar, setOnce); // seq 2
+  for (let i = 0; i &lt; 3; i++) await room.submit(liar, clientOp(setGap(&quot;n1&quot;, 10 + i), 2 + i)); // pushes seq 2 out of the room&#x27;s memory
+  await room.submit(liar, { ...setOnce, baseSeq: room.seq }); // &quot;I have seen everything&quot;: the stale guard is passed
+  expect(ops(liar).at(-1)).toMatchObject({ seq: 2, opId: setOnce.opId });
+  expect(room.doc.nodes[&quot;n1&quot;]?.props[&quot;gap&quot;]).toBe(12); // the old value was NOT written again
+  expect(journal.rows.filter((r) =&gt; r.opId === setOnce.opId)).toHaveLength(1);
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>test(&quot;journal: a node id that was added and removed is never added again, even after a restart (keystone 4)&quot;, async () =&gt; {
+  const journal = memoryJournal();
+  const first = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer(&quot;a&quot;);
+  first.join(a);
+  await first.submit(a, clientOp(add(&quot;gone&quot;)));
+  await first.submit(a, clientOp({ type: &quot;remove_node&quot;, nodeId: &quot;gone&quot; }, 1));
+  const again = createRoom({ doc: structuredClone(first.doc), seq: first.seq, manifest, journal });
+  const git = peer(&quot;git-peer&quot;, &quot;git&quot;);
+  again.join(git);
+  const readd = clientOp(add(&quot;gone&quot;), 2);
+  await again.submit(git, readd);
+  expect(rejects(git)).toEqual([{ type: &quot;rejected&quot;, opId: readd.opId, reason: &quot;duplicate_node&quot; }]);
+  expect(again.doc.nodes[&quot;gone&quot;]).toBeUndefined();
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/journal.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a resent op gets its original seq after a restart, even when the process died before saving the document&quot;, async () =&gt; {
+  const doc = await aDocument();
+  const userId = randomUUID();
+  let server = await start();
+  const a = await connect(server.url, doc.id, userId, {}, doc.orgId);
+  await a.next(&quot;welcome&quot;);
+  const ops = [add(&quot;outer&quot;), add(&quot;inner&quot;, &quot;outer&quot;), { type: &quot;set_prop&quot;, nodeId: &quot;outer&quot;, key: &quot;gap&quot;, value: 24 } satisfies Op];
+  const opIds: string[] = [];
+  for (const op of ops) {
+    opIds.push(a.send(op));
+    await a.next(&quot;op&quot;, (m) =&gt; m.opId === opIds.at(-1)); // one at a time, so each resend below has a known baseSeq
+  }
+  const expected = ops.reduce&lt;Doc&gt;(applyOp, emptyDoc());
+  await server.close();
+  await a.closed;
+  // No snapshot store here: only the journal knows about seq 1..3, as after a crash before any snapshot.
+
+  server = await start();
+  try {
+    const back = await connect(server.url, doc.id, userId, {}, doc.orgId);
+    // The room replayed the journal: nothing acknowledged is lost, and numbering continues from 3.
+    expect(await back.next(&quot;welcome&quot;)).toMatchObject({ doc: expected, seq: 3 });
+    // The ack of the set_prop never arrived. Resent as a real client would: with the baseSeq it had then.
+    back.sendRaw({ type: &quot;op&quot;, opId: opIds[2], baseSeq: 2, op: ops[2] });
+    expect(await back.next(&quot;op&quot;, (m) =&gt; m.opId === opIds[2])).toMatchObject({ seq: 3, actor: { kind: &quot;user&quot;, id: userId } });
+    // A buggy or lying client resends the first op claiming to have seen everything: the unique key answers.
+    back.sendRaw({ type: &quot;op&quot;, opId: opIds[0], baseSeq: 3, op: ops[0] });
+    expect(await back.next(&quot;op&quot;, (m) =&gt; m.opId === opIds[0])).toMatchObject({ seq: 1 });
+    // And &quot;inner&quot; was removed... then re-added under the same id: refused, the journal remembers it.
+    const removed = back.send({ type: &quot;remove_node&quot;, nodeId: &quot;inner&quot; });
+    expect((await back.next(&quot;op&quot;, (m) =&gt; m.opId === removed)).seq).toBe(4);
+    const readd = back.send(add(&quot;inner&quot;, &quot;outer&quot;));
+    expect(await back.next(&quot;rejected&quot;, (m) =&gt; m.opId === readd)).toMatchObject({ reason: &quot;duplicate_node&quot; });
+
+    const fresh = back.send(add(&quot;after-restart&quot;));
+    expect((await back.next(&quot;op&quot;, (m) =&gt; m.opId === fresh)).seq).toBe(5);
+    const journal = (await t.rawQuery(&quot;select seq, op_id from op_journal where document_id = $1 order by seq&quot;, [doc.id])) as { rows: { seq: string; op_id: string }[] };
+    expect(journal.rows.map((r) =&gt; r.seq)).toEqual([&quot;1&quot;, &quot;2&quot;, &quot;3&quot;, &quot;4&quot;, &quot;5&quot;]); // no gap, and no op twice
+    expect(new Set(journal.rows.map((r) =&gt; r.op_id)).size).toBe(5);
+    back.close();
+    await back.closed;
+  } finally {
+    await server.close();
+  }
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a <code>Map</code> in front of a table: the memory answers, the table is the truth</td><td>Caffeine in front of JPA; the same discipline about which one is the truth</td><td><code>functools.lru_cache</code> in front of a query</td></tr><tr><td><code>create index ... where op -&gt;&gt; 'type' = 'add_node'</code>: a partial index on a JSON path</td><td>the same SQL; Hibernate cannot express it</td><td>the same; Django <code>Index(condition=...)</code></td></tr><tr><td><code>for (const row of await store.since(...)) applyOpInto(doc, row.op)</code></td><td>a <code>for</code> over a <code>List</code> from a repository</td><td>a <code>for</code> over <code>cursor.fetchall()</code></td></tr><tr><td><code>refuse("unavailable")</code> on a read failure too</td><td>the same rule: unknown is not "no"</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>E5.3b's gap: an id removed on the canvas that never reached git could be re-added by a push.</strong></p><p>Lesson 5 computed <code>earlierIds</code> from the repository's history, so an id that lived and died on the canvas <em>between</em> two generations of the file was unknown to the git peer, and a push could bring it back. The room now refuses it for every actor from the journal, so the git peer's push is refused op by op (<code>duplicate_node</code>). What it does <em>not</em> yet do is turn that refusal into a whole-page conflict banner; folding the journal's ids into <code>earlierIds</code> is the named follow-up.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong><code>replica.ts</code>'s <code>everSent</code> rule could now go, and was left.</strong></p><p>The peer-client refused to resend an op it had once sent under a seq it no longer held, because a room might apply it twice. With the journal, the room cannot. The rule is now redundant but harmless, and removing it belongs to a peer-client bead, not to a sync one: the commit says so, which is how a codebase avoids two teams reaching for the same file.</p></div><p class="note"><strong>What "exactly once" means here, precisely:</strong> a client may send an op any number of times; the room applies it at most once; and every sending after the first is answered with the same <code>seq</code>. "At most once" comes from the unique key; "at least once" comes from the client's resend; the answer being <em>the same</em> comes from storing the original row and returning it. Remove any one of the three and the promise is gone.</p></section><section id="readonly"><h2>3 · The database is gone: read-only, and the recovery that reads before it writes</h2><p>SPEC §4 says: <em>Postgres or MinIO down: rooms refuse new ops with a visible read-only status; nothing is silently dropped.</em> E6.1b is that row, and it turned out to be the most delicate design in the epic, because two things must hold at once: <strong>no acknowledgement while the journal cannot be written</strong> (an acknowledgement is a promise), and <strong>no op lost</strong> (the person's edit is theirs). The resolution is that the room refuses and the <em>client</em> holds.</p><p class="label">From <span class="mono">packages/contracts/src/index.ts</span></p><div class="scroll"><pre><code>  // To EVERY peer when the room&#x27;s storage fails or comes back (E6.1b, SPEC §4). While read-only the room
+  // refuses every op as &quot;unavailable&quot; and acknowledges none: a peer holds its edits and sends them again
+  // once it hears `readOnly: false`. An older client skips this type and falls back on the refusals.
+  z.object({ type: z.literal(&quot;status&quot;), readOnly: z.boolean() }),
+]);</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  // E6.1b (SPEC §4): the journal failed, so nothing more can be made durable. Until recover() has caught up
+  // with the journal, EVERY op is refused and none is acknowledged, and every peer has been told why.
+  // Any journal failure counts, a lost reply included: whether that append landed is only known by reading.
+  let readOnly = false;</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>  function storageFailed(): void {
+    if (readOnly) return;
+    readOnly = true;
+    broadcast({ type: &quot;status&quot;, readOnly: true }); // to everyone, and BEFORE the refusal that caused it
+    onReadOnly?.();
+  }
+
+  async function handle(peer: Peer, { opId, baseSeq, op }: ClientOp): Promise&lt;void&gt; {
+    const refuse = (reason: Extract&lt;ServerMessage, { type: &quot;rejected&quot; }&gt;[&quot;reason&quot;]): void =&gt; {
+      if (reason === &quot;unavailable&quot;) storageFailed();
+      peer.send({ type: &quot;rejected&quot;, opId, reason });
+    };
+
+    if (!peers.has(peer)) return; // dropped while this op waited in the queue
+    // Before the dedupe: even an answer from memory is an acknowledgement, and a read-only room gives none.
+    if (readOnly) {
+      refuse(&quot;unavailable&quot;);
+      return;
+    }</code></pre></div><p>Order matters in <code>storageFailed</code>: the <code>status</code> goes to every peer <em>before</em> the refusal that caused it goes to the sender. So when the sender's client sees <code>rejected: unavailable</code> it already knows the room is read-only and treats the refusal as "hold this", not "resync". And read the placement of the <code>readOnly</code> check in <code>handle</code>: before the dedupe. Even an answer from memory is an acknowledgement, and a read-only room gives none, not for a fresh op, not for a no-op, not for a resend it remembers. The test spells that list out.</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>    /**
+     * Leaves read-only if the journal answers again. It first REPLAYS whatever the journal holds past the
+     * room&#x27;s seq (an append whose reply was lost, or a rival&#x27;s row) and announces it, then tells every peer
+     * &quot;writable&quot;: a held op that did land is thus confirmed before its sender sends it again. Takes its turn
+     * in the op queue, so no op is judged halfway through. True = writable. Never rejects.
+     */
+    recover(): Promise&lt;boolean&gt; {
+      const done = tail.then(async () =&gt; {
+        if (!readOnly || !journal) return true;
+        let missed;
+        try {
+          missed = await journal.since(seq);
+        } catch {
+          return false;
+        }
+        for (const row of missed) accept(row);
+        readOnly = false;
+        broadcast({ type: &quot;status&quot;, readOnly: false });
+        return true;
+      });
+      tail = done.then(() =&gt; undefined, () =&gt; undefined);
+      return done.catch(() =&gt; false);
+    },</code></pre></div><p><code>recover()</code> is the design decision of the bead. The obvious version is a health probe: ping the database, and if it answers, say "writable". It was rejected for two failures it would cause. First, an append can <em>land</em> and still throw (the connection dropped after the commit): the room refused the op, the client holds it, and if the room goes writable without reading, the client's resend hits <code>op_journal_op</code>, gets the original row, and the room applies it, which is fine, but every other peer never heard the op, because the original broadcast never happened. Second, a rival row at the room's next seq (section 1's other constraint) would keep the room refusing until a restart. So <code>recover()</code> first <em>replays</em> <code>since(seq)</code> through <code>accept</code>, the same function a fresh op goes through, and only then says writable. It takes its turn in the queue, so no op is judged halfway through a replay.</p><p>Two idioms. <code>tail = done.then(() =&gt; undefined, () =&gt; undefined)</code> puts the recovery on the queue and makes sure a failure in it cannot jam the queue for every later op (<code>then</code> with two arguments handles both outcomes). <code>return done.catch(() =&gt; false)</code> gives the caller a boolean that never rejects. The room has no clock, so it cannot retry by itself; <code>onReadOnly</code> tells the server to start.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
+    const journal = {
+      append: (op: SequencedOp) =&gt; bounded(store.append(orgId, documentId, op)),
+      find: (actorId: string, opId: string) =&gt; bounded(store.find(orgId, documentId, actorId, opId)),
+      everAdded: (nodeId: string) =&gt; bounded(store.everAdded(orgId, documentId, nodeId)),
+      since: (after: number) =&gt; bounded(store.since(orgId, documentId, after)),
+    };</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  function bounded&lt;T&gt;(work: Promise&lt;T&gt;): Promise&lt;T&gt; {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise&lt;never&gt;((_, reject) =&gt; { timer = setTimeout(() =&gt; { reject(new Error(&quot;journal timed out&quot;)); }, journalTimeoutMs); });
+    return Promise.race([work, late]).finally(() =&gt; { clearTimeout(timer); });
+  }
+
+  /**
+   * The room went read-only (E6.1b): ask it to recover every `recoverMs` until the journal answers.
+   * ponytail: a read-only room that was dropped meanwhile keeps asking too, one cheap read a tick, until
+   * the database is back; ceiling: one timer per such room, for as long as the outage lasts.
+   */
+  function heal(room: Room): void {
+    void (async () =&gt; {
+      while (room.readOnly &amp;&amp; !closing) {
+        await new Promise((resolve) =&gt; setTimeout(resolve, recoverMs).unref());
+        await room.recover();
+      }
+    })();
+  }</code></pre></div><p><code>bounded</code> is the timeout: <code>Promise.race</code> between the work and a timer that rejects, with <code>finally</code> clearing the timer so a fast answer does not leave one ticking. A <em>paused</em> database (the second half of the chaos check) never refuses a query; it hangs, and without this the room would wait for ever with every peer's ops queued behind it. Note what the timeout means: "treat as failed", not "it failed": the append may still land later, which is exactly why <code>recover()</code> reads before it writes. <code>heal</code> is an async IIFE (<code>void (async () =&gt; { ... })()</code>) that loops with a <code>setTimeout</code> promise whose timer is <code>unref()</code>'d so it cannot keep the process alive at shutdown.</p><p><strong>The client's half.</strong> peer-client learns one flag from the wire and does four things with it.</p><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>  // E6.1b: the room cannot make edits durable. What we sent is held, new edits are refused, until it says otherwise.
+  let readOnly = false;
+  let pauseTimer: ReturnType&lt;typeof setTimeout&gt; | undefined;
+  const endPause = (): void =&gt; {
+    clearTimeout(pauseTimer);
+    pauseTimer = undefined;
+    lastHeard = Date.now(); // the silence during a pause was ours, not the server&#x27;s
+  };</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>  /** Writes whatever the replica says may go out now. Not live, or told to slow down: it all stays pending. */
+  function flush(): void {
+    if (status !== &quot;live&quot; || pauseTimer !== undefined || readOnly) return;
+    for (const op of replica.takeSendable()) socket?.send(JSON.stringify({ type: &quot;op&quot;, ...op } satisfies ClientMessage));
+  }</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>    if (message.type === &quot;status&quot;) {
+      readOnly = message.readOnly;
+      onChange?.();
+      flush(); // writable again: the held edits go out, in order
+      return;
+    }</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>    // A refusal from a room that said it is read-only: held, not a reason to reconnect. It says when it is writable.
+    const held = readOnly &amp;&amp; message.type === &quot;rejected&quot; &amp;&amp; message.reason === &quot;unavailable&quot;;
+    if (effects.resync &amp;&amp; !held) { resync(); return; }</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>      // Said at once, not queued behind a room that cannot save: a person sees why, a program (the AI, the git peer) stops or waits.
+      if (readOnly) return { ok: false, reason: &quot;read_only&quot; };</code></pre></div><p>Held ops are <em>not sent again and not resynced</em>: <code>flush</code> sends nothing while read-only, and a refusal with <code>unavailable</code> under a read-only room does not trigger the resync a bare <code>unavailable</code> would. New edits are refused at once with <code>read_only</code>, so a person sees why and a program stops. And "writable" simply calls <code>flush</code>: the held ops go out in their original order with their original opIds, so if any of them landed during the outage, the room answers from the journal. The watchdog is turned off while read-only, a named ponytail: a connection that dies half-open then is noticed by the next edit or by presence going quiet.</p><p><strong>Every kind of peer hears it through the one contract.</strong> The canvas shows the status and an alert and disables Add. The AI's tool call gets <code>read_only</code> with a hint to stop. The git peer throws <code>WaitAgain</code>, and its event goes back to <code>pending</code> instead of <code>failed</code>: a push is never lost to an outage, because lesson 5's reconcile would never re-record it.</p><p class="label">From <span class="mono">apps/web/src/Canvas.tsx</span></p><div class="scroll"><pre><code>      {/* E6.1b: the room&#x27;s storage is down. An alert, so a screen reader says it the moment it happens. */}
+      {readOnly &amp;&amp; &lt;p role=&quot;alert&quot; className=&quot;read-only&quot;&gt;Read-only: the server cannot save edits right now. Edits you already made are kept and will be saved when it can; new edits are paused.&lt;/p&gt;}
+      &lt;div role=&quot;toolbar&quot; aria-label=&quot;Add a component&quot;&gt;
+        {manifest.components.map((component) =&gt; &lt;button key={component.name} type=&quot;button&quot; disabled={readOnly} onClick={() =&gt; { add(component); }}&gt;Add {component.name}&lt;/button&gt;)}
+      &lt;/div&gt;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/tools.ts</span></p><div class="scroll"><pre><code>    read_only: &quot;The document is read-only: the server cannot save edits right now. Stop and report that the edit could not be made.&quot;,</code></pre></div><p class="label">From <span class="mono">apps/worker/src/push.ts</span></p><div class="scroll"><pre><code>        // E6.1b: the room cannot save. Not a conflict (the page is fine) and not a failure (the push would be
+        // lost): the event waits. Ops of this page already sent die with the peer below, unapplied.
+        if (!submitted.ok &amp;&amp; submitted.reason === &quot;read_only&quot;) throw new WaitAgain(&quot;document_read_only&quot;);</code></pre></div><p class="label">From <span class="mono">apps/worker/src/git.ts</span></p><div class="scroll"><pre><code>      if (err instanceof WaitAgain) {
+        // ponytail: the whole event waits, pages already applied included (applying again diffs against the room
+        // as it is then). Ceiling: one retry per poll tick while the room stays read-only.
+        await store.finish(event.id, &quot;pending&quot;);
+        log(`${event.ref} ${event.after} waits: ${err.message}`);
+        return false;
+      }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>test(&quot;recover: an append that LANDED although its reply was lost is replayed to everyone with its seq, so the resend is answered, not applied twice&quot;, async () =&gt; {
+  const { journal, state, rows } = flakyJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const [a, b] = [peer(&quot;a&quot;), peer(&quot;b&quot;)];
+  room.join(a); room.join(b);
+  state.committedAnyway = true;
+  const op = clientOp(add(&quot;n1&quot;));
+  await room.submit(a, op);
+  expect(rejects(a).map((r) =&gt; r.reason)).toEqual([&quot;unavailable&quot;]);
+  expect(ops(b)).toEqual([]); // nobody heard of it: it was not KNOWN to be durable
+  expect(await room.recover()).toBe(true);
+  // The journal is the truth: the op is in it, so the room applies it and everyone hears it, BEFORE &quot;writable&quot;.
+  expect(b.inbox.slice(-2)).toMatchObject([{ type: &quot;op&quot;, seq: 1, opId: op.opId, actor: { id: &quot;a&quot; } }, { type: &quot;status&quot;, readOnly: false }]);
+  expect(room.doc.nodes[&quot;n1&quot;]).toBeDefined();
+  await room.submit(a, op); // the sender&#x27;s held copy comes back
+  expect(ops(a).filter((m) =&gt; m.opId === op.opId).map((m) =&gt; m.seq)).toEqual([1, 1]);
+  expect(rows).toHaveLength(1);
+  const next = clientOp(add(&quot;n2&quot;), 1);
+  await room.submit(a, next);
+  expect(ops(b).at(-1)).toMatchObject({ seq: 2, opId: next.opId });
+});</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.test.ts</span></p><div class="scroll"><pre><code>test(&quot;read-only: ops the room refused are HELD (no reconnect, nothing lost), new edits are refused &#x27;read_only&#x27;, and &#x27;writable&#x27; sends the held ones again, in order, with the same opIds&quot;, async () =&gt; {
+  let changes = 0;
+  const { net, peer, socket, frames } = await readOnlyPeer({ onChange: () =&gt; { changes++; } });
+  peer.submit(add(&quot;a&quot;));
+  peer.submit(add(&quot;b&quot;));
+  const [a, b] = frames();
+  const before = changes;
+  socket?.say({ type: &quot;status&quot;, readOnly: true });
+  expect(peer.readOnly).toBe(true);
+  expect(changes).toBeGreaterThan(before); // a UI hears of it
+  socket?.say({ type: &quot;rejected&quot;, opId: a?.opId, reason: &quot;unavailable&quot; });
+  socket?.say({ type: &quot;rejected&quot;, opId: b?.opId, reason: &quot;unavailable&quot; });
+  expect(peer.submit(add(&quot;c&quot;))).toEqual({ ok: false, reason: &quot;read_only&quot; });
+  await sleep(50);
+  expect(net.sockets).toHaveLength(1); // no resync: the room said why, and will say when
+  expect(peer.pendingCount).toBe(2);
+  expect(peer.doc.nodes[&quot;a&quot;]).toBeDefined(); // the user still sees what they made
+  expect(frames()).toHaveLength(2); // nothing is sent into a read-only room
+  socket?.say({ type: &quot;status&quot;, readOnly: false });
+  expect(peer.readOnly).toBe(false);
+  expect(frames().slice(2).map((f) =&gt; f.opId)).toEqual([a?.opId, b?.opId]);
+  peer.close();
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/read-only.int.test.ts</span></p><div class="scroll"><pre><code>// integration:read-only-reaches-every-peer
+test(&quot;storage down: every peer (person, AI, git) shows read-only, no op is acknowledged; storage back: all writable, the held op lands once&quot;, async () =&gt; {
+  const { store, rows, state } = switchableStore();
+  const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store, recoverMs: 50 });
+  try {
+    const documentId = randomUUID();
+    const person = peerAs(server.url, documentId, { kind: &quot;user&quot; });
+    const ai = peerAs(server.url, documentId, { kind: &quot;agent&quot;, runId: randomUUID() });
+    const git = peerAs(server.url, documentId, { kind: &quot;git&quot;, runId: &quot;b&quot;.repeat(40) });
+    const all = [person, ai, git];
+    await until(() =&gt; all.every((p) =&gt; p.status === &quot;live&quot;), &quot;all three live&quot;);
+    const first = person.submit(add(&quot;before&quot;));
+    expect(first.ok &amp;&amp; (await first.settled)).toMatchObject({ ok: true, seq: 1 });
+
+    state.down = true;
+    const held = person.submit(add(&quot;during&quot;));
+    await until(() =&gt; all.every((p) =&gt; p.readOnly), &quot;every peer read-only&quot;);
+    expect(ai.submit(add(&quot;ai-during&quot;))).toEqual({ ok: false, reason: &quot;read_only&quot; });
+    expect(git.submit(add(&quot;git-during&quot;))).toEqual({ ok: false, reason: &quot;read_only&quot; });
+    await new Promise((resolve) =&gt; setTimeout(resolve, 200)); // several recover() attempts, all refused
+    expect(person.pendingCount).toBe(1); // held, not lost
+    expect(all.every((p) =&gt; p.status === &quot;live&quot; &amp;&amp; p.readOnly)).toBe(true); // no reconnect storm, still read-only
+    expect(rows.map((r) =&gt; r.seq)).toEqual([1]);
+
+    state.down = false;
+    await until(() =&gt; all.every((p) =&gt; !p.readOnly), &quot;every peer writable again&quot;, 3000);
+    expect(held.ok &amp;&amp; (await held.settled)).toMatchObject({ ok: true, seq: 2 });
+    await until(() =&gt; all.every((p) =&gt; p.seq === 2), &quot;every peer at seq 2&quot;);
+    expect(rows.map((r) =&gt; [r.seq, r.op.type === &quot;add_node&quot; ? r.op.nodeId : &quot;&quot;])).toEqual([[1, &quot;before&quot;], [2, &quot;during&quot;]]);
+    for (const p of all) expect(Object.keys(p.confirmed.nodes).sort()).toEqual([&quot;before&quot;, &quot;during&quot;, ROOT_ID].sort());
+    for (const p of all) p.close();
+  } finally {
+    await server.close();
+  }
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>Promise.race([work, late]).finally(() =&gt; clearTimeout(timer))</code></td><td><code>CompletableFuture.orTimeout</code>; the work is not cancelled either</td><td><code>asyncio.wait_for</code>, which DOES cancel the task: a real difference</td></tr><tr><td><code>void (async () =&gt; { while (...) { await sleep(); await room.recover(); } })()</code></td><td>a <code>ScheduledExecutorService</code> task that reschedules itself</td><td><code>asyncio.create_task</code> of a loop</td></tr><tr><td><code>setTimeout(resolve, ms).unref()</code></td><td>a daemon thread</td><td>no equivalent needed; the loop ends with the process</td></tr><tr><td><code>done.then(() =&gt; undefined, () =&gt; undefined)</code>: both outcomes handled</td><td><code>handle((v, e) -&gt; null)</code></td><td><code>try/except</code> around the <code>await</code></td></tr><tr><td><code>class WaitAgain extends Error {}</code> as a control-flow signal</td><td>a checked exception type</td><td>a custom exception class</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A bare health probe would have gone writable with the room behind the journal.</strong></p><p>The first design was "ping Postgres every second; when it answers, broadcast writable". Written out against the tests, it failed the lost-reply case: the append landed, the room never applied it, and the next append from anyone hit <code>op_journal_seq</code> and put the room straight back into read-only, for ever. Reading <code>since(seq)</code> first is not an optimisation of the probe; it is the only correct probe, because "the database answers" and "the room agrees with the database" are different facts.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The refusal of a held op was, to lesson 2's client, a reason to resync.</strong></p><p><code>unavailable</code> in lesson 2 meant "the persist step failed, resync and try again", and a resync throws away the client's view and asks for a welcome. Under a read-only room that would be a reconnect storm: every held op refused, every refusal a resync, every welcome saying read-only again. The status message is what breaks the loop: a refusal under a room that <em>said</em> it is read-only is a hold. The peer test counts sockets: one.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A git peer whose event failed during an outage would have lost the push for good.</strong></p><p>Lesson 5's <code>git_events</code> keys on <code>(ref, after_sha)</code>, so an event that ends <code>failed</code> is never recorded again by the reconcile. A push during a database outage must therefore not end at all: <code>WaitAgain</code> puts the event back to <code>pending</code>, and the next poll tick tries the whole event again. The ceiling is named (pages already applied are diffed again against the room as it is then, which is a no-op) and the alternative (a per-page cursor on the event) is the upgrade.</p></div><p class="note"><strong>The distributed-systems shape:</strong> a single writer that stops writing the moment it cannot confirm a write; clients that keep their intent and re-offer it under the same identity; and a recovery that reconciles the writer with the log before it accepts anything new. Every piece is visible on a screen ("read-only", "waiting to save 1"), because a failure nobody can see is a failure nobody can act on.</p></section><section id="snapshots"><h2>4 · Snapshots: a cache of the log, written once, named after it exists</h2><p>With a journal, a document is fully defined by its rows: replay them from an empty page and you have it. That is correct and slow, and it grows without bound. F19 caps the cost: a room writes its whole document to MinIO every 500 accepted ops, every 30 seconds while anyone is connected, and when its last peer leaves or the server stops; opening a document loads the newest snapshot and replays only the rows after it. The journal stays the truth. A snapshot that fails to write loses nothing; it only leaves more rows for the next open.</p><p class="label">From <span class="mono">packages/db/migrations/0013_snapshot_seq.sql</span></p><div class="scroll"><pre><code>-- E6.2 (F19): the seq of the newest snapshot in MinIO. S3 cannot list in reverse (learning-tests/minio), so
+-- the latest one is found here, not by listing. Written only AFTER the object is stored, so it never names a
+-- missing snapshot, and it only moves forward. `content`/`seq` (F8&#x27;s idle save) are no longer written: they
+-- stay as what a document saved before E6.2 opens from until its first snapshot.
+alter table documents add column snapshot_seq bigint not null default 0 check (snapshot_seq &gt;= 0);</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.ts</span></p><div class="scroll"><pre><code>/** Where the snapshot of a document at `seq` lives. Zero-padded to 16 digits (every safe integer): S3 lists keys as strings, so unpadded &quot;10&quot; sorts before &quot;9&quot;. */
+export function snapshotKey(orgId: string, documentId: string, seq: number): string {
+  if (!Number.isSafeInteger(seq) || seq &lt; 1) throw new Error(`snapshot: not a seq: ${String(seq)}`);
+  return `${orgId}/${documentId}/${String(seq).padStart(16, &quot;0&quot;)}.json.gz`;
+}
+
+/** Gzipped by hand: the SDK neither compresses nor decompresses (learning-tests/minio). */
+export const encodeSnapshot = (doc: Doc): Uint8Array =&gt; gzipSync(JSON.stringify(doc));
+
+/** The document, or undefined when the bytes are not a well-formed tree: a room must never open on top of that. */
+export function decodeSnapshot(bytes: Uint8Array): Doc | undefined {
+  let parsed;
+  try {
+    parsed = Doc.safeParse(JSON.parse(gunzipSync(bytes).toString(&quot;utf8&quot;)));
+  } catch {
+    return undefined;
+  }
+  return parsed.success &amp;&amp; checkDoc(parsed.data).length === 0 ? parsed.data : undefined;
+}</code></pre></div><p>Two facts from <code>learning-tests/minio</code> decide the key and the pointer. S3 lists keys as strings, so <code>"10"</code> sorts before <code>"9"</code>: the seq is zero-padded to 16 digits, enough for every safe integer, and <code>snapshotKey</code> refuses anything that is not one. And S3 cannot list in reverse (pages are ascending, 1000 keys each, whatever <code>MaxKeys</code> asks), so "the newest snapshot" is not found by listing: <code>documents.snapshot_seq</code> names it. <code>gzipSync</code> from <code>node:zlib</code> compresses by hand because the SDK does neither direction; the result is a <code>Uint8Array</code>, the web-standard byte array that Node's <code>Buffer</code> extends.</p><p class="label">From <span class="mono">learning-tests/minio/test.ts</span></p><div class="scroll"><pre><code>// 5. Assumed IfNoneMatch: &#x27;*&#x27; -&gt; 412 on existing key. ACTUAL: MinIO
+//    RELEASE.2025-09-07 supports it and it works correctly: first PutObject
+//    with IfNoneMatch:&#x27;*&#x27; on a fresh key succeeds (200), a second
+//    PutObject with IfNoneMatch:&#x27;*&#x27; on the SAME existing key fails with HTTP
+//    412 and an error whose SDK-parsed `name` is &quot;PreconditionFailed&quot;. So the
+//    &quot;two rooms can&#x27;t both write the same snapshot key&quot; guarantee holds on
+//    this MinIO version. (Older MinIO releases, pre ~2024-06, did NOT support
+//    conditional writes -- pin MinIO to a recent release if this matters.)
+// 6. Confirmed. GetObject on a missing key throws an error with
+//    `err.name === &quot;NoSuchKey&quot;` and `err.$metadata?.httpStatusCode === 404`.
+//    Cleanest TS detection: `if (err instanceof S3ServiceException &amp;&amp; err.name
+//    === &quot;NoSuchKey&quot;)` (or just check `.name`, since NoSuchKey is a stable
+//    modeled exception name in @aws-sdk/client-s3) rather than string-matching
+//    the message.</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.ts</span></p><div class="scroll"><pre><code>export type SnapshotStore = {
+  /** Stores the bytes, once: a key that exists already is left as it is (IfNoneMatch). Rejects when not stored. */
+  put(orgId: string, documentId: string, seq: number, body: Uint8Array): Promise&lt;void&gt;;
+  /** The bytes, or undefined when there is no such object. Rejects when MinIO does not answer. */
+  get(orgId: string, documentId: string, seq: number): Promise&lt;Uint8Array | undefined&gt;;
+};</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.ts</span></p><div class="scroll"><pre><code>    async put(orgId, documentId, seq, body) {
+      try {
+        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: snapshotKey(orgId, documentId, seq), Body: body, ContentType: &quot;application/json&quot;, ContentEncoding: &quot;gzip&quot;, IfNoneMatch: &quot;*&quot; }));
+      } catch (err) {
+        // 412: this seq of this document is stored already. The same journal prefix gives the same document,
+        // so the object there is this one; overwriting it would only open a window where it is half-written.
+        if (!named(err, &quot;PreconditionFailed&quot;)) throw err;
+      }
+    },
+    async get(orgId, documentId, seq) {
+      try {
+        const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: snapshotKey(orgId, documentId, seq) }));
+        return res.Body ? await res.Body.transformToByteArray() : undefined;
+      } catch (err) {
+        if (named(err, &quot;NoSuchKey&quot;)) return undefined;
+        throw err;
+      }
+    },
+  };
+}</code></pre></div><p><code>IfNoneMatch: "*"</code> is a conditional write: store this object only if no object exists at this key. A 412 (<code>PreconditionFailed</code>) means "it is there already", and <code>put</code> treats that as success, because the same journal prefix gives the same document, so whatever is at that key is this snapshot; overwriting it would only open a window where the object is half-written. <code>NoSuchKey</code> on <code>get</code> is "there is no such object" and is answered with <code>undefined</code>; every other failure propagates, because "MinIO did not answer" must never read as "there is no snapshot". The SDK's errors are told apart by <code>err.name</code>, a stable modelled string, through the small <code>named</code> helper: the same shape as section 1's constraint names.</p><p class="label">From <span class="mono">apps/sync/src/snapshots.ts</span></p><div class="scroll"><pre><code>/**
+ * When a room snapshots (SPEC §2.9): every `everyOps` accepted ops, every `everyMs` while peers are connected
+ * (a session that is never idle still snapshots), and when asked (the last peer left, the server stops).
+ * One write at a time; a trigger during a write is dropped, and the next op or tick catches up.
+ */
+export function snapshotter({ room, from, cadence, write }: { room: Source; from: number; cadence: SnapshotCadence; write: (seq: number, body: Uint8Array) =&gt; Promise&lt;void&gt; }) {
+  let saved = from;
+  let writing: Promise&lt;unknown&gt; | undefined;
+
+  /** Snapshots the room as it is now, if it moved since the last one. True: stored (or nothing to store). Never rejects. */
+  async function take(): Promise&lt;boolean&gt; {
+    while (writing) await writing;
+    const seq = room.seq;
+    if (seq &lt;= saved) return true;
+    // Read in the same tick as `seq`: the room edits `doc` in place, and only here is it exactly the document at `seq`.
+    const work = write(seq, encodeSnapshot(room.doc)).then(() =&gt; { saved = Math.max(saved, seq); return true; }, () =&gt; false);
+    writing = work.finally(() =&gt; { writing = undefined; });
+    return work;
+  }
+
+  const timer = setInterval(() =&gt; { if (room.peerCount &gt; 0 &amp;&amp; !writing) void take(); }, cadence.everyMs);
+  timer.unref();
+  return {
+    get saved() { return saved; },
+    /** The room accepted an op numbered `seq`. */
+    accepted(seq: number): void {
+      if (!writing &amp;&amp; seq - saved &gt;= cadence.everyOps) void take();
+    },
+    take,
+    stop(): void { clearInterval(timer); },
+  };
+}</code></pre></div><p>The cadence is a pure module fed by the room's <code>onAccepted</code> hook and a timer. <code>while (writing) await writing;</code> is "wait for any write in flight": a plain loop over a promise field, the same one-at-a-time idea lesson 5 wrote as a promise chain. The comment marked <em>Read in the same tick as <code>seq</code></em> is the correctness heart: the room edits <code>doc</code> in place, so the document is exactly the document at <code>seq</code> only until the next <code>await</code>. <code>encodeSnapshot(room.doc)</code> is called synchronously, before <code>write</code> is awaited. Move it after an <code>await</code> and a snapshot named <code>seq</code> could hold seq+3's document.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    const snapshotFrom = Math.max(stored.snapshotSeq, stored.seq);
+    let snapshot: ReturnType&lt;typeof snapshotter&gt; | undefined;
+    const room: Room = createRoom({
+      doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}),
+      onReadOnly: () =&gt; { heal(room); },
+      onAccepted: (accepted) =&gt; { snapshot?.accepted(accepted); },
+    });
+    if (snapshots) {
+      const to = snapshots;
+      // MinIO first, THEN Postgres: the pointer never names an object that is not there. Either failing
+      // loses nothing (the journal holds every op), it only leaves more rows for the next open to replay.
+      snapshot = snapshotter({
+        room, from: snapshotFrom, cadence,
+        write: async (at, body) =&gt; {
+          try {
+            await to.put(orgId, documentId, at, body);
+            await store.snapshotted(orgId, documentId, at);
+          } catch (err) {
+            log(documentId, `snapshot ${String(at)} failed: ${err instanceof Error ? err.message : &quot;unknown&quot;}`);
+            throw err;
+          }
+        },
+      });
+    }
+    return { room, orgId, ...(snapshot ? { snapshot } : {}) };
+  }</code></pre></div><p><strong>MinIO first, then Postgres.</strong> The object is stored, and only then is <code>snapshot_seq</code> moved. So the pointer never names a missing object: if the process dies between the two, the object is orphaned (harmless) and the pointer still names the previous snapshot (correct). <code>snapshotted</code>'s <code>where snapshot_seq &lt; $3</code> makes the pointer monotonic, so a slow write of an older snapshot finishing after a newer one cannot point the document backwards.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async snapshotted(orgId, documentId, seq) {
+        if (!isId(orgId) || !isId(documentId)) return;
+        // `&lt; $3`: a slow write of an older snapshot must never point the document back at it.
+        await pool.query(&quot;update documents set snapshot_seq = $3 where org_id = $1 and id = $2 and snapshot_seq &lt; $3&quot;, [orgId, documentId, seq]);
+      },</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // The newest snapshot, or what F8&#x27;s idle save wrote before E6.2 if that is newer (a document not
+    // snapshotted since). Then only the journal rows after it (F19).
+    let doc: Doc;
+    let seq: number;
+    if (stored.snapshotSeq &gt; stored.seq) {
+      if (!snapshots) return { closeCode: CLOSE.unavailable }; // snapshotted, and this process was started without MinIO
+      let bytes;
+      try {
+        bytes = await snapshots.get(orgId, documentId, stored.snapshotSeq);
+      } catch {
+        return { closeCode: CLOSE.unavailable }; // MinIO is down: &quot;try again&quot;
+      }
+      // Postgres names it only after it was stored, so a missing or unreadable one is damage, not an outage.
+      const decoded = bytes &amp;&amp; decodeSnapshot(bytes);
+      if (!decoded) {
+        log(documentId, `snapshot ${String(stored.snapshotSeq)} is ${bytes ? &quot;not a well-formed document&quot; : &quot;missing&quot;}`);
+        return { closeCode: CLOSE.documentCorrupt };
+      }
+      doc = decoded;
+      seq = stored.snapshotSeq;
+    } else {
+      doc = stored.doc ?? emptyDoc();
+      seq = stored.seq;
+    }</code></pre></div><p>Opening picks the newer of two starting points: the snapshot, or what F8's idle save wrote before E6.2 for a document not snapshotted since. Then the same <code>since(seq)</code> replay as section 2. The close codes carry the distinction a user needs: MinIO down is 4503 ("try again"); a snapshot that is missing or malformed although Postgres names it is 4500 ("damage"), because Postgres only names an object after it was stored. <code>decodeSnapshot</code> runs the bytes through <code>Doc.safeParse</code> and <code>checkDoc</code>, so a room never opens on top of a tree that is not one.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  /**
+   * The last peer left: snapshot, then forget the room. A failed snapshot is NOT retried: the journal holds
+   * every op this room accepted (E6.1a), so the next open replays what the snapshot would have held.
+   * This replaced F8&#x27;s save, which had to retry for ever because the room&#x27;s memory was the only copy.
+   */
+  function closeRoom(documentId: string, opened: { room: Room; snapshot?: ReturnType&lt;typeof snapshotter&gt; }, opening: Promise&lt;Opened&gt;): void {
+    const work = (async () =&gt; {
+      await snapshotNow(opened);
+      // Someone may have joined WHILE the snapshot was written: then the room stays.
+      if (opened.room.peerCount === 0 &amp;&amp; rooms.get(documentId) === opening) {
+        opened.snapshot?.stop();
+        rooms.delete(documentId);
+        peerCounts.delete(documentId);
+      }
+    })();
+    leaving.add(work);
+    void work.finally(() =&gt; leaving.delete(work));
+  }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>        close: async () =&gt; {
+          closing = true;
+          // FIRST snapshot every open room, while its peers are still connected. Terminating the sockets
+          // first (under F8&#x27;s save) lost everything: their &#x27;close&#x27; handlers only run on a later tick, so
+          // &quot;nothing pending&quot; was true and the database pool was closed.
+          const open = await Promise.all([...rooms.values()]);
+          await Promise.all(open.map(async (opened) =&gt; {
+            if (!(&quot;room&quot; in opened)) return;
+            await snapshotNow(opened);
+            opened.snapshot?.stop();
+          }));</code></pre></div><p>F8's save is deleted, and with it a retry loop and a setting. It had to retry for ever because the room's memory was the only copy. Now a failed snapshot is <em>logged and not retried</em>; the rejected alternative, retrying on last leave, would have kept complexity that the journal made pointless. The shutdown order is the same lesson 2 learned the hard way: snapshot every room <em>while its peers are still connected</em>, then terminate the sockets, then close the pool.</p><p class="label">From <span class="mono">apps/sync/src/config.ts</span></p><div class="scroll"><pre><code>  // E6.2: where rooms write their snapshots. No defaults: an address or a password is never guessed.
+  MINIO_URL: z.string({ error: &quot;MINIO_URL is required&quot; }).refine((value) =&gt; URL.canParse(value) &amp;&amp; /^https?:$/.test(new URL(value).protocol), &quot;MINIO_URL must be an http(s):// URL&quot;),
+  MINIO_USER: z.string({ error: &quot;MINIO_USER is required&quot; }).min(1, &quot;MINIO_USER is required&quot;),
+  MINIO_PASSWORD: z.string({ error: &quot;MINIO_PASSWORD is required&quot; }).min(8, &quot;MINIO_PASSWORD must be at least 8 characters&quot;),
+  SNAPSHOT_BUCKET: z.string().optional().transform((value) =&gt; value || &quot;snapshots&quot;),
+  // Tunable (SPEC §2.9): every N ops, every T seconds while peers are connected, and always on last leave.
+  SNAPSHOT_EVERY_OPS: positive(&quot;SNAPSHOT_EVERY_OPS&quot;, 500),
+  SNAPSHOT_EVERY_SECONDS: positive(&quot;SNAPSHOT_EVERY_SECONDS&quot;, 30),</code></pre></div><p class="label">From <span class="mono">docker-compose.yml</span></p><div class="scroll"><pre><code>  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: [&quot;server&quot;, &quot;/data&quot;]
+    environment:
+      MINIO_ROOT_USER: noon
+      MINIO_ROOT_PASSWORD: &quot;${MINIO_PASSWORD:?run ./init.sh}&quot;
+    # 9005 on the host: 9000 is a popular default (and learning-tests/minio takes 9100).
+    ports: [&quot;127.0.0.1:${MINIO_PORT:-9005}:9000&quot;]
+    volumes: [&quot;miniodata:/data&quot;]</code></pre></div><p class="label">From <span class="mono">apps/sync/src/main.ts</span></p><div class="scroll"><pre><code>const snapshots = s3Snapshots(config.minio);
+await snapshots.ensureBucket(); // fails the start, like a missing variable: a sync without MinIO cannot open a snapshotted document
+const server = await startSyncServer({ port: config.port, secrets: config.secrets, store: db.documentStore(), snapshots, cadence: config.cadence });
+process.stdout.write(`sync listening on ${server.url}\n`);</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.test.ts</span></p><div class="scroll"><pre><code>test(&quot;one write at a time: triggers during a write are dropped, and take waits for it, then writes what is newer&quot;, async () =&gt; {
+  const { room, written, control, snap, accept } = rig({ everyOps: 1 });
+  let release = (): void =&gt; undefined;
+  control.hold = new Promise((resolve) =&gt; { release = resolve; });
+  accept(); // starts a write of 1, held
+  accept(); accept(); // dropped: a write is running
+  const last = snap.take(); // what the last peer leaving does
+  await flush();
+  expect(written).toEqual([]);
+  control.hold = undefined;
+  release();
+  expect(await last).toBe(true);
+  expect(written).toEqual([1, 3]);
+  expect(room.seq).toBe(3);
+  snap.stop();
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshot.int.test.ts</span></p><div class="scroll"><pre><code>// integration:snapshot-replay-only-later-rows
+test(&quot;opening loads the newest snapshot and replays only the journal rows after it&quot;, async () =&gt; {
+  const doc = await aDocument();
+  const first = [add(&quot;a&quot;), add(&quot;b&quot;), gap(&quot;a&quot;, 1), gap(&quot;b&quot;, 2), add(&quot;c&quot;), gap(&quot;c&quot;, 3), gap(&quot;a&quot;, 4)];
+  let server = await start(countingStore());
+  const peer = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
+  await peer.next(&quot;welcome&quot;);
+  await edit(peer, first);
+  peer.close();
+  await until(() =&gt; server.roomCount() === 0, &quot;the last leave to snapshot and drop the room&quot;);
+  await server.idle();
+  await server.close();
+
+  // Stored in MinIO under the zero-padded key, THEN named in Postgres.
+  const at7 = first.reduce&lt;Doc&gt;(applyOp, emptyDoc());
+  expect(await snapshotSeq(doc.id)).toBe(7);
+  const bytes = await snapshots.get(doc.orgId, doc.id, 7);
+  expect(bytes &amp;&amp; decodeSnapshot(bytes)).toEqual(at7);
+  // IfNoneMatch: a second writer of the same key changes nothing.
+  await snapshots.put(doc.orgId, doc.id, 7, encodeSnapshot(emptyDoc()));
+  const again = await snapshots.get(doc.orgId, doc.id, 7);
+  expect(again &amp;&amp; decodeSnapshot(again)).toEqual(at7);
+
+  // Three more ops journaled after the snapshot, by a room that died before its next one.
+  const later = [gap(&quot;b&quot;, 5), add(&quot;d&quot;), gap(&quot;d&quot;, 6)];
+  const journal = t.db.documentStore();
+  for (const [i, op] of later.entries()) await journal.append(doc.orgId, doc.id, { seq: 8 + i, opId: randomUUID(), actor: { kind: &quot;user&quot;, id: &quot;crashed&quot; }, op });
+
+  const store = countingStore();
+  server = await start(store);
+  try {
+    const back = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
+    expect(await back.next(&quot;welcome&quot;)).toMatchObject({ seq: 10, doc: later.reduce&lt;Doc&gt;(applyOp, structuredClone(at7)) });
+    expect(store.replays).toEqual([{ after: 7, rows: 3 }]); // the 7 rows under the snapshot were never read
+    back.close();
+  } finally {
+    await server.close();
+  }
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshot.int.test.ts</span></p><div class="scroll"><pre><code>// integration:open-10k-under-2s (F19)
+test(&quot;a document with 10,000 journaled ops and no snapshot opens in under 2 s; after its snapshot, with no replay at all&quot;, async () =&gt; {
+  const doc = await aDocument();
+  const nodes = Array.from({ length: 100 }, (_, i) =&gt; `n${String(i)}`);
+  const ops: Op[] = [...nodes.map(add), ...Array.from({ length: 9900 }, (_, i) =&gt; gap(nodes[i % nodes.length] ?? &quot;n0&quot;, i))];
+  await t.rawQuery(
+    `insert into op_journal (document_id, org_id, seq, op_id, actor_kind, actor_id, op)
+     select $1, $2, r.seq, gen_random_uuid(), &#x27;user&#x27;, &#x27;bulk&#x27;, r.op from jsonb_to_recordset($3::jsonb) as r(seq bigint, op jsonb)`,
+    [doc.id, doc.orgId, JSON.stringify(ops.map((op, i) =&gt; ({ seq: i + 1, op })))],
+  );
+  const expected = ops.reduce&lt;Doc&gt;(applyOp, emptyDoc());
+
+  const store = countingStore();
+  const server = await start(store);
+  try {
+    let began = performance.now();
+    const cold = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
+    const welcome = await cold.next(&quot;welcome&quot;);
+    const coldMs = performance.now() - began;
+    expect(welcome).toMatchObject({ seq: 10_000, doc: expected });
+    expect(store.replays).toEqual([{ after: 0, rows: 10_000 }]);
+    expect(coldMs, `opened in ${coldMs.toFixed(0)} ms`).toBeLessThan(2000);
+    cold.close();
+    await until(() =&gt; server.roomCount() === 0, &quot;the last leave to snapshot and drop the room&quot;);
+    await server.idle();
+    expect(await snapshotSeq(doc.id)).toBe(10_000);
+
+    began = performance.now();
+    const warm = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
+    expect(await warm.next(&quot;welcome&quot;)).toMatchObject({ seq: 10_000, doc: expected });
+    const warmMs = performance.now() - began;
+    expect(store.replays.at(-1)).toEqual({ after: 10_000, rows: 0 });
+    expect(warmMs, `opened in ${warmMs.toFixed(0)} ms`).toBeLessThan(2000);
+    warm.close();
+  } finally {
+    await server.close();
+  }
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>gzipSync(JSON.stringify(doc))</code> → <code>Uint8Array</code></td><td><code>GZIPOutputStream</code> over a <code>ByteArrayOutputStream</code></td><td><code>gzip.compress(json.dumps(doc).encode())</code></td></tr><tr><td><code>PutObjectCommand({ IfNoneMatch: "*" })</code>; 412 is <code>err.name === "PreconditionFailed"</code></td><td>SDK v2 <code>PutObjectRequest.builder().ifNoneMatch("*")</code>; <code>S3Exception.statusCode() == 412</code></td><td><code>put_object(IfNoneMatch="*")</code>; <code>ClientError</code> with code <code>PreconditionFailed</code></td></tr><tr><td><code>String(seq).padStart(16, "0")</code></td><td><code>String.format("%016d", seq)</code></td><td><code>f"{seq:016d}"</code></td></tr><tr><td><code>while (writing) await writing;</code></td><td>a <code>ReentrantLock</code>, or wait on a <code>CompletableFuture</code> field</td><td><code>while self.writing: await self.writing</code></td></tr><tr><td><code>setInterval(...).unref()</code>; <code>timer.unref()</code></td><td>a daemon thread on a <code>ScheduledExecutorService</code></td><td>an <code>asyncio</code> task cancelled at shutdown</td></tr><tr><td><code>res.Body.transformToByteArray()</code>: the SDK's body is a stream</td><td><code>ResponseBytes.asByteArray()</code></td><td><code>obj["Body"].read()</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The document was read after an <code>await</code>, and the test that reads back the snapshot caught it.</strong></p><p>The first draft of <code>take</code> awaited the previous write and then called <code>write(seq, encodeSnapshot(room.doc))</code> with <code>seq</code> read before the await. Under the unit test's held write, the room moved on and the snapshot named 1 held seq 3's document. The fix is one line's position, and the comment above it exists so nobody moves it back. The integration test does the same check against MinIO: the bytes at key 7 decode to the document after exactly seven ops.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A snapshot store inside <code>packages/db</code> was rejected.</strong></p><p>It would have been convenient: one store with <code>load</code>, <code>append</code>, <code>snapshot</code>. But <code>packages/db</code> is Postgres, and SPEC keystone 9 gives each store one job. S3 lives in <code>apps/sync</code>, behind a four-line <code>SnapshotStore</code> type that the tests implement in memory. The pointer, which <em>is</em> relational, stays in <code>packages/db</code>.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The listing that would have found the newest snapshot pages forward, 1000 keys at a time, for ever.</strong></p><p>Measured in the learning test with 1005 objects: the newest key is on page two, and <code>MaxKeys: 5000</code> does not change that. A design that listed to find the latest snapshot would get slower with every snapshot ever taken. The pointer row costs one <code>update</code> per snapshot and one column per document, and turns "find the newest" into "build the key".</p></div><p class="note"><strong>Principal-level point:</strong> a snapshot is a materialised prefix of the log. Everything about it follows from that: it may be lost (rebuild from the log), it must never be <em>wrong</em> (read the document in the same tick as its seq), two writers may race for it (conditional write, and equal content makes the loser's loss harmless), and the pointer to it is the only thing that must be consistent (write it after, move it forward only). Kafka Streams checkpoints, Raft snapshots and database checkpoints are the same four rules with other names.</p></section><section id="chaos"><h2>5 · Proving the promise: a ledger, the journal, and two faults on the real stack</h2><p>SPEC §4a insists that durability is verified against real processes, not simulated. Epic 6 writes two chaos checks and, more important, writes the <em>assertion</em> once as a pure module so that epic 7's failover run can use it unchanged. The idea: while the run makes edits, keep a <strong>ledger</strong> of every op each peer submitted and what it knew about that op at the moment of the fault. Afterwards, read the journal (the truth) and hold the ledger against it.</p><p class="label">From <span class="mono">scripts/chaos/no-loss.ts</span></p><div class="scroll"><pre><code>// F18&#x27;s guarantees as one pure check, reused by every chaos run that breaks the sync server mid-edit:
+// chaos:kill-sync-no-loss (E6.3) now, the failover run (E7.2) next. The run keeps a LEDGER of every op
+// its peers submitted and when each settled; afterwards it reads the journal (the truth) and asks:
+//   - every op acknowledged before the fault is journaled, at the seq it was acknowledged with;
+//   - every op in flight at the fault (or made while the server was gone) was resent and applied once;
+//   - no op is journaled twice, the journal&#x27;s seqs are 1..n without a gap, nothing untracked is in it;
+//   - every peer ends on the same confirmed document.
+// Vacuity guards (SPEC §4a): a run with no op acknowledged before the fault, or none in flight at it,
+// proved nothing, and says so.</code></pre></div><p class="label">From <span class="mono">scripts/chaos/no-loss.ts</span></p><div class="scroll"><pre><code>export function createLedger() {
+  const entries: LedgerEntry[] = [];
+  const settling: Promise&lt;unknown&gt;[] = [];
+  let faulted = false;
+  return {
+    entries: entries as readonly LedgerEntry[],
+    track(peer: string, submitted: Submitted): void {
+      if (!submitted.ok) return;
+      const entry: LedgerEntry = { peer, opId: submitted.opId, atFault: faulted ? &quot;after&quot; : &quot;unsettled&quot;, outcome: &quot;unsettled&quot; };
+      entries.push(entry);
+      settling.push(submitted.settled.then((outcome) =&gt; { entry.outcome = outcome; }));
+    },
+    /** Call right after the fault is opened: what has settled by now counts as &quot;before the fault&quot;. */
+    fault(): void {
+      faulted = true;
+      for (const entry of entries) if (entry.atFault === &quot;unsettled&quot;) entry.atFault = entry.outcome;
+    },
+    /** Wait for every op to settle, at most `timeoutMs`; whatever has not by then stays &quot;unsettled&quot; (lost). */
+    async settle(timeoutMs: number): Promise&lt;void&gt; {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([Promise.all(settling), new Promise((resolve) =&gt; { timer = setTimeout(resolve, timeoutMs); })]);
+      clearTimeout(timer);
+    },
+  };
+}</code></pre></div><p class="label">From <span class="mono">scripts/chaos/no-loss.ts</span></p><div class="scroll"><pre><code>/** Every broken guarantee, in words; empty = PASS. `docs`: each peer&#x27;s confirmed document, serialized. */
+export function noLossViolations({ ledger, journal, docs }: { ledger: readonly LedgerEntry[]; journal: readonly JournalRow[]; docs: readonly string[] }): string[] {
+  const violations: string[] = [];
+  if (!ledger.some((e) =&gt; typeof e.atFault === &quot;object&quot; &amp;&amp; e.atFault.ok &amp;&amp; e.atFault.seq !== undefined)) violations.push(&quot;vacuous: no op was acknowledged before the fault&quot;);
+  if (!ledger.some((e) =&gt; e.atFault === &quot;unsettled&quot;)) violations.push(&quot;vacuous: no op was in flight at the fault, so nothing was resent&quot;);
+
+  const seqs = journal.map((row) =&gt; row.seq);
+  if (seqs.some((seq, i) =&gt; seq !== i + 1)) violations.push(`the journal&#x27;s seqs are ${seqs.join(&quot;,&quot;)}, not 1..${String(seqs.length)} without a gap or repeat`);
+  const seqsOf = new Map&lt;string, number[]&gt;();
+  for (const row of journal) seqsOf.set(row.opId, [...(seqsOf.get(row.opId) ?? []), row.seq]);
+  for (const [opId, at] of seqsOf) if (at.length &gt; 1) violations.push(`op ${opId} is journaled ${String(at.length)} times (seq ${at.join(&quot;, &quot;)})`);
+  const tracked = new Set(ledger.map((e) =&gt; e.opId));
+  for (const row of journal) if (!tracked.has(row.opId)) violations.push(`journal seq ${String(row.seq)} holds op ${row.opId}, which no tracked peer submitted`);
+
+  const bySeq = new Map(journal.map((row) =&gt; [row.seq, row.opId]));
+  for (const e of ledger) {
+    const refusedBefore = typeof e.atFault === &quot;object&quot; &amp;&amp; !e.atFault.ok;
+    const what = `${e.peer} op ${e.opId}${refusedBefore ? &quot;&quot; : e.atFault === &quot;unsettled&quot; ? &quot; (in flight at the fault)&quot; : e.atFault === &quot;after&quot; ? &quot; (made after the fault)&quot; : &quot; (acknowledged before the fault)&quot;}`;
+    if (e.outcome === &quot;unsettled&quot;) violations.push(`${what} never settled: lost`);
+    else if (!e.outcome.ok) {
+      if (!refusedBefore) violations.push(`${what} was refused (${e.outcome.reason}): lost`);
+      else if (seqsOf.has(e.opId)) violations.push(`${what} was refused (${e.outcome.reason}) but is journaled`);
+    } else if (e.outcome.seq !== undefined &amp;&amp; bySeq.get(e.outcome.seq) !== e.opId) {
+      violations.push(`${what} was acknowledged at seq ${String(e.outcome.seq)}, but the journal has ${bySeq.get(e.outcome.seq) ?? &quot;nothing&quot;} there`);
+    }
+  }
+
+  docs.forEach((doc, i) =&gt; { if (doc !== docs[0]) violations.push(`peer ${String(i)}&#x27;s confirmed document differs from peer 0&#x27;s`); });
+  return violations;
+}</code></pre></div><p>This is what "no loss" means <em>precisely</em>, and it is worth saying in words, because an interviewer will ask. An op <strong>acknowledged before the fault</strong> must be in the journal at exactly the seq it was acknowledged with. An op <strong>in flight at the fault</strong> (sent, unanswered) or <strong>made while the server was gone</strong> must settle <code>ok</code> and appear exactly once. Nothing may be refused for a reason the run did not cause, and nothing refused before the fault may be in the journal. The journal's seqs are <code>1..n</code> with no gap or repeat, no opId appears twice, and every row belongs to a tracked peer. And every peer's confirmed document is byte-identical. Then two <strong>vacuity guards</strong>: a run in which nothing was acknowledged before the fault, or nothing was in flight at it, proved nothing, and says so as a violation. SPEC §4a's rule, "every <code>always</code> has a <code>sometimes</code>", is that pair of lines.</p><p>The <code>Outcome</code> and <code>Submitted</code> types are copied from peer-client's public shape rather than imported, so the module depends on nothing. <code>ledger.fault()</code> is the one moment that matters: whatever has <em>settled</em> by then counts as "before", everything else is "in flight". <code>settle(timeoutMs)</code> is <code>Promise.race</code> between "every op settled" and a timer, with the timer cleared afterwards, so an op that never settles is left as <code>"unsettled"</code> and reported as lost rather than hanging the run.</p><p class="label">From <span class="mono">scripts/chaos/kill-sync-no-loss.ts</span></p><div class="scroll"><pre><code>/** One document, one kill. Returns what broke, in words (empty = PASS), and how much was exercised. */
+async function round(n: number): Promise&lt;{ round: number; ops: number; journaled: number; violations: string[] }&gt; {
+  const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: `chaos kill sync ${String(n)}` }));
+  const wsUrl = `${syncUrl}/documents/${doc}`;
+  const peers = {
+    person: connectPeer({ manifest, session: async () =&gt; SessionResponse.parse(await post(`/documents/${doc}/session`)) }),
+    ai: connectPeer({ manifest, session: () =&gt; Promise.resolve({ wsUrl, token: signSessionToken({ userId: randomUUID(), orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: &quot;agent&quot;, runId: randomUUID() } }) }) }),
+  };
+  const all = Object.entries(peers);
+  const ledger = createLedger();
+  let made = 0;
+  const edit = (count: number): void =&gt; {
+    for (let i = 0; i &lt; count; i++) for (const [name, peer] of all) ledger.track(name, peer.submit(add(`${name}-${String(made++)}`)));
+  };
+  try {
+    await until(() =&gt; all.every(([, p]) =&gt; p.status === &quot;live&quot;), &quot;both peers live&quot;, 15_000);
+    edit(5);
+    await ledger.settle(10_000); // acknowledged before the fault
+
+    edit(20); // on the wire...
+    compose(&quot;kill&quot;, &quot;--signal&quot;, &quot;SIGKILL&quot;, &quot;sync&quot;); // ...and the server dies under it. execFileSync: no ack is heard meanwhile.
+    ledger.fault();
+    await until(() =&gt; all.every(([, p]) =&gt; p.status !== &quot;live&quot;), &quot;both peers see the server gone&quot;, 30_000);
+    edit(5); // made while the server is gone: held, sent after the next welcome
+
+    compose(&quot;start&quot;, &quot;sync&quot;);
+    await until(() =&gt; all.every(([, p]) =&gt; p.status === &quot;live&quot; &amp;&amp; p.pendingCount === 0), &quot;both peers reconnected unaided, nothing pending&quot;, 60_000);
+    await ledger.settle(15_000);
+    await until(() =&gt; all.every(([, p]) =&gt; p.seq === peers.person.seq), &quot;both peers at the same seq&quot;, 10_000);
+
+    const journal = psql(`select seq || &#x27; &#x27; || op_id from op_journal where document_id = &#x27;${doc}&#x27; order by seq`)
+      .split(&quot;\n&quot;).filter(Boolean).map((line) =&gt; { const [seq, opId] = line.split(&quot; &quot;); return { seq: Number(seq), opId: opId ?? &quot;&quot; }; });
+    const docs = all.map(([, p]) =&gt; JSON.stringify(p.confirmed));
+    return { round: n, ops: ledger.entries.length, journaled: journal.length, violations: noLossViolations({ ledger: ledger.entries, journal, docs }) };
+  } finally {
+    for (const [, p] of all) p.close();
+    compose(&quot;start&quot;, &quot;sync&quot;); // whatever failed above, the server comes back
+  }
+}</code></pre></div><p>The kill is a <em>synchronous</em> <code>docker compose kill --signal SIGKILL sync</code> through <code>execFileSync</code>, called right after a burst of twenty edits per peer. Because the call blocks the event loop, no acknowledgement can be processed between the last <code>submit</code> and the kill: the burst is guaranteed in flight, and some of it is in the state the journal's dedupe exists for (journaled, acknowledgement never heard). The server is started again and the <em>peers are left alone</em>: F18 says they reconnect unaided, so the run waits on <code>status === "live" &amp;&amp; pendingCount === 0</code> and nothing else. Each round uses a fresh document and one fault (several kills on one ledger would blur "acknowledged before <em>which</em> fault"), and <code>ROUNDS=3</code> repeats, because a one-shot pass proves nothing. <code>finally</code> starts sync again whatever happened.</p><p class="label">From <span class="mono">scripts/chaos/kill-sync-no-loss.ts</span></p><div class="scroll"><pre><code>const secretOrNone = process.env[&quot;SESSION_TOKEN_SECRET&quot;] ?? (existsSync(&quot;.env&quot;) ? parseEnv(readFileSync(&quot;.env&quot;, &quot;utf8&quot;))[&quot;SESSION_TOKEN_SECRET&quot;] : undefined);
+if (secretOrNone === undefined) throw new Error(&quot;SESSION_TOKEN_SECRET is not set and .env has none: run ./init.sh&quot;);
+const secret: string = secretOrNone; // round() is a function declaration: the narrowing above does not reach into it
+const env = { ...process.env, PATH: `${process.env[&quot;PATH&quot;] ?? &quot;&quot;}:/Applications/Docker.app/Contents/Resources/bin` };
+const compose = (...args: string[]): string =&gt; execFileSync(&quot;docker&quot;, [&quot;compose&quot;, ...args], { env, encoding: &quot;utf8&quot; });
+const psql = (sql: string): string =&gt; compose(&quot;exec&quot;, &quot;-T&quot;, &quot;postgres&quot;, &quot;psql&quot;, &quot;-U&quot;, &quot;noon&quot;, &quot;-d&quot;, &quot;noon&quot;, &quot;-tAc&quot;, sql).trim();</code></pre></div><p>A TypeScript detail worth the two lines: narrowing does not cross a <em>function declaration</em>. <code>secretOrNone</code> is <code>string | undefined</code>; the <code>if (... === undefined) throw</code> narrows it to <code>string</code> in the top-level code, but <code>round()</code> is a hoisted <code>function</code> that could, as far as the compiler knows, run before the check. So a second <code>const secret: string</code> carries the narrowed value in. Java has no such issue (a final field is assigned once); Python has no such check.</p><p class="label">From <span class="mono">scripts/chaos/postgres-down-read-only.ts</span></p><div class="scroll"><pre><code>/** One outage: `down` takes Postgres away, `up` brings it back; `name` names this round and its nodes. */
+async function outage(name: string, down: () =&gt; void, up: () =&gt; void, readOnlyWithinMs: number): Promise&lt;void&gt; {
+  const seqBefore = peers.person.seq;
+  down(); // the fault first, then the workload (a fast pipeline outruns a late fault)
+  try {
+    const held = peers.person.submit(add(`held-${name}`));
+    check(held.ok, `${name}: the person&#x27;s edit is accepted locally`);
+    await until(() =&gt; all.every((p) =&gt; p.readOnly), `${name}: every peer shows read-only`, readOnlyWithinMs);
+    for (const [who, peer] of [[&quot;AI&quot;, peers.ai], [&quot;git peer&quot;, peers.git]] as const) {
+      const tried = peer.submit(add(`${who.replace(&quot; &quot;, &quot;-&quot;)}-${name}`));
+      check(!tried.ok &amp;&amp; tried.reason === &quot;read_only&quot;, `${name}: the ${who}&#x27;s edit is refused as read_only`);
+    }
+    check(all.every((p) =&gt; p.status === &quot;live&quot;), `${name}: every peer stays connected`);
+    check(peers.person.pendingCount === 1 &amp;&amp; peers.person.seq === seqBefore, `${name}: the held edit is pending, nothing acknowledged`);
+    steps.push(`${name}: read-only on all three peers`);
+    up();
+    await until(() =&gt; all.every((p) =&gt; !p.readOnly), `${name}: every peer writable again`, 60_000);
+    const outcome = held.ok ? await held.settled : undefined;
+    check(outcome?.ok === true &amp;&amp; outcome.seq === seqBefore + 1, `${name}: the held edit landed once, at seq ${String(seqBefore + 1)} (got ${JSON.stringify(outcome)})`);
+    await until(() =&gt; all.every((p) =&gt; p.seq === seqBefore + 1), `${name}: every peer at seq ${String(seqBefore + 1)}`, 10_000);
+    steps.push(`${name}: recovered, held edit at seq ${String(seqBefore + 1)}`);
+  } finally {
+    up(); // whatever failed above, Postgres comes back
+  }
+}</code></pre></div><p>The second run is section 3 against the real stack, twice: Postgres <em>stopped</em> (connections refused, read-only within a round trip) and <em>paused</em> (queries hang, read-only after the 5 s journal timeout). Note the §4a pitfall the code names: the fault is opened <em>before</em> the workload, because a fast pipeline outruns a late fault. Every wait polls an observable (<code>peer.readOnly</code>, <code>peer.seq</code>) with a deadline, never a fixed sleep. And the whole thing prints one JSON line and exits non-zero on FAIL, so <code>make chaos</code> can run it in a loop.</p><p class="label">From <span class="mono">Makefile</span></p><div class="scroll"><pre><code># Outside `make check`: the chaos checks (SPEC §4a) break the REAL compose stack (./init.sh first) and prove
+# the system&#x27;s guarantees hold. Each prints one JSON line and exits non-zero on FAIL.
+.PHONY: chaos
+chaos: ; node scripts/chaos/postgres-down-read-only.ts &amp;&amp; node scripts/chaos/kill-sync-no-loss.ts</code></pre></div><p class="label">From <span class="mono">scripts/chaos/no-loss.test.ts</span></p><div class="scroll"><pre><code>  it(&quot;refuses a run that proved nothing (vacuity guards)&quot;, () =&gt; {
+    expect(noLossViolations({ ledger: [acked], journal: [first], docs: same })).toEqual([&quot;vacuous: no op was in flight at the fault, so nothing was resent&quot;]);
+    expect(noLossViolations({ ledger: [{ ...inFlight, outcome: { ok: true, seq: 1 } }], journal: [{ seq: 1, opId: &quot;b&quot; }], docs: same })).toEqual([&quot;vacuous: no op was acknowledged before the fault&quot;]);
+  });
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>execFileSync("docker", ["compose", "kill", ...])</code>: synchronous, argument array, no shell</td><td><code>ProcessBuilder(...).start().waitFor()</code></td><td><code>subprocess.run([...], check=True)</code></td></tr><tr><td><code>const secret: string = secretOrNone</code> to carry a narrowing into a hoisted function</td><td>not needed: fields have one type</td><td>not needed: no checker</td></tr><tr><td><code>Awaited&lt;ReturnType&lt;typeof round&gt;&gt;</code>: the type of what an async function resolves to</td><td>the <code>T</code> of a <code>CompletableFuture&lt;T&gt;</code>, spelled out</td><td>the return annotation, spelled out</td></tr><tr><td>top-level <code>await</code> in a script run by <code>node file.ts</code></td><td>a <code>main</code> method</td><td><code>asyncio.run(main())</code></td></tr><tr><td><code>process.exit(verdict === "PASS" ? 0 : 1)</code> after one JSON line on stdout</td><td><code>System.exit</code></td><td><code>sys.exit</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Several kills on one ledger were rejected.</strong></p><p>The tempting run is one document, kill, kill, kill. But the ledger's central question is "what was acknowledged <em>before the fault</em>", and with three faults an op acknowledged after the first and lost at the second has no single answer. One fault per document per round keeps every entry's <code>atFault</code> meaningful, and <code>ROUNDS</code> gives the repetition §4a asks for.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The assertion is unit-tested on synthetic ledgers, because the chaos run cannot run here.</strong></p><p><code>no-loss.test.ts</code> feeds <code>noLossViolations</code> hand-written ledgers and journals: a clean run, a lost ack, an op journaled twice, a gap, an unsettled op, a refused op that is in the journal anyway, peers that diverge, and both vacuity guards. It is the cheapest way to know the checker itself is not vacuous before it is trusted against the stack. The unit layer's <code>include</code> gained <code>scripts/**/*.test.ts</code> for it, and knip treats <code>scripts/chaos/*.ts</code> as entries so their exports are not reported dead.</p></div><p class="note"><strong>The Antithesis habit, in one sentence:</strong> write the property as a pure function over a ledger and the truth; make the run's only job be to break the system while the ledger fills; refuse a run that did not exercise the property. Everything in <code>scripts/chaos/</code> is that sentence, and epic Z's harness will call the same function.</p></section><section id="testing"><h2>6 · Testing durability without a database, and then with one</h2><p>Every rule in this chapter has a test that needs no Docker, and a second one that needs the compose stack. The first kind is what ran on every commit; the second kind is written and unrun (the status block at the top says so). Three shapes recur.</p><p><strong>A stand-in for the table, with the table's two unique keys.</strong> <code>memoryJournal</code> is thirty lines that behave as <code>op_journal</code> does: a resend returns the original row, a taken seq rejects, <code>since</code> filters and sorts. Because it outlives any room built on it, a test can build a second room on the same journal and stand for a restart.</p><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>/** A journal in memory with the table&#x27;s two unique keys, outliving any room built on it: a stand-in for op_journal. */
+function memoryJournal(): Journal &amp; { rows: SequencedOp[] } {
+  const rows: SequencedOp[] = [];
+  const find = (actorId: string, opId: string) =&gt; rows.find((r) =&gt; r.actor.id === actorId &amp;&amp; r.opId === opId);
+  return {
+    rows,
+    append(op) {
+      const original = find(op.actor.id, op.opId);
+      if (original) return Promise.resolve(original);
+      if (rows.some((r) =&gt; r.seq === op.seq)) return Promise.reject(new Error(&quot;op_journal_seq&quot;));
+      rows.push(op);
+      return Promise.resolve(undefined);
+    },
+    find: (actorId, opId) =&gt; Promise.resolve(find(actorId, opId)),
+    everAdded: (nodeId) =&gt; Promise.resolve(rows.some((r) =&gt; r.op.type === &quot;add_node&quot; &amp;&amp; r.op.nodeId === nodeId)),
+    since: (seq) =&gt; Promise.resolve(rows.filter((r) =&gt; r.seq &gt; seq).sort((x, y) =&gt; x.seq - y.seq)),
+  };
+}</code></pre></div><p><strong>A stand-in behind a switch.</strong> <code>flakyJournal</code> wraps the memory journal in a <code>guard</code> that rejects while <code>down</code>, plus one deliberately nasty mode, <code>committedAnyway</code>: the next append lands <em>and</em> throws, which is the lost-reply case section 3's recovery exists for. The integration file's <code>switchableStore</code> adds <code>hang</code>, a promise that never settles, for the paused-database case. The generic <code>guard</code> is a higher-order function typed with a tuple rest parameter (<code>&lt;A extends unknown[], R&gt;(call: (...args: A) =&gt; Promise&lt;R&gt;) =&gt; (...args: A) =&gt; Promise&lt;R&gt;</code>): it wraps any async function and keeps its signature.</p><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>// --- E6.1b: with its storage unavailable the room is read-only, says so to every peer, and recovers ---
+/** memoryJournal behind a switch: while `down`, every call rejects; `committedAnyway` makes the next append land AND reject (a lost reply). */
+function flakyJournal() {
+  const inner = memoryJournal();
+  const state = { down: false, committedAnyway: false, appends: 0 };
+  const guard = &lt;A extends unknown[], R&gt;(call: (...args: A) =&gt; Promise&lt;R&gt;) =&gt; (...args: A): Promise&lt;R&gt; =&gt; (state.down ? Promise.reject(new Error(&quot;db down&quot;)) : call(...args));
+  const journal: Journal = {
+    append: async (op) =&gt; {
+      state.appends++;
+      if (state.committedAnyway) {
+        state.committedAnyway = false;
+        await inner.append(op);
+        throw new Error(&quot;connection lost after commit&quot;);
+      }
+      return guard((each: SequencedOp) =&gt; inner.append(each))(op);
+    },
+    find: guard((actorId: string, opId: string) =&gt; inner.find(actorId, opId)),
+    everAdded: guard((nodeId: string) =&gt; inner.everAdded(nodeId)),
+    since: guard((seq: number) =&gt; inner.since(seq)),
+  };
+  return { journal, state, rows: inner.rows };
+}
+const statuses = (p: { inbox: ServerMessage[] }) =&gt; p.inbox.filter((m) =&gt; m.type === &quot;status&quot;);</code></pre></div><p class="label">From <span class="mono">apps/sync/src/read-only.int.test.ts</span></p><div class="scroll"><pre><code>/** op_journal in memory, with its two unique keys. `down`: every call refuses. `hang`: every call waits for ever. */
+function switchableStore() {
+  const rows: SequencedOp[] = [];
+  const state = { down: false, hang: false };
+  const gate = &lt;T&gt;(work: () =&gt; T): Promise&lt;T&gt; =&gt;
+    state.hang ? new Promise&lt;T&gt;(() =&gt; undefined) : state.down ? Promise.reject(new Error(&quot;connection refused&quot;)) : Promise.resolve(work());
+  const store: DocumentStore = {
+    load: () =&gt; gate(() =&gt; ({ doc: undefined, seq: 0, snapshotSeq: 0 })),
+    snapshotted: () =&gt; gate(() =&gt; undefined),
+    append: (_org, _doc, op) =&gt; gate(() =&gt; {
+      const original = rows.find((r) =&gt; r.actor.id === op.actor.id &amp;&amp; r.opId === op.opId);
+      if (original) return original;
+      if (rows.some((r) =&gt; r.seq === op.seq)) throw new Error(&quot;op_journal_seq&quot;);
+      rows.push(op);
+      return undefined;
+    }),
+    find: (_org, _doc, actorId, opId) =&gt; gate(() =&gt; rows.find((r) =&gt; r.actor.id === actorId &amp;&amp; r.opId === opId)),
+    everAdded: (_org, _doc, nodeId) =&gt; gate(() =&gt; rows.some((r) =&gt; r.op.type === &quot;add_node&quot; &amp;&amp; r.op.nodeId === nodeId)),
+    since: (_org, _doc, seq) =&gt; gate(() =&gt; rows.filter((r) =&gt; r.seq &gt; seq).sort((a, b) =&gt; a.seq - b.seq)),
+  };
+  return { store, rows, state };
+}</code></pre></div><p><strong>The real store, observed.</strong> <code>countingStore</code> spreads the real <code>documentStore()</code> into a new object and replaces one method, <code>since</code>, with a version that records what it was asked and how much it returned. That is how the integration test proves "only the rows after the snapshot were read": <code>replays</code> equals <code>[{ after: 7, rows: 3 }]</code>, and after a snapshot at 10,000, <code>[{ after: 10_000, rows: 0 }]</code>. Object spread over a closure-based store is the TypeScript way to decorate one method; Java would subclass or proxy.</p><p class="label">From <span class="mono">apps/sync/src/snapshot.int.test.ts</span></p><div class="scroll"><pre><code>/** The real store, with every `since` it answers written down: which seq it was asked from, how many rows it gave. */
+function countingStore(): DocumentStore &amp; { replays: { after: number; rows: number }[] } {
+  const real = t.db.documentStore();
+  const replays: { after: number; rows: number }[] = [];
+  return {
+    ...real,
+    replays,
+    since: async (orgId, documentId, seq) =&gt; {
+      const rows = await real.since(orgId, documentId, seq);
+      replays.push({ after: seq, rows: rows.length });
+      return rows;
+    },
+  };
+}</code></pre></div><p><strong>A clock you wind by hand.</strong> The cadence tests use <code>vi.useFakeTimers()</code> and <code>advanceTimersByTimeAsync</code>, so "every 30 seconds" runs in milliseconds and the assertion "never with nobody here" is exact. The <code>rig</code> builds a room stand-in whose <code>seq</code> a test moves by hand, and a <code>write</code> that records, fails, or waits on a promise the test releases.</p><p class="label">From <span class="mono">apps/sync/src/snapshots.test.ts</span></p><div class="scroll"><pre><code>/** A room stand-in whose seq a test moves by hand, and a write that records or fails on demand. */
+function rig({ from = 0, everyOps = 3, everyMs = 1000 } = {}) {
+  const room = { seq: from, doc: emptyDoc(), peerCount: 1 };
+  const written: number[] = [];
+  const control = { fail: false, hold: undefined as Promise&lt;void&gt; | undefined };
+  const snap = snapshotter({
+    room,
+    from,
+    cadence: { everyOps, everyMs },
+    write: async (seq, body) =&gt; {
+      await control.hold;
+      if (control.fail) throw new Error(&quot;minio down&quot;);
+      expect(decodeSnapshot(body)).toBeDefined();
+      written.push(seq);
+    },
+  });
+  const accept = (): void =&gt; { room.seq++; snap.accepted(room.seq); };
+  return { room, written, control, snap, accept };
+}
+const flush = () =&gt; new Promise((resolve) =&gt; setImmediate(resolve));</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.test.ts</span></p><div class="scroll"><pre><code>test(&quot;every T while peers are connected, only if the room moved; never with nobody here&quot;, async () =&gt; {
+  vi.useFakeTimers();
+  const { room, written, snap } = rig({ everyOps: 1000, everyMs: 1000 });
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(written).toEqual([]); // nothing new: no write
+  room.seq = 2;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(written).toEqual([2]);
+  room.seq = 5;
+  room.peerCount = 0;
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(written).toEqual([2]); // the last-leave snapshot is the server&#x27;s to take, not the timer&#x27;s
+  room.peerCount = 1;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(written).toEqual([2, 5]);
+  snap.stop();
+  room.seq = 9;
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(written).toEqual([2, 5]);
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>{ ...real, since: async (...) =&gt; { ... } }</code>: decorate one method by spread</td><td>a subclass or a <code>Proxy</code>; Mockito's <code>spy</code></td><td><code>unittest.mock.patch.object</code></td></tr><tr><td><code>&lt;A extends unknown[], R&gt;(call: (...args: A) =&gt; Promise&lt;R&gt;)</code></td><td>no variadic generics; one wrapper per arity</td><td><code>ParamSpec</code> in <code>typing</code></td></tr><tr><td><code>vi.useFakeTimers(); await vi.advanceTimersByTimeAsync(1000)</code></td><td>an injected <code>Clock</code>; Awaitility</td><td><code>freezegun</code>; an injected clock</td></tr><tr><td>a promise the test holds and releases (<code>control.hold</code>)</td><td>a <code>CountDownLatch</code></td><td>an <code>asyncio.Event</code></td></tr><tr><td><code>new Promise&lt;T&gt;(() =&gt; undefined)</code>: a promise that never settles, for "hangs"</td><td>a <code>CompletableFuture</code> never completed</td><td><code>asyncio.Future()</code> never set</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The gate's unit layer did not include <code>scripts/</code>, so the chaos checker's tests would not have run.</strong></p><p><code>vitest.config.ts</code>'s <code>include</code> covered <code>apps</code> and <code>packages</code>. The checker lives in <code>scripts/chaos/</code>, next to the run that uses it, so the pattern gained <code>scripts/**/*.test.ts</code>. A test that is written and not collected is the most misleading kind of green there is; check the collector when you add a test somewhere new.</p></div><p class="note"><strong>Honest status, repeated here because it matters:</strong> the unit tests in this chapter (the room's journal, read-only and recover rules; peer-client's hold; the snapshotter's cadence and key rules; the chaos checker) ran green on every commit. The integration suites (<code>journal.int</code>, <code>read-only.int</code>, <code>snapshot.int</code>, <code>packages/db</code>'s <code>journal.int</code>, and the E6.1b additions to <code>push.test</code> and <code>git.int</code>) and both chaos runs are written, reviewed and committed, and have not been run. The next section is what running them looks like.</p></section><section id="demo"><h2>7 · Durability by hand: what to run once the stack is up</h2><p>These are the exact commands and what each should show, in the order that builds confidence. The dev stack gains MinIO (<code>127.0.0.1:9005</code>, no console published) and the sync container refuses to start without it. Nothing here needs a token; where a document id is needed, it is the <code>?doc=</code> in the canvas's address bar.</p><p class="label">0 · Bring the stack up</p><div class="scroll"><pre class="out"><code>./init.sh                                    # now also MinIO; sync makes the bucket "snapshots" at start and refuses to start without it
+docker compose ps                            # minio healthy; sync healthy
+open http://localhost:5173/?user=you@example.com     # New document; Add Stack, Add Button, drag a little; note ?doc=&lt;id&gt;</code></pre></div><p class="label">1 · The journal is the truth</p><div class="scroll"><pre class="out"><code>docker compose exec -T postgres psql -U noon -d noon -c \
+  "select seq, actor_kind, op->>'type' as op, left(op_id::text, 8) as op_id from op_journal where document_id = '&lt;id&gt;' order by seq"
+                                             # one row per accepted op, seq 1..n with no gap; the drag is many set_prop rows</code></pre></div><p class="label">2 · kill -9 mid-edit (F18)</p><div class="scroll"><pre class="out"><code># In the canvas, start dragging a node and keep dragging while you run:
+docker compose kill --signal SIGKILL sync    # the status turns "offline" with "saving N…"; keep editing: edits queue locally
+docker compose start sync                    # within seconds, without a reload: "live", then "saved"; the other tab shows the same page
+# Then the query from step 1 again: n grew by exactly the edits you made; no seq repeats; no op_id repeats:
+docker compose exec -T postgres psql -U noon -d noon -c \
+  "select count(*), count(distinct seq), count(distinct op_id), max(seq) from op_journal where document_id = '&lt;id&gt;'"   # all four equal</code></pre></div><p class="label">3 · Postgres down: read-only, nothing lost (E6.1b)</p><div class="scroll"><pre class="out"><code>docker compose stop postgres                 # add a node NOW: the status says "read-only · waiting to save 1…", the alert appears, Add is disabled
+                                             # a second tab opened meanwhile is welcomed read-only
+docker compose start postgres                # within about a second: "live · saved"; the node you added is there, once, in both tabs
+docker compose pause postgres                # the same, but read-only arrives after the 5 s journal timeout (queries hang instead of failing)
+docker compose unpause postgres</code></pre></div><p class="label">4 · Snapshots (F19)</p><div class="scroll"><pre class="out"><code>docker compose exec -T postgres psql -U noon -d noon -c "select snapshot_seq, seq from documents where id = '&lt;id&gt;'"
+                                             # snapshot_seq moves every 500 ops, every 30 s while a tab is open, and when the last tab closes
+                                             # the object is &lt;org&gt;/&lt;id&gt;/&lt;16-digit seq&gt;.json.gz in the bucket; no console is published, the integration test reads it back
+SNAPSHOT_EVERY_OPS=5 docker compose up -d sync      # to watch the cadence by hand: every five edits moves the pointer
+docker compose logs sync | grep snapshot     # only FAILED snapshots are logged; silence is the good case</code></pre></div><p class="label">5 · Then the checks that prove it without hands</p><div class="scroll"><pre class="out"><code>pnpm exec vitest run --config vitest.integration.config.ts packages/db/src/journal.int.test.ts apps/sync/src/journal.int.test.ts apps/sync/src/read-only.int.test.ts apps/sync/src/snapshot.int.test.ts
+                                             # real Postgres and MinIO; the 10,000-row open is timed and must be under 2 s
+node scripts/chaos/postgres-down-read-only.ts        # one JSON line: {"chaos":"postgres-down-read-only","verdict":"PASS","steps":[...]}
+ROUNDS=3 node scripts/chaos/kill-sync-no-loss.ts     # {"chaos":"kill-sync-no-loss","verdict":"PASS","rounds":[{"ops":60,"journaled":...,"violations":[]},...]}
+make chaos                                   # both, in order; breaks and restores the real stack
+make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>e72665c</code>, and the code is right until a test says otherwise. A step that fails is a finding: write it as <em>sequence → false belief → consequence → smallest fix</em> (SPEC §4a's form) and file it against the bead that owns the code.</p></section><section id="limits"><h2>8 · What the type system could not see, epic 6 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>an op announced before it was durable</td><td>the compiler cannot see the order of two awaits</td><td>append, then <code>accept</code>; drill 2 plants the reverse</td></tr><tr><td>a failed write took a sequence number</td><td><code>seq + 1</code> looked like <code>seq++</code></td><td>the number is taken inside <code>accept</code> only</td></tr><tr><td>two unique violations look the same (23505)</td><td>the code is not the constraint</td><td>read <code>err.constraint</code> by name</td></tr><tr><td>a bare-opId key would refuse a cross-peer collision</td><td>every broadcast shows every opId</td><td>key on <code>(document, actor, opId)</code></td></tr><tr><td>a forged <code>baseSeq</code> walked past the stale guard (E2.3)</td><td>memory is bounded</td><td>the journal's key answers with the original</td></tr><tr><td>a reopened room numbered from a stale seq</td><td>the saved document is behind the journal</td><td>replay <code>since(seq)</code> at open</td></tr><tr><td>a removed id came back through any actor</td><td><code>validate</code> sees only the present</td><td><code>everAdded</code> through a partial index</td></tr><tr><td>a paused database hung the room for ever</td><td>a hang is not an error</td><td><code>bounded</code>: a timeout that means "treat as failed"</td></tr><tr><td>a health probe went writable with the room behind the journal</td><td>"answers" is not "agrees"</td><td><code>recover()</code> replays, then says writable</td></tr><tr><td>a refusal under read-only was a resync, and a reconnect storm</td><td><code>unavailable</code> meant one thing in lesson 2</td><td>the status message turns it into a hold</td></tr><tr><td>a held op that landed would be applied twice, or heard by nobody</td><td>a lost reply is not a failed write</td><td>replay before writable; the resend gets the original</td></tr><tr><td>a git event failed during an outage was gone for good</td><td><code>(ref, after_sha)</code> is never re-recorded</td><td><code>WaitAgain</code>: back to <code>pending</code></td></tr><tr><td>a snapshot named <code>seq</code> held a later document</td><td>the room edits <code>doc</code> in place</td><td>encode in the same tick as <code>seq</code></td></tr><tr><td>the pointer could name a missing object</td><td>two writes, one crash between them</td><td>MinIO first, then <code>snapshot_seq</code></td></tr><tr><td>a slow old snapshot could move the pointer back</td><td>writes finish out of order</td><td><code>where snapshot_seq &lt; $3</code></td></tr><tr><td>"10" sorted before "9"</td><td>S3 keys are strings</td><td>zero-pad to 16 digits</td></tr><tr><td>finding the newest snapshot by listing</td><td>1000 keys a page, ascending only (measured)</td><td>a pointer row; build the key</td></tr><tr><td>MinIO down read as "no snapshot"</td><td>one <code>undefined</code> for two facts</td><td><code>NoSuchKey</code> → undefined; anything else throws; 4503 vs 4500</td></tr><tr><td>a chaos run that proved nothing passed</td><td>a green run with no op in flight</td><td>vacuity guards as violations</td></tr><tr><td>a kill that landed after the burst was acknowledged</td><td>an async kill lets acks through</td><td><code>execFileSync</code>: the loop is blocked until the kill lands</td></tr><tr><td>a narrowing that did not reach a hoisted function</td><td>declarations hoist; narrowings do not</td><td><code>const secret: string = secretOrNone</code></td></tr><tr><td>the checker's tests were not collected</td><td>the unit pattern stopped at <code>packages</code></td><td><code>scripts/**/*.test.ts</code> in the include</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lessons 2 to 5 said types prove shapes and say nothing about order, time, repetition, memory, who is speaking, or which side of a boundary a thing is on. Epic 6 adds the two that durability turns on: types cannot see <em>whether a write happened</em> (a rejected promise may have landed; a hung one may too) and <em>what order two effects took</em> (announce, then persist, compiles as well as the reverse). Both were answered the same way as before: put the truth in one place, read it before you believe anything, and write a test that watches the order.</p></section>
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-6/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-6/check.sh</span> shows your progress. Neither needs Docker.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> The canvas says "read-only" and holds the person's edits, but not since when. Carry the moment from the room's <em>lent</em> clock to the screen: the <code>status</code> message gains a required <code>at</code> and the welcome an optional <code>readOnlySince</code> (<code>packages/contracts</code>); <code>storageFailed</code> and <code>recover</code> stamp them from <code>now()</code>, never <code>Date.now</code>, and a peer joining meanwhile is told since when; peer-client exposes <code>readOnlySince</code> and clears it as it clears <code>readOnly</code>; <code>readOnlyFor(since, now)</code> in <code>apps/web/src/reasons.ts</code> says "5 s" or "2 min", never negative; the canvas's alert reads "Read-only for 2 min", as text. <span class="mono">make check</span> must stay green: the type checker will name every place a status is built without <code>at</code>, and <code>room.test.ts</code>, <code>peer.test.ts</code> and <code>wire.test.ts</code> will name every expectation that changed. That list is the drill.</p>
+      <p>Predict first: why must the room take the moment from the clock it was lent, and what would a test that winds the clock by hand be unable to check if it used <code>Date.now</code>?</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-6/d2-durable-room/room.ts</span> is the room cut down to durability (queue, dedupe, journal, read-only, recover) with one bug from this chapter planted in it. Its first test fails the database's write and asks who heard of the op. Read the failing assertion and say, before you open the code, what the room believes its own <code>seq</code> is now and why that is worse than the lost broadcast. The fix moves one line.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. The room could apply and broadcast an op, then journal it, and refuse it if the write fails. That is faster for the sender. Why is the acknowledgement given only after the append, and why is the sequence number taken only then?</summary>
+        <p>Because an acknowledgement is a promise about the future: "after a crash this will still be true". Only the database can make that promise, so the room may only relay it after the database has spoken. Announce first and three things break at once. Every other peer applies an op that may not exist after a restart, so two tabs diverge from the truth. The sender's client marks the op confirmed and forgets it, so nothing will ever resend it: the op is lost <em>while everyone saw it</em>. And the room's <code>seq</code> has moved for a row that is not in the journal, so the next append's number is one ahead of the table, which is the room's own signal for a rival writer; under the reversed order it becomes a permanent read-only after the first failed write. Taking the number inside <code>accept</code>, after the append resolved, means a failed write leaves no gap and the next op simply gets the same number. The cost is one database round trip per op inside the room's queue, which is the price of the promise. Drill 2 plants the reverse order; its first assertion is peer B having received seq 2.</p></details>
+      <details class="recall"><summary>2. When the journal fails, the room could ping Postgres every second and say "writable" when it answers. Instead <code>recover()</code> reads <code>since(seq)</code> and replays it first. Why, and what exactly does "no acknowledged op is lost, none is applied twice" require of the client and the journal together?</summary>
+        <p>Because "the database answers" and "the room agrees with the database" are different facts. A rejected append may have landed (the connection died after the commit) and a timed-out one may land later; a rival row may sit at the room's next seq. If the room goes writable without reading, the landed op is in the journal and in nobody's document, and the next append from anyone breaks <code>op_journal_seq</code> and puts the room back into read-only for ever. Replaying through <code>accept</code> applies and announces what landed, moves the room's seq past it, and only then says writable; the sender's held resend is then answered from memory with the seq it got. The promise needs three things. From the journal: a unique key on <code>(document, sender, opId)</code>, and the original row returned when it is broken, so a second sending gets the first answer. From the client: keep the op under the same opId until it is answered, and re-offer it after every welcome and every "writable", in order. From the room: acknowledge only what is durable, refuse everything while it cannot write, and read the journal before it writes again. Remove any one and the promise is gone: no key, and a resend is applied twice; no held resend, and an in-flight op is lost; no replay, and a landed op is heard by nobody.</p></details>
+      <details class="recall"><summary>3. Snapshots are written to MinIO with <code>IfNoneMatch: "*"</code>, and <code>documents.snapshot_seq</code> is updated only afterwards and only forwards. A failed snapshot is logged and never retried, and F8's idle save was deleted. Defend each of those four choices in one sentence, then say what a snapshot <em>is</em>.</summary>
+        <p>A snapshot is a materialised prefix of the log, so everything follows from the journal being the truth. <em>Conditional put</em>: two rooms (or one room twice, after a crash) may reach the same seq, and the same journal prefix gives the same document, so the loser of the race loses nothing and a plain overwrite would only open a window where the object is half-written. <em>Pointer after the object, forwards only</em>: a crash between the two writes leaves an orphaned object (harmless) rather than a pointer to nothing (a document that cannot open), and a slow write of an older snapshot finishing late must not move the document backwards. <em>Never retried</em>: a snapshot that failed to write costs nothing but more rows to replay at the next open, so a retry loop would be complexity spent protecting a copy. <em>F8 deleted</em>: F8 had to retry for ever because the room's memory was the only copy of the edits since the last save; with the journal that is never true, and keeping two save paths means two truths. The key is zero-padded because S3 sorts strings, and the newest snapshot is found by the pointer rather than by listing because S3 lists ascending in pages of 1000, measured. What it is: a cache of the log that may be lost but must never be wrong, which is why the document is encoded in the same tick as its seq.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the three things the room does to an op after the journal accepts it, in order, and who the sender's acknowledgement is. Then name the two starting points a document can open from and what is replayed after either. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>After the append resolves, <code>accept</code>: applies the op to the in-memory document, takes the sequence number (only now), remembers the op under <code>sender:opId</code>, and broadcasts it to every peer; the sender's own copy of that broadcast is its acknowledgement. Two starting points: the newest snapshot in MinIO (named by <code>documents.snapshot_seq</code>), or what F8's idle save wrote before E6.2 if that is newer; after either, <code>since(seq)</code> replays only the journal rows past that seq, and the room starts at the last replayed seq.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. The room builds <code>sequenced</code> with <code>seq + 1</code> before the append. When is the number actually taken, and why does it matter?</p>
+      <button id="q1a" data-correct>Inside <code>accept</code>, after the append resolved: a failed write leaves no gap and the next op gets the same number</button><button id="q1b">When <code>sequenced</code> is built: the journal needs it to write the row</button><button id="q1c">When the broadcast is sent, so peers see numbers in order</button><button id="q1d">When the client's <code>baseSeq</code> catches up</button>
+      <p class="why" hidden>Under the reversed order a failed write would move the room one ahead of the table, and the next append would break <code>op_journal_seq</code>.</p></div>
+    <div class="quiz"><p class="q">2. Both unique constraints fail with SQLSTATE 23505. How does <code>append</code> tell a resend from a rival writer, and what does it do for each?</p>
+      <button id="q2a" data-correct>By the constraint's <em>name</em> on the error: <code>op_journal_op</code> is a resend and the original row is returned; <code>op_journal_seq</code> is a rival and the error propagates</button><button id="q2b">By retrying the insert and seeing which one fails twice</button><button id="q2c">By comparing the op's JSON with the existing row</button><button id="q2d">It cannot: both are refused as <code>unavailable</code></button>
+      <p class="why" hidden>Measured in <code>learning-tests/postgres</code>: the driver exposes <code>err.constraint</code>. <code>"constraint" in err</code> narrows the type so the compare compiles without a cast.</p></div>
+    <div class="quiz"><p class="q">3. Why is the journal's dedupe key <code>(document, actor, opId)</code> and not <code>(document, opId)</code>?</p>
+      <button id="q3a" data-correct>Every broadcast shows every opId to every peer, so another peer could send one as its own; a bare-opId key would call that a resend and answer with the other peer's op</button><button id="q3b">Because uuids collide often enough to matter</button><button id="q3c">So that the AI's runs get their own numbering</button><button id="q3d">Postgres requires three columns in a unique key on a partitioned table</button>
+      <p class="why" hidden>The database test proves two senders may share an opId and both rows are written.</p></div>
+    <div class="quiz"><p class="q">4. A journal append fails. In what order do peers hear about it, and what does a read-only room acknowledge?</p>
+      <button id="q4a" data-correct>One <code>status</code> to every peer first, then the refusal to the sender; while read-only it acknowledges nothing: not a fresh op, not a no-op, not a resend it remembers</button><button id="q4b">The refusal to the sender first, then a status to the others</button><button id="q4c">Only the sender hears; the others find out from their own next op</button><button id="q4d">It acknowledges remembered resends from memory, since those were durable</button>
+      <p class="why" hidden>Even an answer from memory is an acknowledgement. The order lets the sender's client treat the refusal as "hold", not "resync".</p></div>
+    <div class="quiz"><p class="q">5. What does <code>recover()</code> do before it tells peers "writable", and why is a bare health probe wrong?</p>
+      <button id="q5a" data-correct>It replays <code>since(seq)</code> through <code>accept</code>: an append that landed although it threw, or a rival's row, is applied and announced; a probe would go writable with the room behind the journal and the next append would break <code>op_journal_seq</code></button><button id="q5b">It re-sends every refused op itself</button><button id="q5c">It clears the room's memory so no stale answer is given</button><button id="q5d">It reloads the document from the newest snapshot</button>
+      <p class="why" hidden>"The database answers" and "the room agrees with the database" are different facts. The test with <code>committedAnyway</code> is the lost-reply case.</p></div>
+    <div class="quiz"><p class="q">6. Why is the snapshot written to MinIO <em>before</em> <code>documents.snapshot_seq</code> is updated, and what does <code>where snapshot_seq &lt; $3</code> add?</p>
+      <button id="q6a" data-correct>So the pointer never names a missing object: a crash between the two leaves an orphaned object, not an unopenable document; the <code>&lt;</code> keeps the pointer monotonic when a slow older write finishes late</button><button id="q6b">Because MinIO is faster than Postgres</button><button id="q6c">So that the listing can find the newest object</button><button id="q6d">Postgres would reject the update while the object is still uploading</button>
+      <p class="why" hidden>A 412 on the put is treated as success: the same journal prefix gives the same document.</p></div>
+    <div class="quiz"><p class="q">7. A snapshot fails to write. What happens?</p>
+      <button id="q7a" data-correct>It is logged and not retried; the journal holds every accepted op, so the next open replays more rows and loses nothing</button><button id="q7b">The room goes read-only until MinIO answers</button><button id="q7c">It is retried every second until it lands, as F8's save was</button><button id="q7d">The document is marked corrupt (4500)</button>
+      <p class="why" hidden>F8 had to retry for ever because the room's memory was the only copy. That is no longer true, so its retry loop was deleted with it.</p></div>
+    <div class="quiz"><p class="q">8. The kill-sync chaos run reports PASS. What must its ledger have contained for that PASS to mean anything?</p>
+      <button id="q8a" data-correct>At least one op acknowledged before the fault and at least one in flight at it; otherwise the vacuity guards report the run as proving nothing</button><button id="q8b">At least 100 ops, so the statistics are meaningful</button><button id="q8c">One op from each kind of peer</button><button id="q8d">A snapshot taken during the run</button>
+      <p class="why" hidden>SPEC §4a: every <code>always</code> needs a <code>sometimes</code>. The kill is synchronous so the burst is guaranteed in flight.</p></div>
+  </section>
+
+  <footer>Next: Lesson 7, after epic 7. Multi-node: a lease per document so exactly one node owns a room, a fencing token checked by the journal append so a node paused past its lease cannot write, and clients that follow the room to its new node through <code>/session</code>; the ledger from this chapter, unchanged, checks the failover.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
