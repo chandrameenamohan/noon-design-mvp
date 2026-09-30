@@ -98,7 +98,7 @@ h2 { scroll-margin-top: 24px; }
   <p class="lede">The win: you can explain, to an interviewer or to yourself, how an AI edits a shared document without a single new rule in the room, why a queue is never the truth, what it takes to stop a process you do not own, and where the money goes; and you can point at the line of code for every claim.</p>
 
   <div class="aside">
-    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">8d5d2b8</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4 and 7 are the ones an architect interview will dig into.</p>
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">94222ab</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4 and 7 are the ones an architect interview will dig into.</p>
     <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + Redis + api + sync + worker<br>docker compose logs -f worker&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "agent tools registered and isolated", then each run<br>make integration&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the worker against real Postgres, Redis and sync<br>pnpm exec playwright test e2e/ai.spec.ts&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# two browser contexts and a scripted model</p>
     <p>Try it: open a document in two windows, type an instruction in the AI panel of one, and watch the nodes arrive in both. Without <span class="mono">CLAUDE_CODE_OAUTH_TOKEN</span> in <span class="mono">.env</span> every run fails at once as <em>token_missing</em>, which the panel says in words; the browser test does not need a token, because its model is scripted.</p>
   </div>
@@ -109,24 +109,35 @@ h2 { scroll-margin-top: 24px; }
  * ALL a queue message carries: where to look in Postgres. The job&#x27;s input and status live in the
  * `jobs` table, so a lost, duplicated or stale message can never change what a job is or does.
  */
-export const JobRef = z.strictObject({ queue: z.enum(QUEUES), jobId: Id, orgId: Id });</code></pre></div><p>The api writes the row first and enqueues second. If Redis is away the enqueue throws, and the api still answers 201: the run exists. Failing the request would invite a retry, and a retry would create a second run.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look.
-  app.post(&quot;/documents/:id/runs&quot;, async (c) =&gt; {
-    const doc = await db.getDocumentForMember(c.req.param(&quot;id&quot;), c.var.user.id);
-    if (!doc) return notFound(c);
+export const JobRef = z.strictObject({ queue: z.enum(QUEUES), jobId: Id, orgId: Id });</code></pre></div><p>The api writes the row first and enqueues second. If Redis is away the enqueue throws, and the api still answers 201: the run exists. Failing the request would invite a retry, and a retry would create a second run.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look. It edits the
+  // document and costs money: editors and owners. Its ops carry its creator&#x27;s role into the room (E8.2).
+  // F27: a retry with the same Idempotency-Key answers 201 with the run the first request made, read from its row
+  // (enqueued again: BullMQ drops an add for a job id it holds, and a claimed job cannot be claimed twice).
+  // F31: each run made is one hit on the org&#x27;s limit, counted with the insert: over it, 429 with Retry-After, and the
+  // key is not used up (the refused run was rolled back with its claim). A replay is answered without a hit. The count
+  // lives in Postgres, like the run: if the database is away, no run can be made anyway, so the limit cannot fail open.
+  document.post(&quot;/runs&quot;, need(&quot;editor&quot;), async (c) =&gt; {
+    const { doc } = c.var;
+    const key = idempotencyKey(c);
     const { instruction } = await body(c, CreateRunBody);
-    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id });
+    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id, idempotencyKey: key, limit: aiRunLimit });
     if (!run) return notFound(c); // the document was deleted in between
     if (run === &quot;busy&quot;) return fail(c, 409, &quot;run_in_progress&quot;);
+    if (run === &quot;key_reused&quot;) return fail(c, 422, &quot;idempotency_key_reused&quot;);
+    if (&quot;retryAfterSeconds&quot; in run) return limited(c, run.retryAfterSeconds);
     try {
       await enqueue({ queue: &quot;ai&quot;, jobId: run.id, orgId: run.orgId });
     } catch (err) {
-      // Still a 201: the run exists and the worker&#x27;s sweep will pick it up. Failing the request would
-      // invite a retry, and a second run (idempotency keys are E9).
+      // Still a 201: the run exists and the worker&#x27;s sweep will pick it up. A retry without the
+      // Idempotency-Key would make a second run.
       process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
     }
     return c.json(run, 201);
   });</code></pre></div><p>The worker's side of the bargain is <code>claim()</code>: one <code>UPDATE</code> that turns <code>queued</code> into <code>running</code> and returns the row. A message that arrives twice finds nothing to claim the second time. A stale message for a finished job finds nothing. A message that names a job of another queue, or of another org, finds nothing: the <code>WHERE</code> checks all three before anything is written.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>  async function run(data: unknown): Promise&lt;void&gt; {
     const ref = JobRef.parse(data);
+    // A ref for a queue this process does not handle (misrouted, or forged by someone with the Redis
+    // password) is left for its own worker: claiming it first would fail someone else&#x27;s job as `internal`.
+    if (handlers[ref.queue] === undefined) return;
     // Claiming is the ONLY way to start: queued -&gt; running, in one statement. A duplicate or stale
     // message finds nothing to claim and ends here, so a job runs at most once per claim.
     const job = await jobs.claim(ref);
@@ -135,16 +146,20 @@ export const JobRef = z.strictObject({ queue: z.enum(QUEUES), jobId: Id, orgId: 
       // names a git job would mark it running and then fail to parse it: running for ever.
       claim: async ({ queue, jobId, orgId }) =&gt;
         isId(jobId) &amp;&amp; isId(orgId)
-          ? one(JobRow, &quot;update jobs set status = &#x27;running&#x27;, started_at = now() where org_id = $1 and id = $2 and queue = $3 and status = &#x27;queued&#x27; returning *&quot;, [orgId, jobId, queue])
+          ? one(JobRow, &quot;update jobs set status = &#x27;running&#x27;, started_at = now(), heartbeat_at = now(), attempts = attempts + 1 where org_id = $1 and id = $2 and queue = $3 and status = &#x27;queued&#x27; returning *&quot;, [orgId, jobId, queue])
           : undefined,</code></pre></div><p>Because Redis can be flushed (SPEC §2a measured it: <code>FLUSHALL</code> loses every job) and the api can die between its <code>INSERT</code> and its enqueue, the worker sweeps: every few seconds it asks Postgres "what is still queued?" and offers those to the queue again. The <code>jobId</code> makes a second offer harmless: BullMQ drops an add for an id it already holds, and if it did not, <code>claim()</code> would.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>  // Redis is not the truth (SPEC §2.9): it can be flushed, and the api can die between its INSERT
   // and its enqueue. Whatever Postgres still calls `queued` is offered again; jobId + claim() make
   // a second offer harmless. ponytail: a poll; LISTEN/NOTIFY or an outbox if `sweepMs` is ever too slow.
+  // First, F28: a job whose worker died (its beat went stale) is made `queued` again, so this same pass offers it.
+  // Every worker process sweeps every queue: the AI worker brings back a dead sandbox worker&#x27;s job, and the other way round.
   const producer = createProducer({ redisUrl, ...scoped });
   let sweeping: Promise&lt;void&gt; | undefined;
   const sweep = (): Promise&lt;void&gt; =&gt; (sweeping ??= sweepOnce().finally(() =&gt; (sweeping = undefined)));
   async function sweepOnce(): Promise&lt;void&gt; {
     try {
       await producer.ping(); // with nothing queued the loop below never touches Redis, and &quot;alive&quot; would mean &quot;Postgres is up&quot;
+      const stale = await jobs.requeueStale(staleMs, maxAttempts);
+      if (stale.requeued + stale.lost &gt; 0) log(&quot;warn&quot;, &quot;jobs left running by a dead worker&quot;, stale);
       // One refused offer must not hide the 99 behind it: it stays `queued` and is offered again next time.
       for (const ref of await jobs.queued(100)) await producer.enqueue(ref).catch((err: unknown) =&gt; log(&quot;warn&quot;, `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
       onAlive?.();
@@ -153,10 +168,10 @@ export const JobRef = z.strictObject({ queue: z.enum(QUEUES), jobId: Id, orgId: 
     }
   }</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>the row is the truth; the message is a pointer</td><td>transactional outbox; Debezium tailing the outbox table</td><td>your own <code>jobs</code> table; never <code>AsyncResult.state</code> as the record</td></tr><tr><td>claim = one <code>UPDATE ... WHERE status = 'queued' RETURNING *</code></td><td><code>SELECT ... FOR UPDATE SKIP LOCKED</code>, the classic Postgres job queue</td><td>the same, with psycopg</td></tr><tr><td>a sweep re-offers <code>queued</code> rows</td><td>a <code>@Scheduled</code> reconciler</td><td>a beat task re-enqueueing from the database</td></tr><tr><td>"it worked" is answered by Postgres a moment before BullMQ removes its message</td><td>the same two-clock problem with any broker</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A future <code>git</code> row would have stopped the AI sweep for every org.</strong></p><p>The sweep's row parser said <code>queue: z.literal("ai")</code>. Its query said <code>where status = 'queued'</code> and nothing about the queue. Today every job is an AI job, so it passed. The day epic 5 inserts one <code>git</code> job, the parser throws on that row, the sweep fails as a whole, and no org's lost AI runs are ever re-offered again. The fix is one clause: <em>filter in SQL what the parser assumes</em>. The test inserts a <code>git</code> row by hand and expects the sweep to carry on.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      queued: (limit) =&gt;
         rows(
-          z.object({ id: z.string(), org_id: z.string(), queue: z.literal(&quot;ai&quot;) }).transform((r) =&gt; ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
-          // Only the queues this code knows: the day `git` jobs exist, one of them must not stop the AI sweep for every org.
-          &quot;select id, org_id, queue from jobs where status = &#x27;queued&#x27; and queue = &#x27;ai&#x27; order by created_at, id limit $1&quot;,
-          [limit],
+          z.object({ id: z.string(), org_id: z.string(), queue: z.enum(QUEUES) }).transform((r) =&gt; ({ queue: r.queue, jobId: r.id, orgId: r.org_id })),
+          // Only the queues this code knows: the day `git` jobs exist, one of them must not stop the sweep for every org.
+          &quot;select id, org_id, queue from jobs where status = &#x27;queued&#x27; and queue = any($2) order by created_at, id limit $1&quot;,
+          [limit, QUEUES],
         ),</code></pre></div></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>With Redis away, the api still answered 201 and the sweep found the run.</strong></p><p>The api's <code>enqueue</code> is a seam (a function passed into <code>buildApp</code>), so the test hands it one that always fails, starts a run, then starts a worker with a 50 ms sweep and watches the run reach <code>succeeded</code>. Most api tests need no Redis at all for the same reason.</p><p class="label">From <span class="mono">apps/worker/src/run.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;with Redis away the api still answers 201, and the worker&#x27;s sweep finds the run that was never enqueued&quot;, async () =&gt; {
   await worker?.close();
   worker = undefined;
@@ -197,22 +212,23 @@ alter table jobs add constraint jobs_error_is_a_name check (error ~ &#x27;^[a-z]
 -- One unfinished AI run per document. Two agents rewriting one tree at once help nobody, and from
 -- E3.2 every run is a paid model call: without this, a loop of POSTs is a bill and a queue that
 -- starves every other org. Per-org limits and the 429 are F31 (E9); this is the floor under them.
-create unique index jobs_one_unfinished_run_per_document on jobs (document_id) where queue = &#x27;ai&#x27; and status in (&#x27;queued&#x27;, &#x27;running&#x27;);</code></pre></div><p><strong>The index is the check.</strong> "Count the unfinished runs, then insert" is two statements, and two requests in the same millisecond both count zero. One <code>INSERT</code> that violates the index is one statement, and Postgres decides who was first. The db layer turns that one constraint into the value <code>"busy"</code>, and the route into a 409.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        createRun: async ({ documentId, instruction, createdBy }) =&gt; {
-          const input = CreateRunBody.parse({ instruction }); // the same contract the reader uses, BEFORE the write
-          if (!orgExists || !isId(documentId) || (createdBy !== undefined &amp;&amp; !isId(createdBy))) return undefined;
-          try {
-            return await one(
-              RunRow,
-              // insert ... select: the row is only created if the document exists in this org.
-              &quot;insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, &#x27;ai&#x27;, $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *&quot;,
-              [orgId, documentId, JSON.stringify(input), createdBy ?? null],
-            );
-          } catch (err) {
-            // The unique index IS the check: &quot;count, then insert&quot; would let two requests at the same moment both in.
-            if (err instanceof Error &amp;&amp; &quot;constraint&quot; in err &amp;&amp; err.constraint === &quot;jobs_one_unfinished_run_per_document&quot;) return &quot;busy&quot;;
-            throw err;
-          }
-        },</code></pre></div><p>Promises made in SQL are proven in SQL. The hardening test inserts rows the application never would, by hand, and expects the database to refuse every one of them:</p><p class="label">From <span class="mono">packages/db/src/hardening.int.test.ts</span></p><div class="scroll"><pre><code>  await expect(insert(&quot;&quot;, &quot;&quot;, theirs.id)).rejects.toMatchObject({ code: &quot;23503&quot; }); // another org&#x27;s document
+create unique index jobs_one_unfinished_run_per_document on jobs (document_id) where queue = &#x27;ai&#x27; and status in (&#x27;queued&#x27;, &#x27;running&#x27;);</code></pre></div><p><strong>The index is the check.</strong> "Count the unfinished runs, then insert" is two statements, and two requests in the same millisecond both count zero. One <code>INSERT</code> that violates the index is one statement, and Postgres decides who was first. The db layer turns that one constraint into the value <code>"busy"</code>, and the route into a 409.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      const insertRun = async (documentId: string, input: z.infer&lt;typeof CreateRunBody&gt;, createdBy: string | undefined, via: Pool | PoolClient): Promise&lt;Run | &quot;busy&quot; | undefined&gt; =&gt; {
+        try {
+          return await one(
+            RunRow,
+            // insert ... select: the row is only created if the document exists in this org. Audited in the same statement.
+            &quot;with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, &#x27;ai&#x27;, $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *), &quot; +
+              `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf(&quot;j.created_by&quot;)}, &#x27;run_started&#x27;, j.document_id, jsonb_build_object(&#x27;run&#x27;, j.id::text, &#x27;instruction&#x27;, j.input -&gt;&gt; &#x27;instruction&#x27;) from j) ` +
+              &quot;select * from j&quot;,
+            [orgId, documentId, JSON.stringify(input), createdBy ?? null],
+            via,
+          );
+        } catch (err) {
+          // The unique index IS the check: &quot;count, then insert&quot; would let two requests at the same moment both in.
+          if (err instanceof Error &amp;&amp; &quot;constraint&quot; in err &amp;&amp; err.constraint === &quot;jobs_one_unfinished_run_per_document&quot;) return &quot;busy&quot;;
+          throw err;
+        }
+      };</code></pre></div><p>Promises made in SQL are proven in SQL. The hardening test inserts rows the application never would, by hand, and expects the database to refuse every one of them:</p><p class="label">From <span class="mono">packages/db/src/hardening.int.test.ts</span></p><div class="scroll"><pre><code>  await expect(insert(&quot;&quot;, &quot;&quot;, theirs.id)).rejects.toMatchObject({ code: &quot;23503&quot; }); // another org&#x27;s document
   await expect(t.rawQuery(&quot;insert into jobs (org_id, document_id, queue, input) values ($1, $2, &#x27;mail&#x27;, &#x27;{}&#x27;)&quot;, [mine.id, doc.id])).rejects.toMatchObject({ code: &quot;23514&quot; });
   await expect(insert(&quot;, status&quot;, &quot;, &#x27;succeeded&#x27;&quot;)).rejects.toMatchObject({ code: &quot;23514&quot; }); // finished, but when?
   await expect(insert(&quot;, status, finished_at&quot;, &quot;, &#x27;failed&#x27;, now()&quot;)).rejects.toMatchObject({ code: &quot;23514&quot; }); // failed, but why?
@@ -220,11 +236,12 @@ create unique index jobs_one_unfinished_run_per_document on jobs (document_id) w
   await expect(insert(&quot;, finished_at&quot;, &quot;, now()&quot;)).rejects.toMatchObject({ code: &quot;23514&quot; }); // queued, yet finished
   for (const reason of [&quot;Has Spaces&quot;, &quot;x&quot;.repeat(65), &quot;9starts_with_digit&quot;, &quot;stack at /repo/x.ts:1&quot;]) {
     await expect(t.rawQuery(&quot;insert into jobs (org_id, document_id, queue, input, status, finished_at, error) values ($1, $2, &#x27;ai&#x27;, &#x27;{}&#x27;, &#x27;failed&#x27;, now(), $3)&quot;, [mine.id, doc.id, reason]), reason).rejects.toMatchObject({ code: &quot;23514&quot; });
-  }</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>CHECK</code> constraints carry the state machine</td><td><code>@PrePersist</code> validation or a state-machine library: both are bypassed by the next code path</td><td>Django <code>CheckConstraint</code>; SQLAlchemy <code>CheckConstraint</code></td></tr><tr><td>status is <code>text</code> with a <code>CHECK</code>, not an enum type</td><td><code>@Enumerated(STRING)</code>; a Postgres enum is painful to extend</td><td><code>models.TextChoices</code></td></tr><tr><td><code>err.constraint === "jobs_one_unfinished_run_per_document"</code></td><td>unwrap <code>DataIntegrityViolationException</code> to the constraint name</td><td><code>psycopg.errors.UniqueViolation</code> and <code>diag.constraint_name</code></td></tr><tr><td>a partial unique index as a business rule</td><td>Flyway can write it; Hibernate cannot express it</td><td><code>UniqueConstraint(condition=Q(...))</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A NUL byte in a failure reason would have left a job <code>running</code> for ever.</strong></p><p><code>finish()</code> writes the reason into <code>error</code>. Postgres refuses a NUL in <code>text</code>, so that <code>UPDATE</code> threw, the row stayed <code>running</code>, and the document was blocked for good (one unfinished run per document). The same path was open to an empty reason, a 300-character one, and a provider's error text with a prompt inside it. The fix is at both boundaries: <code>finish()</code> stores <code>internal</code> for anything that is not a plain name, and the column checks the same regex the contract does. The raw error goes to the log; a name goes to the user.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async finish({ jobId, orgId }, status, reason) {
+  }</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>CHECK</code> constraints carry the state machine</td><td><code>@PrePersist</code> validation or a state-machine library: both are bypassed by the next code path</td><td>Django <code>CheckConstraint</code>; SQLAlchemy <code>CheckConstraint</code></td></tr><tr><td>status is <code>text</code> with a <code>CHECK</code>, not an enum type</td><td><code>@Enumerated(STRING)</code>; a Postgres enum is painful to extend</td><td><code>models.TextChoices</code></td></tr><tr><td><code>err.constraint === "jobs_one_unfinished_run_per_document"</code></td><td>unwrap <code>DataIntegrityViolationException</code> to the constraint name</td><td><code>psycopg.errors.UniqueViolation</code> and <code>diag.constraint_name</code></td></tr><tr><td>a partial unique index as a business rule</td><td>Flyway can write it; Hibernate cannot express it</td><td><code>UniqueConstraint(condition=Q(...))</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A NUL byte in a failure reason would have left a job <code>running</code> for ever.</strong></p><p><code>finish()</code> writes the reason into <code>error</code>. Postgres refuses a NUL in <code>text</code>, so that <code>UPDATE</code> threw, the row stayed <code>running</code>, and the document was blocked for good (one unfinished run per document). The same path was open to an empty reason, a 300-character one, and a provider's error text with a prompt inside it. The fix is at both boundaries: <code>finish()</code> stores <code>internal</code> for anything that is not a plain name, and the column checks the same regex the contract does. The raw error goes to the log; a name goes to the user.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async finish({ jobId, orgId, attempt }, status, reason) {
         if (!isId(jobId) || !isId(orgId)) return;
-        // `status = &#x27;running&#x27;`: a finished job stays finished, whoever reports late.
-        await pool.query(&quot;update jobs set status = $3, error = $4, finished_at = now() where org_id = $1 and id = $2 and status = &#x27;running&#x27;&quot;, [
-          orgId, jobId, status, status === &quot;failed&quot; ? (FailureReason.safeParse(reason).success ? reason : &quot;internal&quot;) : null,
+        // `status = &#x27;running&#x27;`: a finished job stays finished, whoever reports late. `attempts`: a worker that went
+        // silent, was given up on and woke up later does not end the attempt another worker is running now.
+        await pool.query(&quot;update jobs set status = $3, error = $4, finished_at = now() where org_id = $1 and id = $2 and status = &#x27;running&#x27; and ($5::int is null or attempts = $5)&quot;, [
+          orgId, jobId, status, status === &quot;failed&quot; ? (FailureReason.safeParse(reason).success ? reason : &quot;internal&quot;) : null, attempt ?? null,
         ]);
       },</code></pre></div><p class="label">From <span class="mono">apps/worker/src/run.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a reason that is not a plain name never reaches the user, and cannot leave the job running&quot;, async () =&gt; {
   await work(60_000);
@@ -297,13 +314,15 @@ const sentence = (run: Run): string =&gt;
       await Promise.race([live, ended]);
       peer.setPresence({ cursor: null, selection: null }); // no pointer, but it tells the people already here that the AI has arrived
       const instruction = typeof job.input[&quot;instruction&quot;] === &quot;string&quot; ? job.input[&quot;instruction&quot;] : &quot;&quot;;
-      const agent = runAgent({ instruction, tools: buildTools(peer, manifest), signal: abort.signal });
+      // `spent` goes straight to the worker: when `ended` wins below, the running total is all there is to record.
+      const agent = runAgent({ instruction, tools, signal: abort.signal, spent });
       agent.catch(() =&gt; undefined); // if `ended` wins, the aborted agent rejects later, to nobody
       return await Promise.race([agent, ended]); // what the run consumed (F12): the worker records it
     } finally {
       clearInterval(watchdog);
       abort.abort(); // stops the model, and removes the listener on `stopping`
       peer.close(); // an op still waiting is answered `connection_closed`; everything the agent was told succeeded, did
+      await reporting; // before the worker finishes the row: a step written after that would land nowhere (report needs `running`)
     }</code></pre></div><p>Look at what <code>finally</code> does. It clears the watchdog. It aborts, which stops the model <em>and</em> removes the listener on <code>stopping</code> (the <code>signal</code> option of <code>addEventListener</code>: a listener that would otherwise outlive the run). And it closes the peer, which answers any tool call still waiting on an op with <code>connection_closed</code>. Three waits, three ends.</p><p><strong>The shutdown.</strong> BullMQ's polite <code>close()</code> talks to Redis. With Redis gone it waits for a connection that is not coming back: <code>docker stop worker</code> took 9 seconds and exited 1. So the worker asks Redis first and forces the close if there is no answer. Nothing is lost by that: a job's result lives in Postgres, not in BullMQ's bookkeeping.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>    async close() {
       clearInterval(timer);
       await sweeping; // never close the producer under a sweep that is using it
@@ -407,16 +426,22 @@ const nodeId = z.string().describe(&quot;the id of an existing node; the root&#x
     // succeeded and did nothing (measured).
     if (oauthToken === undefined) throw new JobFailure(&quot;token_missing&quot;);
     await ready.catch(() =&gt; { throw new JobFailure(&quot;tools_missing&quot;); });
-    if (stopping.aborted) throw new JobFailure(&quot;worker_stopped&quot;);</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sdk.ts</span></p><div class="scroll"><pre><code>    let apiError: string | undefined;
-    for await (const message of stream) {
-      if (message.type === &quot;system&quot; &amp;&amp; message.subtype === &quot;init&quot;) checkInit(message, tools);
-      if (message.type === &quot;assistant&quot; &amp;&amp; message.error !== undefined) apiError = message.error; // the SDK&#x27;s own classification: no string matching on error text
-      if (message.type !== &quot;result&quot;) continue;
-      if (message.subtype !== &quot;success&quot; || message.is_error) throw new JobFailure(failureReason(message.subtype, apiError), (message.subtype === &quot;success&quot; ? message.result : message.subtype).slice(0, 500));
-      // Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.
-      return usageOf(model, message.usage, message.total_cost_usd);
+    if (stopping.aborted) throw new JobFailure(&quot;worker_stopped&quot;);</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sdk.ts</span></p><div class="scroll"><pre><code>  let apiError: string | undefined;
+  for await (const message of stream) {
+    if (message.type === &quot;system&quot; &amp;&amp; message.subtype === &quot;init&quot;) checkInit(message, tools);
+    if (message.type === &quot;assistant&quot;) {
+      if (message.error !== undefined) apiError = message.error; // the SDK&#x27;s own classification: no string matching on error text
+      const usage = message.message.usage as TokenCounts | undefined;
+      turns.set(message.message.id, usage ?? {});
+      spent(perTurn());
     }
-    throw new JobFailure(signal.aborted ? &quot;cancelled&quot; : &quot;agent_failed&quot;);</code></pre></div></div></section><section id="toolerror"><h2>5 · A tool call is a request that can be refused</h2><p>F11 says: an invalid AI op is rejected like any other and reported back to the agent as a tool error. That sentence hides a design problem. A person watches a canvas: a refused op simply disappears from it, and a quiet message says why. A program cannot watch a canvas. It needs an answer <em>per op</em>: applied, or not, and why.</p><p>So epic 3 added one thing to peer-client and nothing to the room: <code>submit()</code> now returns a promise of the op's outcome, settled when the server has answered.</p><p class="label">From <span class="mono">packages/peer-client/src/replica.ts</span></p><div class="scroll"><pre><code>/**
+    if (message.type !== &quot;result&quot;) continue;
+    const all = fromModelUsage(model, message.modelUsage) ?? perTurn();
+    spent(all);
+    if (message.subtype !== &quot;success&quot; || message.is_error) throw new JobFailure(failureReason(message.subtype, apiError), (message.subtype === &quot;success&quot; ? message.result : message.subtype).slice(0, 500));
+    return all;
+  }
+  throw new JobFailure(signal.aborted ? &quot;cancelled&quot; : &quot;agent_failed&quot;);</code></pre></div></div></section><section id="toolerror"><h2>5 · A tool call is a request that can be refused</h2><p>F11 says: an invalid AI op is rejected like any other and reported back to the agent as a tool error. That sentence hides a design problem. A person watches a canvas: a refused op simply disappears from it, and a quiet message says why. A program cannot watch a canvas. It needs an answer <em>per op</em>: applied, or not, and why.</p><p>So epic 3 added one thing to peer-client and nothing to the room: <code>submit()</code> now returns a promise of the op's outcome, settled when the server has answered.</p><p class="label">From <span class="mono">packages/peer-client/src/replica.ts</span></p><div class="scroll"><pre><code>/**
  * The end of the story for ONE op of ours. A person watches the canvas; a program (the AI worker&#x27;s
  * tool call, F11) needs an answer per op. `seq` is missing when the op was accepted but changed nothing.
  */
@@ -425,6 +450,8 @@ export type Outcome = { ok: true; seq?: number } | { ok: false; reason: Rejectio
       // A peer that has ended accepts nothing: finish() has already reported what was lost, and nothing
       // would ever answer (or even send) this op, so its `settled` would hang for ever.
       if (closedBecause !== undefined) return { ok: false, reason: &quot;not_ready&quot; };
+      // Said at once, not queued behind a room that cannot save: a person sees why, a program (the AI, the git peer) stops or waits.
+      if (readOnly) return { ok: false, reason: &quot;read_only&quot; };
       const waitingBefore = replica.pendingCount;
       const result = replica.local(op);
       if (!result.ok) return result;
@@ -448,11 +475,17 @@ export type Outcome = { ok: true; seq?: number } | { ok: false; reason: Rejectio
     gone: &quot;That node (or parent) does not exist now: call read_tree; someone may have removed it.&quot;,
     document_limit: &quot;The document is full or too deep. Do not add more nodes; finish with what is there.&quot;,
     connection_closed: &quot;The connection to the document is gone. Stop: no further edit can be applied.&quot;,
+    read_only: &quot;The document is read-only: the server cannot save edits right now. Stop and report that the edit could not be made.&quot;,
   }));
 
-  /** One op, start to finish: the replica&#x27;s verdict, then the ROOM&#x27;s. Either refusal is a tool error (F11). */
-  async function apply(op: Op, done: unknown): Promise&lt;ToolResult&gt; {
+  /**
+   * One op, start to finish: the replica&#x27;s verdict, then the ROOM&#x27;s. Either refusal is a tool error (F11).
+   * `replayed`: asked when the replica says the node already exists. True = this step&#x27;s node, added by an
+   * earlier attempt of the same run: the step is done, not refused.
+   */
+  async function apply(op: Op, done: unknown, replayed = (): boolean =&gt; false): Promise&lt;ToolResult&gt; {
     const submitted = peer.submit(op);
+    if (!submitted.ok &amp;&amp; submitted.reason === &quot;duplicate_node&quot; &amp;&amp; replayed()) return ok(done);
     if (!submitted.ok) return refused(submitted.reason, hints.get(submitted.reason));
     const outcome = await submitted.settled;
     return outcome.ok ? ok(done) : refused(outcome.reason, hints.get(outcome.reason));
@@ -503,7 +536,7 @@ export type Outcome = { ok: true; seq?: number } | { ok: false; reason: Rejectio
     expect((await call(tools, &quot;add_node&quot;, { parentId: &quot;root&quot;, component: &quot;Card&quot;, props: {} })).ok).toBe(true);
     await doomed.close();
     toolResult = await call(tools, &quot;add_node&quot;, { parentId: &quot;root&quot;, component: &quot;Card&quot;, props: {} }); // no server will ever answer this one
-    return forever({ instruction: &quot;&quot;, tools, signal });
+    return forever({ instruction: &quot;&quot;, tools, signal, spent: () =&gt; undefined });
   } })(job(), never);
   await expect(running).rejects.toMatchObject({ reason: &quot;sync_unreachable&quot; });
   expect(toolResult).toMatchObject({ ok: false, text: expect.stringContaining(&quot;connection_closed&quot;) as string });
@@ -532,9 +565,8 @@ When the design is done, reply with one short sentence saying what you changed.`
 const Instruction = z.string().trim().min(1).max(4000).regex(/^(?:\P{Cc}|[\n\t])*$/u, &quot;must not contain control characters&quot;);
 export const CreateRunBody = z.strictObject({ instruction: Instruction });</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>no prepared statement for prompts: fence, then lower the ceiling</td><td><code>PreparedStatement</code> made SQL injection a solved problem; nothing like it exists for a model</td><td>the same</td></tr><tr><td>the actor is stamped by the room from the token; a tool cannot claim to be a person</td><td>a principal from the security context, never from the request body</td><td>the same</td></tr><tr><td>text read from the document is data</td><td>render user content: escape it, never <code>eval</code> it</td><td>the same</td></tr></table></div></section><section id="cancel"><h2>7 · Stopping something you do not control</h2><p>A run is a process you do not own: a subprocess talking to a model. Cancel means three parties must agree: the row (what the user is told), the worker (what stops), and the room (the AI leaves, and what it already did stays).</p><p class="label">From <span class="mono">packages/db/migrations/0006_jobs_cancel.sql</span></p><div class="scroll"><pre><code>-- F10: a user asks for a run to stop. A queued run is ended here and now; a running one is ended by
 -- the worker that holds it, which looks at this column once a second (within 3 s, says the spec).
-alter table jobs add column cancel_requested_at timestamptz;</code></pre></div><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  app.post(&quot;/documents/:id/runs/:runId/cancel&quot;, async (c) =&gt; {
-    const doc = await db.getDocumentForMember(c.req.param(&quot;id&quot;), c.var.user.id);
-    const run = doc &amp;&amp; (await db.forOrg(doc.orgId).cancelRun(doc.id, c.req.param(&quot;runId&quot;)));
+alter table jobs add column cancel_requested_at timestamptz;</code></pre></div><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  document.post(&quot;/runs/:runId/cancel&quot;, need(&quot;editor&quot;), async (c) =&gt; {
+    const run = await db.forOrg(c.var.doc.orgId).cancelRun(c.var.doc.id, c.req.param(&quot;runId&quot;));
     return run ? c.json(run) : notFound(c);
   });</code></pre></div><p>The route is one <code>UPDATE</code> that decides by the status it finds. <code>queued</code> becomes <code>cancelled</code> here and now, because no worker holds it. <code>running</code> gets <code>cancel_requested_at</code> and nothing else, because the worker that holds it must end it. A finished run is untouched. A claim at the same moment cannot slip between "is it queued?" and "cancel it", because there is no between.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        cancelRun: async (documentId, id) =&gt; {
           if (!orgExists || !isId(documentId) || !isId(id)) return undefined;
@@ -552,21 +584,23 @@ alter table jobs add column cancel_requested_at timestamptz;</code></pre></div><
           // was tried) the read shares the update&#x27;s snapshot and shows the row as it was before the winner
           // committed. The loser was told &quot;queued&quot; about a run that was already cancelled.
           return hit ?? one(RunRow, &quot;select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = &#x27;ai&#x27;&quot;, [orgId, documentId, id]);
-        },</code></pre></div><p>The worker polls the row once a second into an <code>AbortController</code> and hands the signal to the handler. The signal only asks. "Ends within 3 s" is the handler's promise: <span class='mono'>ai.ts</span> races its work against it (section 3), so the model is aborted at once and the peer leaves. And the worker writes <code>cancelled</code> when the signal fired even if the handler happened to succeed: the user said cancel, and cancel is what they are told.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>    // ponytail: a poll per running job (a handful at most). Redis pub/sub if a second ever matters.
+        },</code></pre></div><p>The worker polls the row once a second into an <code>AbortController</code> and hands the signal to the handler. The signal only asks. "Ends within 3 s" is the handler's promise: <span class='mono'>ai.ts</span> races its work against it (section 3), so the model is aborted at once and the peer leaves. And the worker writes <code>cancelled</code> when the signal fired even if the handler happened to succeed: the user said cancel, and cancel is what they are told.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>    // ponytail: a beat per running job per second (a handful at most). Redis pub/sub if a second ever matters.
     // The signal only ASKS. &quot;Ends within 3 s&quot; is the handler&#x27;s promise (ai.ts races its work against it):
     // a handler for a new queue that ignores the signal holds its slot, and a polite shutdown, for ever.
+    // `lost` aborts it too: this worker went silent for longer than staleMs and the job was given to another.
     const cancel = new AbortController();
     const watch = setInterval(() =&gt; {
-      jobs.cancelRequested(ref).then((asked) =&gt; { if (asked) cancel.abort(); }, () =&gt; undefined); // a failed look is tried again in a second
-    }, cancelPollMs);</code></pre></div><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>      // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
-      await jobs.finish(ref, cancel.signal.aborted ? &quot;cancelled&quot; : &quot;succeeded&quot;);
-    } catch (err) {
-      if (cancel.signal.aborted) {
-        await jobs.finish(ref, &quot;cancelled&quot;);
-        return;
-      }</code></pre></div><p>What already happened stays. An op the room has sequenced is part of history; undoing it would be a new op, visible to everyone, fighting with the edits people made meanwhile. The panel says so in words, and the browser test measures the promise: cancelled within 3 seconds, what was made stays, nothing more arrives, the AI is gone from "Also here".</p><p class="label">From <span class="mono">e2e/ai.spec.ts</span></p><div class="scroll"><pre><code>// e2e:ai-cancel-within-3s
+      jobs.heartbeat(mine).then((state) =&gt; {
+        if (state === &quot;lost&quot; &amp;&amp; !cancel.signal.aborted) log(&quot;warn&quot;, &quot;job taken over after a silence: stopping this attempt&quot;, { jobId: ref.jobId, attempt: job.attempt });
+        if (state !== &quot;running&quot;) cancel.abort();
+      }, () =&gt; undefined); // a failed beat is tried again in a second; staleMs is many of them
+    }, cancelPollMs);</code></pre></div><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>    // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
+    status = cancel.signal.aborted ? &quot;cancelled&quot; : &quot;succeeded&quot;;
+  } catch (err) {
+    if (cancel.signal.aborted) status = &quot;cancelled&quot;;
+    else {</code></pre></div><p>What already happened stays. An op the room has sequenced is part of history; undoing it would be a new op, visible to everyone, fighting with the edits people made meanwhile. The panel says so in words, and the browser test measures the promise: cancelled within 3 seconds, what was made stays, nothing more arrives, the AI is gone from "Also here".</p><p class="label">From <span class="mono">e2e/ai.spec.ts</span></p><div class="scroll"><pre><code>// e2e:ai-cancel-within-3s
 test(&quot;cancel ends the run within 3 s: what the AI had already made stays, nothing more arrives, and the AI leaves&quot;, async ({ page, browser }) =&gt; {
-  const other = await twoBrowsersOnANewDocument(page, browser);
+  const other = await twoBrowsersOnANewDocument(page, browser, user);
   await page.getByLabel(&quot;Ask the AI to change this page&quot;).fill(&quot;a card with 30 buttons&quot;);
   await page.getByRole(&quot;button&quot;, { name: &quot;Ask the AI&quot;, exact: true }).click();
   const made = other.locator(&quot;[data-component=Button]&quot;);
@@ -630,12 +664,39 @@ create index usage_org on usage (org_id, created_at, id);</code></pre></div><p>T
             &quot;select j.org_id, j.id, j.document_id, j.created_by, &#x27;ai_run&#x27;, $3, $4, $5, $6, $7, $8 from jobs j where j.org_id = $1 and j.id = $2 on conflict (job_id) do nothing&quot;,
           [orgId, jobId, a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheWriteTokens, a.costUsd.toFixed(6)],
         );
-      },</code></pre></div><p>Order matters. The worker records usage <em>before</em> it finishes the row. A crash between the two leaves <code>running</code>, an owned ceiling that epic 9 will sweep, rather than losing the spend. And a failed <code>recordUsage</code> is logged, never a failed run: a run that worked is not failed over its bookkeeping.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>      const consumed = await handlers[job.queue](job, cancel.signal); // the row&#x27;s queue, not the message&#x27;s
-      // ponytail: only a run that reached its end reports what it consumed; a cancelled or timed-out run has
-      // spent tokens too, which the SDK only totals in its final message. Per-turn accounting is E9.5.
-      if (consumed) await jobs.recordUsage(ref, consumed).catch((err: unknown) =&gt; log(&quot;error&quot;, `usage not recorded: ${describeError(err)}`, { jobId: ref.jobId })); // a run that worked is not failed over its bookkeeping
-      // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
-      await jobs.finish(ref, cancel.signal.aborted ? &quot;cancelled&quot; : &quot;succeeded&quot;);</code></pre></div><p>Money is <code>numeric(12, 6)</code>, never float: sums of money must not drift. JavaScript has no decimal type, so the driver hands <code>numeric</code> and <code>bigint</code> over as strings, and the db layer converts once, at its boundary, through a regex that says what a number may look like. Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// bigint and numeric arrive as STRINGS from the driver (learning-tests/postgres): converted once, here.
+      },</code></pre></div><p>Order matters. The worker records usage <em>before</em> it finishes the row. A crash between the two leaves <code>running</code>, an owned ceiling that epic 9 will sweep, rather than losing the spend. And a failed <code>recordUsage</code> is logged, never a failed run: a run that worked is not failed over its bookkeeping.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>/**
+ * One claimed attempt, from its handler to its row&#x27;s end. However it ends (succeeded, failed, cancelled), what it
+ * consumed is recorded ONCE, BEFORE the row is finished (a crash between them leaves `running`, an owned ceiling,
+ * rather than losing the spend), and a usage row that cannot be written is logged, never how the run ended.
+ */
+export async function runAttempt({ jobs, key, job, handler, cancel, log: say = log }: {
+  jobs: Pick&lt;ReturnType&lt;Db[&quot;jobStore&quot;]&gt;, &quot;recordUsage&quot; | &quot;finish&quot;&gt;;
+  key: JobKey;
+  job: Job &amp; { attempt: number };
+  handler: NonNullable&lt;Handlers[QueueName]&gt;;
+  cancel: AbortController;
+  log?: Log;
+}): Promise&lt;void&gt; {
+  let consumed: UsageAmount | undefined;
+  let status: &quot;succeeded&quot; | &quot;failed&quot; | &quot;cancelled&quot;;
+  let reason: string | undefined;
+  try {
+    consumed = (await handler(job, cancel.signal, (sofar) =&gt; { consumed = sofar; })) ?? consumed;
+    // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
+    status = cancel.signal.aborted ? &quot;cancelled&quot; : &quot;succeeded&quot;;
+  } catch (err) {
+    if (cancel.signal.aborted) status = &quot;cancelled&quot;;
+    else {
+      // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user
+      // (finish() stores anything that is not a plain name as `internal`).
+      say(&quot;error&quot;, describeError(err), { jobId: key.jobId });
+      status = &quot;failed&quot;;
+      reason = err instanceof JobFailure ? err.reason : &quot;internal&quot;;
+    }
+  }
+  if (consumed) await jobs.recordUsage(key, consumed).catch((err: unknown) =&gt; { say(&quot;error&quot;, `usage not recorded: ${describeError(err)}`, { jobId: key.jobId }); });
+  await (reason === undefined ? jobs.finish(key, status) : jobs.finish(key, status, reason));
+}</code></pre></div><p>Money is <code>numeric(12, 6)</code>, never float: sums of money must not drift. JavaScript has no decimal type, so the driver hands <code>numeric</code> and <code>bigint</code> over as strings, and the db layer converts once, at its boundary, through a regex that says what a number may look like. Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// bigint and numeric arrive as STRINGS from the driver (learning-tests/postgres): converted once, here.
 // Safe because UsageAmount caps what may be WRITTEN at Number.MAX_SAFE_INTEGER, so no stored token count
 // (and no sum of them worth reading) leaves the range a JS number holds exactly.
 const count = z.string().regex(/^\d+$/).transform(Number);
@@ -687,10 +748,12 @@ const scripted: RunAgent = async ({ instruction, tools, signal }) =&gt; {
     await call(&quot;add_node&quot;, { parentId: card, component: &quot;Button&quot;, props: { label: `AI ${String(i)}` } });
   }
   return { model: &quot;scripted&quot;, inputTokens: 1200, outputTokens: 340, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.0123 };
-};</code></pre></div><p>The scripted worker lives in <span class='mono'>e2e/</span>, not in <span class='mono'>apps/worker</span>: a scripted model behind an environment switch in the product would be one wrong variable away from production. And the dev stack's real worker is stopped for the duration, because it shares the jobs table and would take the runs these tests create to the real model.</p><p class="label">From <span class="mono">e2e/setup.ts</span></p><div class="scroll"><pre><code>// The e2e layer shares Postgres and Redis with the dev stack, so the dev stack&#x27;s WORKER would take
-// the runs these tests create (its sweep reads the same `jobs` table) and hand them to the real
-// model. It is stopped for the duration; teardown.ts starts it again.
-// If Playwright is KILLED (kill -9), teardown never runs and the worker stays stopped: `docker compose start worker`.
+};</code></pre></div><p>The scripted worker lives in <span class='mono'>e2e/</span>, not in <span class='mono'>apps/worker</span>: a scripted model behind an environment switch in the product would be one wrong variable away from production. And the dev stack's real worker is stopped for the duration, because it shares the jobs table and would take the runs these tests create to the real model.</p><p class="label">From <span class="mono">e2e/setup.ts</span></p><div class="scroll"><pre><code>// The e2e layer shares Postgres and Redis with the dev stack, so the dev stack&#x27;s WORKERS would take
+// the jobs these tests create (their sweeps read the same `jobs` table): `worker` would hand runs to the
+// real model, and `worker-sandbox` would start e2e&#x27;s previews in the compose pool instead of the e2e
+// worker&#x27;s own; `worker-git` would take e2e&#x27;s pushes and edit through the compose sync; `worker-ship` would ship
+// e2e&#x27;s documents reading the compose sync. All four are stopped for the duration; teardown.ts starts them again.
+// If Playwright is KILLED (kill -9), teardown never runs: `docker compose start worker worker-sandbox worker-git worker-ship`.
 // ponytail: a database and a Redis of its own for e2e is the upgrade.
 /** @public Playwright loads this file by PATH (playwright.config.ts globalSetup), which the dead-code check cannot see. */</code></pre></div><p><strong>Layer 3: one live script, outside the gate.</strong> <span class='mono'>learning-tests/agent-sdk/test.ts</span> ran against a real subscription once. Its FINDINGS header is where the <code>z.record</code> discovery, the <code>isError</code> retry, the AbortController behaviour and the usage fields were measured. It is re-run when the SDK is upgraded, never in <code>make check</code>.</p><p>Three habits from this epic's tests:</p><ul><li><strong>Never wait for exactly n</strong> of something that keeps growing. A poll looks before and after the moment and misses it; use at-least.</li><li><strong>Test an outage with a wire the test can cut.</strong> The compose Redis is shared and cannot be stopped from a test; a TCP proxy in fifteen lines can be.</li><li><strong>Mutation-check every guard.</strong> Two tests in this epic passed with their guard removed (the case study below).</li></ul><p class="label">From <span class="mono">e2e/ai.spec.ts</span></p><div class="scroll"><pre><code>  // One by one: the second button is there while the fourth is not yet.
   const aiButtons = other.locator(&quot;[data-component=Button]&quot;);

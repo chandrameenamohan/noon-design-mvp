@@ -44,9 +44,9 @@ section("truth", "1 · Redis is not the truth",
   "<p>The first decision: <strong>where does a run live?</strong> Not in Redis. A row in the <code>jobs</code> table is the run: its input, its status, its start and end, its reason for failing. The queue carries one thing, a note saying \"go and look at job X\". A note can be lost, delivered twice, delivered late, or forged. None of that can change what a job is or does, because the row decides.</p>",
   cut("packages/queue/src/index.ts", "/**\n * ALL a queue message carries", "export type JobRef"),
   "<p>The api writes the row first and enqueues second. If Redis is away the enqueue throws, and the api still answers 201: the run exists. Failing the request would invite a retry, and a retry would create a second run.</p>",
-  cut("apps/api/src/app.ts", "  // An AI run (F9) is a job: the row in Postgres IS the run", "  app.post(\"/documents/:id/runs/:runId/cancel\""),
+  cut("apps/api/src/app.ts", "  // An AI run (F9) is a job: the row in Postgres IS the run", "  document.post(\"/runs/:runId/cancel\""),
   "<p>The worker's side of the bargain is <code>claim()</code>: one <code>UPDATE</code> that turns <code>queued</code> into <code>running</code> and returns the row. A message that arrives twice finds nothing to claim the second time. A stale message for a finished job finds nothing. A message that names a job of another queue, or of another org, finds nothing: the <code>WHERE</code> checks all three before anything is written.</p>",
-  cut("apps/worker/src/worker.ts", "  async function run(data: unknown): Promise<void> {", "    // ponytail: a poll per running job"),
+  cut("apps/worker/src/worker.ts", "  async function run(data: unknown): Promise<void> {", "    // Everything this attempt writes names it"),
   cut("packages/db/src/index.ts", "      // `queue = $3`: the message says which queue it came from", "      async finish("),
   "<p>Because Redis can be flushed (SPEC §2a measured it: <code>FLUSHALL</code> loses every job) and the api can die between its <code>INSERT</code> and its enqueue, the worker sweeps: every few seconds it asks Postgres \"what is still queued?\" and offers those to the queue again. The <code>jobId</code> makes a second offer harmless: BullMQ drops an add for an id it already holds, and if it did not, <code>claim()</code> would.</p>",
   cut("apps/worker/src/worker.ts", "  // Redis is not the truth (SPEC §2.9)", "  await sweep();"),
@@ -56,7 +56,7 @@ section("truth", "1 · Redis is not the truth",
       ("\"it worked\" is answered by Postgres a moment before BullMQ removes its message", "the same two-clock problem with any broker", "the same")]),
   case("A future <code>git</code> row would have stopped the AI sweep for every org.",
        "<p>The sweep's row parser said <code>queue: z.literal(\"ai\")</code>. Its query said <code>where status = 'queued'</code> and nothing about the queue. Today every job is an AI job, so it passed. The day epic 5 inserts one <code>git</code> job, the parser throws on that row, the sweep fails as a whole, and no org's lost AI runs are ever re-offered again. The fix is one clause: <em>filter in SQL what the parser assumes</em>. The test inserts a <code>git</code> row by hand and expects the sweep to carry on.</p>"
-       + cut("packages/db/src/index.ts", "      queued: (limit) =>", "    }),\n\n    getDocumentForMember")),
+       + cut("packages/db/src/index.ts", "      queued: (limit) =>", "      async report({ queue")),
   case("With Redis away, the api still answered 201 and the sweep found the run.",
        "<p>The api's <code>enqueue</code> is a seam (a function passed into <code>buildApp</code>), so the test hands it one that always fails, starts a run, then starts a worker with a 50 ms sweep and watches the run reach <code>succeeded</code>. Most api tests need no Redis at all for the same reason.</p>"
        + cut("apps/worker/src/run.int.test.ts", "test(\"with Redis away the api still answers 201", "test(\"a job delivered again after it finished")))
@@ -69,7 +69,7 @@ section("states", "2 · A state machine that cannot lie",
   "<p>The review added two more rules. A failure reason is a <em>name</em>: the user reads it and the UI turns it into a sentence, so it can never be an error message, which may carry a path, a request id or a piece of someone's prompt. And one unfinished AI run per document: a partial unique index, which is both the rule and the concurrency check.</p>",
   cut("packages/db/migrations/0005_jobs_review.sql", "-- A failure reason is a NAME"),
   "<p><strong>The index is the check.</strong> \"Count the unfinished runs, then insert\" is two statements, and two requests in the same millisecond both count zero. One <code>INSERT</code> that violates the index is one statement, and Postgres decides who was first. The db layer turns that one constraint into the value <code>\"busy\"</code>, and the route into a 409.</p>",
-  cut("packages/db/src/index.ts", "        createRun: async ({ documentId, instruction, createdBy }) => {", "        cancelRun: async (documentId, id) => {"),
+  cut("packages/db/src/index.ts", "      const insertRun = async (", "      // An id that is not a UUID cannot name anything"),
   "<p>Promises made in SQL are proven in SQL. The hardening test inserts rows the application never would, by hand, and expects the database to refuse every one of them:</p>",
   cut("packages/db/src/hardening.int.test.ts", "  await expect(insert(\"\", \"\", theirs.id)).rejects", "  await insert(\", status, finished_at, error\", \", 'failed', now(), 'token_missing'\");"),
   vs([("<code>CHECK</code> constraints carry the state machine", "<code>@PrePersist</code> validation or a state-machine library: both are bypassed by the next code path", "Django <code>CheckConstraint</code>; SQLAlchemy <code>CheckConstraint</code>"),
@@ -78,7 +78,7 @@ section("states", "2 · A state machine that cannot lie",
       ("a partial unique index as a business rule", "Flyway can write it; Hibernate cannot express it", "<code>UniqueConstraint(condition=Q(...))</code>")]),
   case("A NUL byte in a failure reason would have left a job <code>running</code> for ever.",
        "<p><code>finish()</code> writes the reason into <code>error</code>. Postgres refuses a NUL in <code>text</code>, so that <code>UPDATE</code> threw, the row stayed <code>running</code>, and the document was blocked for good (one unfinished run per document). The same path was open to an empty reason, a 300-character one, and a provider's error text with a prompt inside it. The fix is at both boundaries: <code>finish()</code> stores <code>internal</code> for anything that is not a plain name, and the column checks the same regex the contract does. The raw error goes to the log; a name goes to the user.</p>"
-       + cut("packages/db/src/index.ts", "      async finish({ jobId, orgId }, status, reason) {", "      cancelRequested:")
+       + cut("packages/db/src/index.ts", "      async finish({ jobId, orgId, attempt }, status, reason) {", "      async heartbeat(")
        + cut("apps/worker/src/run.int.test.ts", "test(\"a reason that is not a plain name never reaches the user", "test(\"a document has one unfinished run at a time")),
   "<p>The vocabulary is open at the edge. The worker may name a reason this build of the UI has never heard of (a newer worker, an older tab), so an unknown name gets an honest general sentence, never a blank. It is epic 2's rule about unknown reject reasons, applied to a different wire.</p>",
   cut("apps/web/src/AiPanel.tsx", "// Why a run failed, in the user's words.", "const active ="))
@@ -131,7 +131,7 @@ section("sdk", "4 · Giving a model exactly six abilities",
   case("A missing token looked like a run that succeeded and did nothing.",
        "<p>A missing or expired OAuth token does not make the SDK throw. It answers with a result of subtype <code>success</code>, <code>is_error: true</code>, and a polite \"please log in\" text. Left alone, that is a run that reached <code>succeeded</code> with zero ops, and a user who thinks the AI ignored them. So the handler checks the token itself, before anything is connected or spent, and the runner reads the assistant message's <code>error</code> field for a <em>name</em> (<code>authentication_failed</code>, <code>rate_limit</code>, <code>overloaded</code>...) and never matches error text.</p>"
        + cut("apps/worker/src/ai.ts", "    // Fail FAST and by name, before anything is connected or spent.", "    const userId = job.createdBy;")
-       + cut("apps/worker/src/sdk.ts", "    let apiError: string | undefined;", "  };\n}")))
+       + cut("apps/worker/src/sdk.ts", "  let apiError: string | undefined;", "  throw new JobFailure(signal.aborted ? \"cancelled\" : \"agent_failed\");", include_end=True)))
 
 section("toolerror", "5 · A tool call is a request that can be refused",
   "<p>F11 says: an invalid AI op is rejected like any other and reported back to the agent as a tool error. That sentence hides a design problem. A person watches a canvas: a refused op simply disappears from it, and a quiet message says why. A program cannot watch a canvas. It needs an answer <em>per op</em>: applied, or not, and why.</p>"
@@ -174,12 +174,12 @@ section("injection", "6 · The instruction is data, and so is the document",
 section("cancel", "7 · Stopping something you do not control",
   "<p>A run is a process you do not own: a subprocess talking to a model. Cancel means three parties must agree: the row (what the user is told), the worker (what stops), and the room (the AI leaves, and what it already did stays).</p>",
   cut("packages/db/migrations/0006_jobs_cancel.sql", "-- F10:"),
-  cut("apps/api/src/app.ts", "  app.post(\"/documents/:id/runs/:runId/cancel\"", "  app.get(\"/documents/:id/runs/:runId\""),
+  cut("apps/api/src/app.ts", "  document.post(\"/runs/:runId/cancel\"", "  document.get(\"/runs/:runId\""),
   "<p>The route is one <code>UPDATE</code> that decides by the status it finds. <code>queued</code> becomes <code>cancelled</code> here and now, because no worker holds it. <code>running</code> gets <code>cancel_requested_at</code> and nothing else, because the worker that holds it must end it. A finished run is untouched. A claim at the same moment cannot slip between \"is it queued?\" and \"cancel it\", because there is no between.</p>",
   cut("packages/db/src/index.ts", "        cancelRun: async (documentId, id) => {", "        usage: async (input) => {"),
   "<p>The worker polls the row once a second into an <code>AbortController</code> and hands the signal to the handler. The signal only asks. \"Ends within 3 s\" is the handler's promise: <span class='mono'>ai.ts</span> races its work against it (section 3), so the model is aborted at once and the peer leaves. And the worker writes <code>cancelled</code> when the signal fired even if the handler happened to succeed: the user said cancel, and cancel is what they are told.</p>",
-  cut("apps/worker/src/worker.ts", "    // ponytail: a poll per running job", "    try {"),
-  cut("apps/worker/src/worker.ts", "      // Asked to stop but finished anyway", "      // The raw error may hold a path"),
+  cut("apps/worker/src/worker.ts", "    // ponytail: a beat per running job", "    try {"),
+  cut("apps/worker/src/worker.ts", "    // Asked to stop but finished anyway", "      // The raw error may hold a path"),
   "<p>What already happened stays. An op the room has sequenced is part of history; undoing it would be a new op, visible to everyone, fighting with the edits people made meanwhile. The panel says so in words, and the browser test measures the promise: cancelled within 3 seconds, what was made stays, nothing more arrives, the AI is gone from \"Also here\".</p>",
   cut("e2e/ai.spec.ts", "// e2e:ai-cancel-within-3s", "test(\"a run the provider refuses"),
   vs([("one <code>UPDATE</code> with a <code>CASE</code> on the status it finds", "<code>@Transactional</code> plus optimistic locking (<code>@Version</code>)", "<code>UPDATE ... WHERE status = ...</code> and check <code>rowcount</code>"),
@@ -196,7 +196,7 @@ section("money", "8 · Counting what it cost",
   "<p>The write comes <em>from the job row</em>: <code>insert ... select</code> takes org, document and user from what the row says, never from what the caller says. A key that names the job under another org selects nothing and writes nothing. And <code>on conflict (job_id) do nothing</code>: a message delivered twice bills once.</p>",
   cut("packages/db/src/index.ts", "      async recordUsage({ jobId, orgId }, amount) {", "      queued: (limit) =>"),
   "<p>Order matters. The worker records usage <em>before</em> it finishes the row. A crash between the two leaves <code>running</code>, an owned ceiling that epic 9 will sweep, rather than losing the spend. And a failed <code>recordUsage</code> is logged, never a failed run: a run that worked is not failed over its bookkeeping.</p>",
-  cut("apps/worker/src/worker.ts", "      const consumed = await handlers[job.queue]", "    } catch (err) {"),
+  cut("apps/worker/src/worker.ts", "/**\n * One claimed attempt", "export async function startWorker"),
   "<p>Money is <code>numeric(12, 6)</code>, never float: sums of money must not drift. JavaScript has no decimal type, so the driver hands <code>numeric</code> and <code>bigint</code> over as strings, and the db layer converts once, at its boundary, through a regex that says what a number may look like. Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.</p>",
   cut("packages/db/src/index.ts", "// bigint and numeric arrive as STRINGS from the driver", "const UsageRow ="),
   cut("apps/worker/src/sdk.ts", "/** The SDK's final usage, in our words.", "/**\n * Why a run failed"),
@@ -207,7 +207,7 @@ section("money", "8 · Counting what it cost",
   case("\"A contract at least as strict as the strictest system behind it\" has two boundaries.",
        "<p>The contract was looser than <code>numeric(12,6)</code>: a mad cost from the provider (<code>1e21</code>) passed Zod, and Postgres threw the whole row out. The run happened, the bookkeeping vanished, and only stderr said so. Now <code>MAX_COST_USD</code> is the column's largest value, and <code>usageOf</code> clamps magnitude as well as NaN and negatives, so what the converter hands the store is always storable.</p>"
        "<p>And the <em>environment</em> was looser than the contract: <code>AI_MODEL</code> is written into every usage row, where the contract caps it at 100 characters. A gateway alias or an inference-profile ARN is longer than that. Set one, and every usage row would have been lost, run after run, with only stderr to say so. Now the worker refuses to start. Check both directions: the contract against the store, and the inputs against the contract.</p>"
-       + cut("packages/contracts/src/index.ts", "// The upper bound is not taste", "/** `runId` and `documentId` are null")
+       + cut("packages/contracts/src/index.ts", "// The upper bound is not taste", "/** Who ran it: null once that user is deleted.")
        + cut("apps/worker/src/config.ts", "  // Written into every usage row, where the contract caps it", "  ANTHROPIC_API_KEY:")),
   note("Two things this design knows it does not do, and says so where the next epic will read it: a run that never reaches its end (cancelled, timed out, over budget) records nothing, so the most expensive run possible records zero; and the SDK's tokens and its <code>total_cost_usd</code> come from different scopes, so a row can show a cost its tokens do not explain. Both are named on E9.5."))
 
