@@ -9,5 +9,8 @@ export default function teardown(): void {
   const sql = "delete from orgs where id in (select m.org_id from memberships m join users u on u.id = m.user_id where u.email like 'e2e-%@example.com'); delete from users where email like 'e2e-%@example.com'";
   const path = `${process.env["PATH"] ?? ""}:/Applications/Docker.app/Contents/Resources/bin`;
   execFileSync("docker", ["compose", "exec", "-T", "postgres", "psql", "-U", "noon", "-d", "noon", "-qc", sql], { env: { ...process.env, PATH: path }, stdio: "ignore" });
-  execFileSync("docker", ["compose", "start", "worker"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped it
+  // The e2e sandbox worker's containers (pool noon-e2e, playwright.config.ts): their documents are gone now.
+  const leftovers = execFileSync("docker", ["ps", "--all", "--quiet", "--filter", "label=noon.sandbox=noon-e2e"], { env: { ...process.env, PATH: path }, encoding: "utf8" }).split("\n").filter(Boolean);
+  if (leftovers.length > 0) execFileSync("docker", ["rm", "--force", ...leftovers], { env: { ...process.env, PATH: path }, stdio: "ignore" });
+  execFileSync("docker", ["compose", "start", "worker", "worker-sandbox"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped them
 }

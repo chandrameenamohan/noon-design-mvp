@@ -5,6 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
 // Only Postgres is shared with the dev stack (./init.sh starts it). The secrets come from .env,
 // read by the shell (`. ./.env`) so that they never pass through this file or a log.
 const PORTS = { web: 5174, api: 3100, sync: 3101, worker: 3102 };
+const DOCKER_BIN = "/Applications/Docker.app/Contents/Resources/bin";
 const fromEnv = (command: string): string =>
   `sh -c 'set -a; . ./.env; set +a; export NODE_ENV=development DATABASE_URL="postgres://noon_app:$APP_DB_PASSWORD@localhost:\${PG_PORT:-5432}/noon" REDIS_URL="redis://:$REDIS_PASSWORD@localhost:\${REDIS_PORT:-6380}"; ${command}'`;
 
@@ -20,6 +21,9 @@ export default defineConfig({
     { command: fromEnv(`PORT=${String(PORTS.sync)} node apps/sync/src/main.ts`), url: `http://localhost:${String(PORTS.sync)}/health`, reuseExistingServer: false },
     // The scripted worker has no port of its own; it answers on one only to tell Playwright it is up.
     { command: fromEnv(`SYNC_URL=ws://localhost:${String(PORTS.sync)} READY_PORT=${String(PORTS.worker)} node e2e/stub-worker.ts`), url: `http://localhost:${String(PORTS.worker)}`, reuseExistingServer: false },
+    // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
+    // stack's sandboxes, nor theirs its. It prints this line once it is draining its queue.
+    { command: fromEnv(`PATH="$PATH:${DOCKER_BIN}" WORKER_QUEUE=sandbox SANDBOX_POOL=noon-e2e DOCKER=${DOCKER_BIN}/docker SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },
     { command: `API_TARGET=http://localhost:${String(PORTS.api)} pnpm --filter @noon/web exec vite --port ${String(PORTS.web)} --strictPort`, url: `http://localhost:${String(PORTS.web)}`, reuseExistingServer: false },
   ],
 });

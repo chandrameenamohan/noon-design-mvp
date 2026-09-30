@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -276,6 +277,64 @@ test("a pushed page hot-updates in the browser within 3 s: no reload, and what t
     await browser.close();
   }
 }, 90_000);
+
+test("the preview renders inside the canvas's sandboxed iframe (an opaque origin), and no other site may read the dev server", async () => {
+  const id = newDocument();
+  const sandbox = await startSandbox(id, options);
+  await pushPage(id, page("framed"), options);
+  const url = previewUrl(sandbox.url, id);
+  // Vite answers module requests only to origins its cors allows. The frame's origin is "null"
+  // (sandbox without allow-same-origin): allowed. A real site's origin: not echoed, so its reads fail.
+  const allowed = async (origin: string): Promise<string | null> => (await fetch(new URL("/noon-preview/main.tsx", sandbox.url), { headers: { origin } })).headers.get("access-control-allow-origin");
+  expect(await allowed("null")).toBe("null");
+  expect(await allowed("http://evil.example")).not.toBe("http://evil.example");
+  expect(await allowed("http://localhost:5173")).not.toBe("http://localhost:5173"); // Vite's default allowed any localhost
+
+  const canvas = createHttpServer((_, res) => { res.setHeader("content-type", "text/html"); res.end(`<iframe title="preview" sandbox="allow-scripts" src="${url}"></iframe>`); });
+  await new Promise<void>((resolve) => canvas.listen(0, "127.0.0.1", resolve));
+  const browser = await chromium.launch();
+  try {
+    const tab = await browser.newPage();
+    const port = (canvas.address() as { port: number }).port;
+    await tab.goto(`http://localhost:${String(port)}/`); // another origin than the preview's, as the canvas is
+    await tab.frameLocator("iframe[title=preview]").getByText("framed").waitFor({ timeout: 30_000 });
+  } finally {
+    await browser.close();
+    canvas.close();
+  }
+}, 90_000);
+
+/**
+ * The customer's repo owns its vite.config, and ours is wrapped around it. These are the ways a config
+ * could hand the dev server's source to any site (found by the E4.3 verifier, which broke the first
+ * version with the first two): the opaque-origin rule must survive all of them.
+ */
+const HOSTILE_CONFIGS = {
+  "server.headers": `export default { server: { host: true, headers: { "Access-Control-Allow-Origin": "*" } } };`,
+  "a plugin that echoes the origin": `export default { server: { host: true }, plugins: [{ name: "x", configureServer(s) { s.middlewares.use((req, res, next) => { res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*"); next(); }); } }] };`,
+  "a plugin that serves the file itself with writeHead": `export default { server: { host: true }, plugins: [{ name: "x", configureServer(s) { s.middlewares.use((req, res, next) => { if (!req.url.includes("main.tsx")) return next(); res.writeHead(200, { "content-type": "text/javascript", "access-control-allow-origin": "*" }); res.end("export default 1"); }); } }] };`,
+  "cors wide open": `export default { server: { host: true, cors: { origin: "*" } } };`,
+};
+
+test.each(Object.entries(HOSTILE_CONFIGS))("a customer vite.config cannot open the preview to other sites: %s", async (_name, config) => {
+  const id = newDocument();
+  const sandbox = await startSandbox(id, options);
+  await pushPage(id, page("guarded"), options);
+  const onHost = join(mkdtempSync(join(tmpdir(), "hostile-config-")), "vite.config.ts");
+  writeFileSync(onHost, config);
+  await docker("cp", onHost, `${sandboxName(id)}:/app/vite.config.ts`);
+  await docker("restart", sandboxName(id));
+  const answers = async (origin: string): Promise<string | null> => {
+    for (let i = 0; i < 100; i++) {
+      const res = await fetch(new URL("/noon-preview/main.tsx", sandbox.url), { headers: { origin } }).catch(() => undefined);
+      if (res?.ok) return res.headers.get("access-control-allow-origin");
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error("the dev server never came back after the restart");
+  };
+  expect(await answers("http://evil.example")).toBe("null");
+  expect(await answers("null")).toBe("null");
+}, 120_000);
 
 test("a sandbox that was never started is simply not running: an answer, not an error", async () => {
   expect(await isRunning(randomUUID(), options)).toBe(false);

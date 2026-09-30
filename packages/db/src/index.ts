@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, PreviewOutput, Run, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -51,8 +51,8 @@ type JobStore = {
   cancelRequested(key: JobKey): Promise<boolean>;
   /** What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per job. */
   recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
-  /** What a RUNNING job has to say before it ends (a sandbox's preview URL). Validated; a job that is not running is left as it is. */
-  report(key: JobKey, output: PreviewOutput): Promise<void>;
+  /** What a RUNNING job has to say before it ends (a sandbox's preview URL; null while it restarts). Validated; a job that is not running is left as it is. */
+  report(key: JobKey, output: PreviewOutput | null): Promise<void>;
   /**
    * Documents whose sandbox must stay, across ALL orgs: a sandbox job queued or running, or finished
    * less than `graceMs` ago (a quick reopen finds it warm). The reaper removes every other sandbox.
@@ -74,6 +74,15 @@ type OrgScope = {
   /** Undefined when the document does not exist in THIS org; "busy" when it already has an unfinished run. The run starts as `queued`. */
   createRun(input: { documentId: string; instruction: string; createdBy: string | undefined }): Promise<Run | "busy" | undefined>;
   getRun(documentId: string, id: string): Promise<Run | undefined>;
+  /**
+   * Makes sure the document has a preview on its way: a queued sandbox job, unless one is already
+   * unfinished (the unique index decides; never two). `created` is the new job's key, to enqueue.
+   * Undefined when the document does not exist in THIS org; "busy" when the org already holds its
+   * share of sandboxes.
+   */
+  openPreview(input: { documentId: string; createdBy: string | undefined }): Promise<{ preview: Preview; created: JobKey | undefined } | "busy" | undefined>;
+  /** The document's preview as it now is. Undefined when the document does not exist in THIS org. */
+  getPreview(documentId: string): Promise<Preview | undefined>;
   /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
   cancelRun(documentId: string, id: string): Promise<Run | undefined>;
   /** Everything this org has consumed: totals over all of it, and one page of the records. Undefined = a bad cursor. */
@@ -111,6 +120,21 @@ const UsageTotalsRow = z
 const JobRow = z
   .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.enum(QUEUES), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
   .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
+
+// The URL only counts while the job runs: a finished job's last address may belong to someone else by now.
+// Parsed with the canvas's own contract; a row it refuses (not loopback, say) reads as "no URL", never a 500.
+const PreviewRow = z.object({ status: z.string(), output: z.unknown() }).transform((r): Preview => {
+  const url = r.status === "running" ? Preview.shape.url.safeParse((r.output as { url?: unknown } | null)?.url) : undefined;
+  return Preview.parse({ status: r.status, url: url?.success ? url.data : null });
+});
+/**
+ * After a preview FAILED (or was cancelled), this long before another may be started for that document.
+ * The canvas asks again every second while there is no preview; without this, a sandbox that cannot start
+ * (no image, no daemon) grew one jobs row per second per open canvas. A client cannot walk around it.
+ */
+const PREVIEW_RETRY_MS = 10_000;
+/** Sandboxes one org may hold at once (each is 1 CPU and 1 GiB while its document is open): the rest of the pool stays for everyone else. */
+const MAX_PREVIEWS_PER_ORG = 4;
 
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 const isId = (x: string): boolean => Id.safeParse(x).success;
@@ -310,7 +334,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           [limit, QUEUES],
         ),
       async report({ jobId, orgId }, output) {
-        const valid = PreviewOutput.parse(output); // the contract the reader will use, BEFORE the write
+        const valid = PreviewOutput.nullable().parse(output); // the contract the reader will use, BEFORE the write
         if (!isId(jobId) || !isId(orgId)) return;
         await pool.query("update jobs set output = $3 where org_id = $1 and id = $2 and status = 'running'", [orgId, jobId, JSON.stringify(valid)]);
       },
@@ -328,6 +352,19 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         : undefined,
 
     forOrg(orgId) {
+      /** A second statement, after any write: it reads the rows as they now are (a CTE would share the write's snapshot). */
+      const coolingDown = async (documentId: string): Promise<boolean> =>
+        (await one(
+          z.object({ cooling: z.boolean() }),
+          "select finished_at > now() - make_interval(secs => $3::float8 / 1000) as cooling from jobs " +
+            "where org_id = $1 and document_id = $2 and queue = 'sandbox' and status in ('failed', 'cancelled') order by finished_at desc limit 1",
+          [orgId, documentId, PREVIEW_RETRY_MS],
+        ))?.cooling === true;
+      const readPreview = async (documentId: string): Promise<Preview | undefined> => {
+        const job = await one(PreviewRow, "select status, output from jobs where org_id = $1 and document_id = $2 and queue = 'sandbox' order by created_at desc, id desc limit 1", [orgId, documentId]);
+        if (job) return job;
+        return (await one(z.object({ id: z.string() }), "select id from documents where org_id = $1 and id = $2", [orgId, documentId])) ? { status: "none", url: null } : undefined;
+      };
       // An id that is not a UUID cannot name anything, so it means "not found" rather than a
       // Postgres 22P02 error (which would surface as a 500 and echo the caller's input).
       const orgExists = isId(orgId);
@@ -403,6 +440,31 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           );
           return { totals, ...items };
         },
+        openPreview: async ({ documentId, createdBy }) => {
+          if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
+          // `on conflict do nothing`: the document's unfinished job, if any, is the answer as it is.
+          // ponytail: the per-org cap is a count inside the insert, so two opens at the same instant
+          // can pass it together (a sandbox or two over, never unbounded). An advisory lock per org
+          // makes it exact, if fairness ever has to be.
+          const inserted = await rows(
+            z.object({ id: z.string() }),
+            "insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'sandbox', '{}', $3 from documents d " +
+              "where d.org_id = $1 and d.id = $2 and (select count(*) from jobs where org_id = $1 and queue = 'sandbox' and status in ('queued', 'running') and document_id <> $2) < $4 " +
+              // Not again straight after a failure: the canvas asks once a second, and a sandbox that cannot
+              // start at all would otherwise leave one row per second behind it.
+              "and not exists (select 1 from jobs where org_id = $1 and document_id = $2 and queue = 'sandbox' " +
+              "and status in ('failed', 'cancelled') and finished_at > now() - make_interval(secs => $5::float8 / 1000)) " +
+              "on conflict do nothing returning id",
+            [orgId, documentId, createdBy ?? null, MAX_PREVIEWS_PER_ORG, PREVIEW_RETRY_MS],
+          );
+          const preview = await readPreview(documentId);
+          if (!preview) return undefined;
+          const created = inserted[0] ? { queue: "sandbox" as const, jobId: inserted[0].id, orgId } : undefined;
+          // Nothing inserted, nothing unfinished, and not merely waiting out the retry pause: the cap said no.
+          if (!created && preview.status !== "queued" && preview.status !== "running" && !(await coolingDown(documentId))) return "busy";
+          return { preview, created };
+        },
+        getPreview: async (documentId) => (orgExists && isId(documentId) ? readPreview(documentId) : undefined),
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)
             ? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id])

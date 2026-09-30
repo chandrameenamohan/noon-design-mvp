@@ -57,6 +57,53 @@ if (!root) throw new Error("the preview is missing #root");
 if (new URLSearchParams(location.search).get("doc") === "@DOC@") createRoot(root).render(<StrictMode><Page /></StrictMode>);
 else root.textContent = "This preview belongs to another document. Reload the canvas.";
 EOF
+# The dev server's config: OURS, wrapped around the customer's (which may say anything). The port and
+# host the worker depends on, and cors. The canvas frames the preview with sandbox="allow-scripts" and
+# no allow-same-origin, so the page's origin is "null" and every module request carries `Origin: null`;
+# Vite's default (any localhost origin) refuses those and the page never renders (measured). Allowing
+# exactly "null", and no real origin, is also STRICTER for real sites: another local dev server can no
+# longer read this one's source. ponytail: any site's opaque-origin frame passes too, until the
+# per-document hostname proxy (noon-9gz) puts an unguessable name in front of it.
+# The customer's config is wrapped, not trusted: see the plugin below for what that takes.
+COPY <<'EOF' /home/node/preview/vite.config.mjs
+import { loadConfigFromFile } from "vite";
+
+// The ONE origin that may read this dev server: the canvas's iframe, which has no origin of its own.
+const ALLOWED = "null";
+const IS_CORS_HEADER = /^access-control-/iu;
+
+/**
+ * Overriding `server.cors` is not enough: the customer's config can hand its source to any site through
+ * `server.headers`, or through a plugin middleware that sets the header itself (both measured by the E4.3
+ * verifier, which broke the first version of this file). Vite's own cors, forced above, writes the header
+ * for every request; this refuses every LATER attempt to change it, from a plugin or from `server.headers`.
+ * Two more defences were measured and DELETED because nothing could make them matter on Node 24: writing
+ * the header ourselves first (Vite's cors, with a fixed origin, already answers every request), and
+ * stripping the header from a `writeHead` headers object (a value set with `setHeader` wins over one passed
+ * to `writeHead`, even when a plugin serves the file itself - measured, and a mutant survived both).
+ */
+const lockTheOrigin = () => ({
+  name: "noon-preview-cors",
+  enforce: "pre",
+  configureServer(server) {
+    server.middlewares.use((_req, res, next) => {
+      const set = res.setHeader.bind(res);
+      res.setHeader = (name, value) => (IS_CORS_HEADER.test(String(name)) ? res : set(name, value));
+      res.appendHeader = res.setHeader;
+      next();
+    });
+  },
+});
+
+export default async (env) => {
+  const own = (await loadConfigFromFile(env, undefined, process.cwd()))?.config ?? {};
+  return {
+    ...own,
+    plugins: [lockTheOrigin(), ...(own.plugins ?? [])],
+    server: { ...own.server, host: true, port: 5173, strictPort: true, cors: { origin: ALLOWED } },
+  };
+};
+EOF
 COPY <<'EOF' /home/node/preview/placeholder.tsx
 export function Page() {
   return null;
@@ -73,10 +120,10 @@ if ! git rev-parse --quiet --verify HEAD >/dev/null 2>&1; then
   git checkout --quiet --force -B "$BRANCH" origin/main
 fi
 mkdir -p noon-preview
-cp /home/node/preview/index.html noon-preview/index.html
+cp /home/node/preview/index.html /home/node/preview/vite.config.mjs noon-preview/
 sed -e "s|@PAGE@|../$PAGE|" -e "s|@DOC@|${BRANCH#noon/}|" /home/node/preview/main.tsx > noon-preview/main.tsx
 [ -f "$PAGE" ] || cp /home/node/preview/placeholder.tsx "$PAGE"
 grep -qx 'noon-preview/' .git/info/exclude || echo 'noon-preview/' >> .git/info/exclude
-exec pnpm exec vite
+exec pnpm exec vite --config noon-preview/vite.config.mjs
 EOF
 CMD ["/home/node/start.sh"]

@@ -1,4 +1,4 @@
-import { Document, Org, Run, SessionResponse, Workspace } from "@noon/contracts";
+import { Document, Org, Preview, Run, SessionResponse, Workspace } from "@noon/contracts";
 import type { z } from "zod";
 
 // Until epic 8 the api takes the caller's identity from a header, in development only (SPEC §2.16).
@@ -62,4 +62,21 @@ export async function readRun(run: Run): Promise<Run> {
   const res = await fetch(`/api/documents/${run.documentId}/runs/${run.id}`, { headers: { "x-dev-user": devUser } });
   if (!res.ok) throw new Error(`GET run answered ${String(res.status)}`);
   return Run.parse(await res.json());
+}
+
+// --- The preview (F15) -----------------------------------------------------------------------------
+/** Makes sure the document's preview is on its way, and says how it is. "busy": the org already holds its share of sandboxes (409). */
+export async function openPreview(documentId: string): Promise<Preview | "busy"> {
+  try {
+    return await post(`/documents/${documentId}/preview`, Preview);
+  } catch (problem) {
+    if (problem instanceof Refused && problem.status === 409) return "busy";
+    throw problem;
+  }
+}
+/** Where the preview answers NOW. Parsed with the contract: only a loopback http(s) URL ever reaches an iframe. */
+export async function readPreview(documentId: string): Promise<Preview> {
+  const res = await fetch(`/api/documents/${documentId}/preview`, { headers: { "x-dev-user": devUser } });
+  if (!res.ok) throw new Error(`GET preview answered ${String(res.status)}`);
+  return Preview.parse(await res.json());
 }

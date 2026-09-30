@@ -12,6 +12,7 @@ import {
   type ErrorBody,
   type HealthResponse,
   type Org,
+  type Preview,
   type SessionResponse,
   type User,
 } from "@noon/contracts";
@@ -216,6 +217,28 @@ export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ V
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     const run = doc && (await db.forOrg(doc.orgId).getRun(doc.id, c.req.param("runId")));
     return run ? c.json(run) : notFound(c);
+  });
+
+  // F15: the document's running page. The canvas POSTs to make sure a preview is on its way and GETs,
+  // once a second, where it answers: the address can change when a sandbox restarts, so it is never kept.
+  // MEMBERSHIP ONLY, like runs. The job row IS the preview; the queue only tells a worker to look.
+  app.post("/documents/:id/preview", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const opened = doc && (await db.forOrg(doc.orgId).openPreview({ documentId: doc.id, createdBy: c.var.user.id }));
+    if (!opened) return notFound(c);
+    if (opened === "busy") return fail(c, 409, "preview_limit");
+    if (opened.created) {
+      // Left to the sweep if Redis is away, as a run is: the job exists, and it will be found.
+      await enqueue(opened.created).catch((err: unknown) => {
+        process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
+      });
+    }
+    return c.json(opened.preview satisfies Preview, opened.created ? 201 : 200);
+  });
+  app.get("/documents/:id/preview", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const preview = doc && (await db.forOrg(doc.orgId).getPreview(doc.id));
+    return preview ? c.json(preview satisfies Preview) : notFound(c);
   });
 
   app.notFound(notFound);

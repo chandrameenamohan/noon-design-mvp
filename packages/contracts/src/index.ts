@@ -62,6 +62,19 @@ export type Run = z.infer<typeof Run>;
  */
 export const PreviewOutput = z.strictObject({ url: z.url({ protocol: /^https?$/u }) });
 export type PreviewOutput = z.infer<typeof PreviewOutput>;
+/**
+ * A document's preview as the canvas reads it (F15): its newest sandbox job. `none` = never opened.
+ * `url` is set only while the job runs and the sandbox answers; null while it (re)starts = "rebuilding".
+ * Loopback only, on the way in to the canvas too: until the per-document proxy (noon-9gz) every
+ * preview is http://127.0.0.1:<port>, and a row that said otherwise must never frame another site.
+ */
+export const Preview = z.strictObject({
+  status: z.enum(["none", ...RunStatus.options]),
+  // `URL.canParse` first: Zod runs a refine even when the format check before it failed, and a
+  // `new URL()` that throws inside a refine makes safeParse THROW. A stored row must never be a 500.
+  url: PreviewOutput.shape.url.refine((url) => URL.canParse(url) && new URL(url).hostname === "127.0.0.1", "a preview answers on 127.0.0.1").nullable(),
+});
+export type Preview = z.infer<typeof Preview>;
 
 // --- Usage (F12) -----------------------------------------------------------------------------------
 // The upper bound is not taste: it is what the system BEHIND this schema can hold. Cost is a
@@ -86,7 +99,7 @@ export type UsageReport = z.infer<typeof UsageReport>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "not_ready", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "preview_limit", "not_ready", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;

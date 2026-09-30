@@ -29,7 +29,7 @@ afterAll(async () => {
 });
 
 function handler(overrides: Partial<Parameters<typeof createPreviewHandler>[0]> = {}) {
-  const urls: string[] = [];
+  const urls: (string | null)[] = [];
   const handle = createPreviewHandler({
     sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url },
     manifest,
@@ -72,7 +72,7 @@ test("the preview follows the CONFIRMED document into the sandbox within 3 s, re
   await eventually(() => Promise.resolve(urls.length > 0), 30_000);
   // The document is named IN the URL: a stale iframe that reconnects to a port another document took
   // meanwhile asks that document's entry for the wrong page, and is refused (sandbox.int.test.ts).
-  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:\\d+/${PREVIEW_PATH}\\?doc=${run.documentId}$`, "u"));
+  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:\\d+/${PREVIEW_PATH}\\?doc=${run.documentId}&started=\\d+$`, "u"));
   expect((await fetch(urls[0] ?? "")).status).toBe(200);
 
   human.send(add("s", "root", "Stack"));
@@ -91,7 +91,18 @@ test("the preview follows the CONFIRMED document into the sandbox within 3 s, re
 test("a sandbox that dies is started again and given the current page, and the new URL is reported", async () => {
   const run = job();
   const human = await person(run.documentId);
-  const { handle, urls } = handler({ aliveEveryMs: 200 });
+  const urls: (string | null)[] = [];
+  const pageWhenAnnounced: string[] = [];
+  // Read the page AT THE MOMENT the address is announced, but only for the restart: sampling the first
+  // announce too would race this test's own `docker rm --force` (an exec into a container being removed).
+  let sampling = false;
+  const { handle } = handler({
+    aliveEveryMs: 200,
+    reportUrl: async (_job, url) => {
+      if (url !== null && sampling) pageWhenAnnounced.push(await pageIn(run.documentId));
+      urls.push(url);
+    },
+  });
   const stop = new AbortController();
   const ended = handle(run, stop.signal);
   try {
@@ -99,10 +110,18 @@ test("a sandbox that dies is started again and given the current page, and the n
     await eventually(async () => (await pageIn(run.documentId)).includes("before the crash"), 30_000);
     const reported = urls.length;
 
+    sampling = true;
     await docker("rm", "--force", sandboxName(run.documentId));
     // Back, with the document's page (not the placeholder a fresh clone starts with), and a URL again.
     await eventually(async () => (await pageIn(run.documentId)).includes("before the crash"), 15_000);
-    expect(urls.length).toBeGreaterThan(reported);
+    // In between, the URL was withdrawn: the canvas says "rebuilding" instead of framing a dead port.
+    expect(urls.slice(reported)).toEqual([null, expect.stringMatching(/^http:\/\/127\.0\.0\.1:/u)]);
+    // A NEW address even on the same port: Vite cannot reconnect by itself inside the canvas's
+    // opaque-origin frame (its client's SharedWorker is refused), so the canvas must load it afresh.
+    expect(urls.at(-1)).not.toBe(urls[reported - 1]);
+    // Announced only once the new container HOLDS the document: a frame that loaded the fresh clone's
+    // empty page first could miss the push (a watcher still scanning), and stay empty for good.
+    expect(pageWhenAnnounced.at(-1)).toContain("before the crash");
     expect((await fetch(urls.at(-1) ?? "")).status).toBe(200);
   } finally {
     stop.abort();

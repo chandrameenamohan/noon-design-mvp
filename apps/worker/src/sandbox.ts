@@ -54,9 +54,9 @@ export const pagePath = (documentId: string): string => `src/pages/noon-${docume
 export const PREVIEW_PATH = "noon-preview/";
 /**
  * The address the canvas frames. It NAMES the document, and the sandbox's entry renders nothing for
- * another one: a stale iframe whose Vite client reconnects to a port another document's sandbox took
- * meanwhile must not show that document (possibly another org's). ponytail: until noon-9gz gives each
- * document its own hostname.
+ * another one: a page left open on a port that another document's sandbox took meanwhile (a tab opened
+ * on the preview directly, whose Vite client reloads when the port answers again) must not show that
+ * document, possibly another org's. ponytail: until noon-9gz gives each document its own hostname.
  */
 export const previewUrl = (sandboxUrl: string, documentId: string): string => new URL(`${PREVIEW_PATH}?doc=${documentId}`, sandboxUrl).href;
 

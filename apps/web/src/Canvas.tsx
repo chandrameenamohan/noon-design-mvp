@@ -5,6 +5,7 @@ import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
 import { AiPanel } from "./AiPanel.tsx";
 import { Inspector } from "./Inspector.tsx";
+import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { usePeer } from "./usePeer.ts";
 
@@ -137,6 +138,7 @@ export function Canvas({ documentId }: { documentId: string }) {
         </section>
         <Inspector key={node.id} doc={doc} node={node} label={labels.get(node.id) ?? node.component} component={componentOf(node.component)} containers={containers} submit={submit} />
       </div>
+      <Preview documentId={documentId} />
     </main>
   );
 }

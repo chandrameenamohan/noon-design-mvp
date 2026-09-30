@@ -44,7 +44,7 @@ function sandboxHandlers(): Handlers {
   return {
     sandbox: createPreviewHandler({
       sessions: config.sessions, manifest, sandbox, stopping: stopping.signal, stillMember,
-      reportUrl: (job, url) => db.jobStore().report({ queue: "sandbox", jobId: job.id, orgId: job.orgId }, { url }),
+      reportUrl: (job, url) => db.jobStore().report({ queue: "sandbox", jobId: job.id, orgId: job.orgId }, url === null ? null : { url }),
     }),
   };
 }

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll } from "vitest";
+import type { JobRef } from "@noon/queue";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { devHeaderIdentity } from "./identity.ts";
 import { startServer, type RunningServer } from "./server.ts";
@@ -14,12 +15,12 @@ type Ctx = {
   fetch(path: string, init?: RequestInit): Promise<Response>;
 };
 
-export function useTestServer(): Ctx {
+export function useTestServer({ enqueue = () => Promise.resolve() }: { enqueue?: (ref: JobRef) => Promise<void> } = {}): Ctx {
   let db: TestDb | undefined;
   let server: RunningServer | undefined;
   beforeAll(async () => {
     db = await createTestDb();
-    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // runs are tested with a real queue in apps/worker
+    server = await startServer({ port: 0, db: db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, enqueue }); // runs are tested with a real queue in apps/worker
   });
   afterAll(async () => {
     await server?.close();

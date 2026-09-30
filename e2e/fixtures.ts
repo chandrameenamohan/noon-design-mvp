@@ -17,7 +17,7 @@ export const test = base.extend<{ cleanPage: undefined; allowedConsole: RegExp |
       page.on("console", (msg) => {
         if ((msg.type() === "error" || msg.type() === "warning") && !allowedConsole?.test(msg.text())) problems.push(`${msg.type()}: ${msg.text()}`);
       });
-      page.on("pageerror", (err) => problems.push(`pageerror: ${err.message}`));
+      page.on("pageerror", (err) => { if (!allowedConsole?.test(err.message)) problems.push(`pageerror: ${err.message}`); });
 
       await use(undefined);
 
