@@ -1,6 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { previewProxy } from "./preview-proxy.ts";
+import { previewCors, previewProxy } from "./preview-proxy.ts";
 
 // The page calls the api as /api/... on its OWN origin and Vite forwards it. No CORS to configure,
 // and the same page works against the dev stack (3000) and the e2e stack (API_TARGET).
@@ -17,7 +17,7 @@ const sandboxProxy = process.env["SANDBOX_PROXY_URL"] ?? "http://127.0.0.1:20000
 export default defineConfig({
   plugins: [react()],
   server: {
-    ...(publicHost === undefined ? {} : { allowedHosts: [publicHost] }),
+    ...(publicHost === undefined ? {} : { allowedHosts: [publicHost], cors: previewCors }),
     proxy: {
       "/api": { target: api, rewrite: (path) => path.replace(/^\/api/, "") },
       "/sync": { target: "ws://localhost:3001", ws: true, rewrite: (path) => path.replace(/^\/sync/, "") },

@@ -1,4 +1,4 @@
-import type { ProxyOptions } from "vite";
+import { defaultAllowedOrigins, type CorsOptions, type ProxyOptions } from "vite";
 
 /**
  * The running page through the canvas's OWN origin, for when the app is reached through one public URL
@@ -11,3 +11,12 @@ import type { ProxyOptions } from "vite";
 export const previewProxy = (sandboxProxy: string): Record<string, ProxyOptions> => ({
   "^/preview/": { target: sandboxProxy, ws: true },
 });
+
+/**
+ * Vite answers every preflight itself, BEFORE its proxy, by its own origin rule (localhost only). A module
+ * request of the preview (origin "null") that is preflighted, because a tunnel adds a header of its own,
+ * got a 204 with no Access-Control-Allow-Origin, and a blank frame. Whether "null" may read the preview is
+ * the sandbox's decision (its CORS lock): so the preflight goes on, to the proxy. Vite's origin rule is kept,
+ * so the canvas's own files stay closed to other sites.
+ */
+export const previewCors: CorsOptions = { origin: defaultAllowedOrigins, preflightContinue: true };
