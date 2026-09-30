@@ -1,7 +1,9 @@
 import { expect, test } from "vitest";
 import { Document, ErrorBody, Org, Preview, Workspace } from "@noon/contracts";
 import type { JobRef } from "@noon/queue";
-import { useTestServer } from "./testing.ts";
+import { buildApp } from "./app.ts";
+import { devHeaderIdentity } from "./identity.ts";
+import { TEST_SESSIONS, useTestServer } from "./testing.ts";
 
 // E4.3: the canvas asks for its document's preview (POST) and, once a second, where it answers (GET).
 const enqueued: JobRef[] = [];
@@ -120,4 +122,22 @@ test("after a failed preview the canvas cannot pile up jobs: one retry per coold
   await ctx.db.rawQuery("update jobs set finished_at = now() - interval '11 seconds' where id = $1", [first?.id]);
   expect((await open("ann@example.com", doc)).status).toBe(201);
   expect(await jobsOf(doc)).toHaveLength(2);
+});
+
+test("behind one public URL (PREVIEW_PUBLIC_URL) both answers give the same path on the public origin; the row keeps the loopback", async () => {
+  const doc = await aDocumentIn("ann@example.com", await anOrg("ann@example.com"));
+  await open("ann@example.com", doc);
+  const [job] = await jobsOf(doc);
+  const key = { queue: "sandbox" as const, jobId: job?.id ?? "", orgId: doc.orgId };
+  await ctx.db.db.jobStore().claim(key);
+  const stored = `http://127.0.0.1:20001/preview/${doc.id}/20001/noon-preview/?doc=${doc.id}&started=5`;
+  await ctx.db.db.jobStore().report(key, { url: stored });
+
+  const hosted = buildApp({ db: ctx.db.db, identify: devHeaderIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve(), previewOrigin: "https://noon.example.com" });
+  const public_ = `https://noon.example.com/preview/${doc.id}/20001/noon-preview/?doc=${doc.id}&started=5`;
+  for (const method of ["GET", "POST"]) {
+    const res = await hosted.request(`/documents/${doc.id}/preview`, { method, headers: { "x-dev-user": "ann@example.com" } });
+    expect(Preview.parse(await res.json()), method).toEqual({ status: "running", url: public_ });
+  }
+  expect((await read("ann@example.com", doc)).url).toBe(stored); // the same row, read without a public origin
 });

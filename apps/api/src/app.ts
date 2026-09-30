@@ -74,9 +74,22 @@ export type AppDeps = {
   sessions: SessionConfig;
   /** Tells a worker that a job is waiting. A seam, so most api tests need no Redis. */
   enqueue: (ref: JobRef) => Promise<void>;
+  /** PREVIEW_PUBLIC_URL: the canvas's public origin, which carries previews as /preview/... (noon-l96). */
+  previewOrigin?: string | undefined;
 };
 
-export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ Variables: { user: User } }> {
+/**
+ * The preview as THIS canvas can frame it: the stored loopback address, or, behind one public URL, the
+ * same path and query on the public origin (the sandbox serves under that path; the canvas's dev server
+ * forwards it unchanged). Never kept anywhere: the row stays the loopback truth.
+ */
+export function publicPreview(preview: Preview, origin: string | undefined): Preview {
+  if (origin === undefined || preview.url === null) return preview;
+  const url = new URL(preview.url);
+  return { ...preview, url: `${origin}${url.pathname}${url.search}` };
+}
+
+export function buildApp({ db, identify, sessions, enqueue, previewOrigin }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
 
   app.use(async (c, next) => {
@@ -233,12 +246,12 @@ export function buildApp({ db, identify, sessions, enqueue }: AppDeps): Hono<{ V
         process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
       });
     }
-    return c.json(opened.preview satisfies Preview, opened.created ? 201 : 200);
+    return c.json(publicPreview(opened.preview, previewOrigin), opened.created ? 201 : 200);
   });
   app.get("/documents/:id/preview", async (c) => {
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     const preview = doc && (await db.forOrg(doc.orgId).getPreview(doc.id));
-    return preview ? c.json(preview satisfies Preview) : notFound(c);
+    return preview ? c.json(publicPreview(preview, previewOrigin)) : notFound(c);
   });
 
   app.notFound(notFound);

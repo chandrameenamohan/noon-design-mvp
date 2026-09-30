@@ -17,13 +17,15 @@ export default defineConfig({
   use: { baseURL: `http://localhost:${String(PORTS.web)}` },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [
-    { command: fromEnv(`PORT=${String(PORTS.api)} SYNC_PUBLIC_URL=ws://localhost:${String(PORTS.sync)} node apps/api/src/main.ts`), url: `http://localhost:${String(PORTS.api)}/ready`, reuseExistingServer: false },
+    // Hosted as through a tunnel (noon-l96): the preview rides the canvas's own origin, as /preview/.
+    // The loopback address the canvas frames otherwise is what the sandbox and worker suites load.
+    { command: fromEnv(`PORT=${String(PORTS.api)} SYNC_PUBLIC_URL=ws://localhost:${String(PORTS.sync)} PREVIEW_PUBLIC_URL=http://localhost:${String(PORTS.web)} node apps/api/src/main.ts`), url: `http://localhost:${String(PORTS.api)}/ready`, reuseExistingServer: false },
     { command: fromEnv(`PORT=${String(PORTS.sync)} node apps/sync/src/main.ts`), url: `http://localhost:${String(PORTS.sync)}/health`, reuseExistingServer: false },
     // The scripted worker has no port of its own; it answers on one only to tell Playwright it is up.
     { command: fromEnv(`SYNC_URL=ws://localhost:${String(PORTS.sync)} READY_PORT=${String(PORTS.worker)} node e2e/stub-worker.ts`), url: `http://localhost:${String(PORTS.worker)}`, reuseExistingServer: false },
     // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
     // stack's sandboxes, nor theirs its. It prints this line once it is draining its queue.
     { command: fromEnv(`PATH="$PATH:${DOCKER_BIN}" WORKER_QUEUE=sandbox SANDBOX_POOL=noon-e2e DOCKER=${DOCKER_BIN}/docker SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },
-    { command: `API_TARGET=http://localhost:${String(PORTS.api)} pnpm --filter @noon/web exec vite --port ${String(PORTS.web)} --strictPort`, url: `http://localhost:${String(PORTS.web)}`, reuseExistingServer: false },
+    { command: `PUBLIC_HOST=localhost API_TARGET=http://localhost:${String(PORTS.api)} pnpm --filter @noon/web exec vite --port ${String(PORTS.web)} --strictPort`, url: `http://localhost:${String(PORTS.web)}`, reuseExistingServer: false },
   ],
 });

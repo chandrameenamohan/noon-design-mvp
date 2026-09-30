@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -122,9 +122,9 @@ const JobRow = z
   .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
 
 // The URL only counts while the job runs: a finished job's last address may belong to someone else by now.
-// Parsed with the canvas's own contract; a row it refuses (not loopback, say) reads as "no URL", never a 500.
+// Parsed as a sandbox's address (loopback only); a row that is not one reads as "no URL", never a 500.
 const PreviewRow = z.object({ status: z.string(), output: z.unknown() }).transform((r): Preview => {
-  const url = r.status === "running" ? Preview.shape.url.safeParse((r.output as { url?: unknown } | null)?.url) : undefined;
+  const url = r.status === "running" ? SandboxUrl.safeParse((r.output as { url?: unknown } | null)?.url) : undefined;
   return Preview.parse({ status: r.status, url: url?.success ? url.data : null });
 });
 /**

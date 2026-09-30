@@ -56,6 +56,9 @@ services:
       # What a BROWSER on this machine dials to reach the sync server (which arrives in epic 2).
       # Hosting: SYNC_PUBLIC_URL=wss://<public host>/sync, set in the shell, not .env (init.sh smoke-tests locally).
       SYNC_PUBLIC_URL: "${SYNC_PUBLIC_URL:-ws://localhost:${SYNC_PORT:-3001}}"
+      # Hosting, too: PREVIEW_PUBLIC_URL=https://<public host>, and the canvas frames the preview through
+      # Vite's /preview/ proxy (started with PUBLIC_HOST). Empty: the loopback address, as on this machine.
+      PREVIEW_PUBLIC_URL: "${PREVIEW_PUBLIC_URL:-}"
       # The app connects as noon_app: data access only, not a superuser, cannot alter the schema.
       # init.sh generates hex passwords, so the value is safe inside a URL without escaping.
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"

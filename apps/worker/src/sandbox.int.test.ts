@@ -56,6 +56,14 @@ test("a document's sandbox starts from the baked image and reports a URL that se
   expect(await page.text()).toContain(`<div id="root">`);
   // The dev server really transforms the app's code, not only serves index.html.
   expect(await (await fetch(new URL("src/pages/Showcase.tsx", sandbox.url))).text()).toContain("Showcase");
+  // noon-l96: it serves under /preview/<document>/<port>/ (so the canvas's dev server can carry it), and
+  // outside that a bare 404: Vite's own would NAME the base, handing the document id to anyone trying ports.
+  expect(sandbox.url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:(\\d+)/preview/${id}/\\1/$`, "u"));
+  for (const path of ["/", "/index.html", "/src/pages/Showcase.tsx", `/preview/${randomUUID()}/${new URL(sandbox.url).port}/`]) {
+    const outside = await fetch(new URL(path, sandbox.url), { headers: { accept: "text/html" }, redirect: "manual" });
+    expect(outside.status, path).toBe(404);
+    expect(await outside.text(), path).toBe("");
+  }
   // Baked: node_modules is IN THE IMAGE, before any container starts (a structural fact, not a
   // timing guess: an 8 s bound between "about 1 s" and "10.6 s to install" failed once under load).
   await docker("run", "--rm", "--entrypoint", "test", IMAGE, "-d", "/app/node_modules/vite"); // throws when it is not there
@@ -134,7 +142,7 @@ test("a port something else holds is skipped, and the container it left behind d
     const id = `00000000-${randomUUID().slice(9)}`;
     made.push(id);
     const sandbox = await startSandbox(id, { ...options, ports: [22990, 22991] });
-    expect(sandbox.url).toBe("http://127.0.0.1:22991/");
+    expect(sandbox.url).toBe(`http://127.0.0.1:22991/preview/${id}/22991/`);
     // With the ONLY port held, it gives up by name instead of looping.
     await expect(startSandbox(newDocument(), { ...options, ports: [22990, 22990] })).rejects.toThrow(/no free port/u);
   } finally {
@@ -285,7 +293,7 @@ test("the preview renders inside the canvas's sandboxed iframe (an opaque origin
   const url = previewUrl(sandbox.url, id);
   // Vite answers module requests only to origins its cors allows. The frame's origin is "null"
   // (sandbox without allow-same-origin): allowed. A real site's origin: not echoed, so its reads fail.
-  const allowed = async (origin: string): Promise<string | null> => (await fetch(new URL("/noon-preview/main.tsx", sandbox.url), { headers: { origin } })).headers.get("access-control-allow-origin");
+  const allowed = async (origin: string): Promise<string | null> => (await fetch(new URL("noon-preview/main.tsx", sandbox.url), { headers: { origin } })).headers.get("access-control-allow-origin");
   expect(await allowed("null")).toBe("null");
   expect(await allowed("http://evil.example")).not.toBe("http://evil.example");
   expect(await allowed("http://localhost:5173")).not.toBe("http://localhost:5173"); // Vite's default allowed any localhost
@@ -326,7 +334,7 @@ test.each(Object.entries(HOSTILE_CONFIGS))("a customer vite.config cannot open t
   await docker("restart", sandboxName(id));
   const answers = async (origin: string): Promise<string | null> => {
     for (let i = 0; i < 100; i++) {
-      const res = await fetch(new URL("/noon-preview/main.tsx", sandbox.url), { headers: { origin } }).catch(() => undefined);
+      const res = await fetch(new URL("noon-preview/main.tsx", sandbox.url), { headers: { origin } }).catch(() => undefined);
       if (res?.ok) return res.headers.get("access-control-allow-origin");
       await new Promise((r) => setTimeout(r, 200));
     }

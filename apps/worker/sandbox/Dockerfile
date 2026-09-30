@@ -95,11 +95,30 @@ const lockTheOrigin = () => ({
   },
 });
 
+/**
+ * The worker's PREVIEW_BASE, /preview/<document>/<port>/: the canvas's dev server can carry this one on its
+ * own origin (noon-l96). Everything outside it is a bare 404, before Vite's own answer, which NAMES the base
+ * ("did you mean to visit /preview/<document>/...") and would hand the document id to anyone trying ports.
+ */
+const BASE = process.env.PREVIEW_BASE ?? "/";
+const onlyUnderTheBase = () => ({
+  name: "noon-preview-base",
+  enforce: "pre",
+  configureServer(server) {
+    server.middlewares.use((req, res, next) => {
+      if ((req.url ?? "").startsWith(BASE)) return next();
+      res.statusCode = 404;
+      res.end();
+    });
+  },
+});
+
 export default async (env) => {
   const own = (await loadConfigFromFile(env, undefined, process.cwd()))?.config ?? {};
   return {
     ...own,
-    plugins: [lockTheOrigin(), ...(own.plugins ?? [])],
+    base: BASE,
+    plugins: [onlyUnderTheBase(), lockTheOrigin(), ...(own.plugins ?? [])],
     server: { ...own.server, host: true, port: 5173, strictPort: true, cors: { origin: ALLOWED } },
   };
 };

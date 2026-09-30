@@ -72,7 +72,7 @@ test("the preview follows the CONFIRMED document into the sandbox within 3 s, re
   await eventually(() => Promise.resolve(urls.length > 0), 30_000);
   // The document is named IN the URL: a stale iframe that reconnects to a port another document took
   // meanwhile asks that document's entry for the wrong page, and is refused (sandbox.int.test.ts).
-  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:\\d+/${PREVIEW_PATH}\\?doc=${run.documentId}&started=\\d+$`, "u"));
+  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:(\\d+)/preview/${run.documentId}/\\1/${PREVIEW_PATH}\\?doc=${run.documentId}&started=\\d+$`, "u"));
   expect((await fetch(urls[0] ?? "")).status).toBe(200);
 
   human.send(add("s", "root", "Stack"));

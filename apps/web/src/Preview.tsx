@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Preview as PreviewState } from "@noon/contracts";
 import { openPreview, readPreview } from "./api.ts";
 
+/** This machine's loopback, or this canvas's own origin, whose dev server carries /preview/ (noon-l96). Never another site. */
+const frameable = (url: string): boolean => new URL(url).hostname === "127.0.0.1" || new URL(url).origin === location.origin;
 const live = (state: PreviewState | "busy" | undefined): boolean => state !== "busy" && (state?.status === "queued" || state?.status === "running");
 
 /**
@@ -16,7 +18,9 @@ const live = (state: PreviewState | "busy" | undefined): boolean => state !== "b
  * the document is open, and most visits to a document only edit it.
  *
  * `sandbox="allow-scripts"` and NOT allow-same-origin: every preview is http://127.0.0.1:<port>, so
- * without an opaque origin one document's page could read storage another left on a reused port.
+ * without an opaque origin one document's page could read storage another left on a reused port. Behind
+ * one public URL it is this canvas's own origin (/preview/...), and there the opaque origin is what keeps
+ * the page away from the canvas itself.
  * ponytail: polling. A pushed "the URL changed" (SSE) is the upgrade if a second of lag ever matters.
  */
 export function Preview({ documentId }: { documentId: string }) {
@@ -41,7 +45,7 @@ export function Preview({ documentId }: { documentId: string }) {
 
   if (!shown) return <section aria-label="Preview" className="preview"><button type="button" onClick={() => { setShown(true); }}>Show the running page</button></section>;
 
-  const url = state === "busy" ? null : (state?.url ?? null);
+  const url = state === "busy" || !state?.url || !frameable(state.url) ? null : state.url;
   if (url) hadUrl.current = true;
   const words = url ? ""
     : state === "busy" ? "Your organisation already has as many previews open as it may. Close one, and this one starts."

@@ -27,6 +27,7 @@ const NETWORK = "noon-sandboxes";
 /** What Docker says when the host port is taken: by another container, or (Docker Desktop: "Ports are not available") by a host process. */
 const PORT_TAKEN = /port is already allocated|address already in use|ports are not available/iu;
 
+/** `url` is where the dev server answers, its base included: http://127.0.0.1:<port>/preview/<document>/<port>/. */
 export type Sandbox = { container: string; url: string };
 export type SandboxOptions = {
   image: string;
@@ -59,6 +60,15 @@ export const PREVIEW_PATH = "noon-preview/";
  * document, possibly another org's. ponytail: until noon-9gz gives each document its own hostname.
  */
 export const previewUrl = (sandboxUrl: string, documentId: string): string => new URL(`${PREVIEW_PATH}?doc=${documentId}`, sandboxUrl).href;
+/**
+ * The path the sandbox's dev server serves under (Vite's `base`), and refuses everything outside of
+ * (the Dockerfile's config). It is what lets the canvas's dev server carry the preview on its OWN origin,
+ * as /preview/..., when the app is reached through one public URL (a tunnel: noon-l96): the proxy there
+ * forwards the path unchanged to the port it names, and the sandbox answers only if the document matches.
+ * The port rides along so the proxy needs no lookup; the document id is the part nobody can guess.
+ * ponytail: the document id is the only key, until noon-9gz gives each document its own hostname.
+ */
+const previewBase = (documentId: string, port: number): string => `/preview/${documentId}/${String(port)}/`;
 
 const starting = new Map<string, Promise<Sandbox>>();
 let network: Promise<void> | undefined;
@@ -102,7 +112,8 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
     await ready(run, name, deadline);
     // The port is read AFTER the dev server answered, from the container that answered: never a
     // number remembered from before a restart that somebody else may have finished differently.
-    return { container: name, url: `http://127.0.0.1:${String(await portOf(run, name))}/` };
+    const port = await portOf(run, name);
+    return { container: name, url: `http://127.0.0.1:${String(port)}${previewBase(documentId, port)}` };
   } catch (err) {
     // A deadline or a cancel ends every docker call with the same anonymous AbortError; say which.
     if (options.signal?.aborted) throw new Error(`${name}: start cancelled`, { cause: err });
@@ -124,6 +135,8 @@ async function create(run: Run, name: string, documentId: string, image: string,
       await run("run", "--detach", "--name", name,
         "--label", `${LABEL}=${pool}`, "--label", `noon.document=${documentId}`,
         "--env", `BRANCH=noon/${documentId}`, "--env", `PAGE=${pagePath(documentId)}`,
+        // Fixed with the port: a restarted container keeps both, a recreated one gets both anew.
+        "--env", `PREVIEW_BASE=${previewBase(documentId, candidate)}`,
         // Loopback only: a laptop on a shared network must not serve its previews to the room.
         "--publish", `127.0.0.1:${String(candidate)}:${String(CONTAINER_PORT)}`,
         "--network", NETWORK,
@@ -242,7 +255,9 @@ function ensureNetwork(run: Run): Promise<void> {
  * would only hide it.
  */
 async function ready(run: Run, name: string, deadline: AbortSignal): Promise<void> {
-  const probe = `fetch('http://127.0.0.1:${String(CONTAINER_PORT)}/').then(r => process.exit(r.ok ? 0 : 3), () => process.exit(3))`;
+  // Under the container's own PREVIEW_BASE (docker exec runs with the container's environment): the
+  // dev server refuses every other path.
+  const probe = `fetch('http://127.0.0.1:${String(CONTAINER_PORT)}' + process.env.PREVIEW_BASE).then(r => process.exit(r.ok ? 0 : 3), () => process.exit(3))`;
   for (;;) {
     try {
       await run("exec", name, "node", "-e", probe);

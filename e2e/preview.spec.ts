@@ -27,8 +27,8 @@ async function labelButton(page: Page, label: string): Promise<void> {
 // measured from the EDIT, once the preview is up.
 test.setTimeout(120_000);
 
-test("the preview follows an edit within 3 s, without reloading the page", async ({ page }) => {
-  await newDocument(page);
+test("the preview follows an edit within 3 s, without reloading the page", async ({ page, baseURL }) => {
+  const documentId = await newDocument(page);
   await button(page, "Add Button").click();
   await button(page, "Select Button 1").click();
   await labelButton(page, "First");
@@ -36,6 +36,9 @@ test("the preview follows an edit within 3 s, without reloading the page", async
   // An opaque origin: scripts run, but never as 127.0.0.1 (no allow-same-origin: storage a preview left
   // on a reused port is not another's to read).
   await expect(page.locator("iframe[title='Preview of this page']")).toHaveAttribute("sandbox", "allow-scripts");
+  // Through the canvas's own origin, as a visitor behind a tunnel gets it (noon-l96): page, modules, and
+  // the HMR socket the edit below arrives on all pass the dev server's /preview/ proxy.
+  await expect(page.locator("iframe[title='Preview of this page']")).toHaveAttribute("src", new RegExp(`^${baseURL ?? ""}/preview/${documentId}/\\d+/noon-preview/`, "u"));
   // Marks THIS page load. A full reload (or a new iframe) would lose it.
   await preview(page).locator("body").evaluate(() => { (window as unknown as { noonMark: string }).noonMark = "same load"; });
 

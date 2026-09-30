@@ -40,3 +40,13 @@ test("refuses to start without a REDIS_URL: a run that can never be queued must 
   for (const bad of [undefined, "", "redis:6379", "http://redis:6379"]) expect(() => loadConfig({ ...rest, DATABASE_URL: url, REDIS_URL: bad }), JSON.stringify(bad)).toThrow(/REDIS_URL/);
   expect(loadConfig({ ...rest, DATABASE_URL: url }).redisUrl).toBe("redis://redis:6379");
 });
+
+test("the public preview origin is optional (empty = unset) and must be an http(s) origin, nothing more", () => {
+  expect(loadConfig({ ...rest, DATABASE_URL: url }).previewOrigin).toBeUndefined();
+  expect(loadConfig({ ...rest, DATABASE_URL: url, PREVIEW_PUBLIC_URL: "" }).previewOrigin).toBeUndefined();
+  expect(loadConfig({ ...rest, DATABASE_URL: url, PREVIEW_PUBLIC_URL: "https://noon.example.com/" }).previewOrigin).toBe("https://noon.example.com");
+  expect(loadConfig({ ...rest, DATABASE_URL: url, PREVIEW_PUBLIC_URL: "http://localhost:5174" }).previewOrigin).toBe("http://localhost:5174");
+  for (const bad of ["noon.example.com", "wss://noon.example.com", "javascript:alert(1)", "https://noon.example.com/app", "https://noon.example.com/?x=1", "https://noon.example.com/#x", "https://me:pw@noon.example.com"]) {
+    expect(() => loadConfig({ ...rest, DATABASE_URL: url, PREVIEW_PUBLIC_URL: bad }), bad).toThrow(/PREVIEW_PUBLIC_URL/);
+  }
+});

@@ -74,7 +74,7 @@ export async function openPreview(documentId: string): Promise<Preview | "busy">
     throw problem;
   }
 }
-/** Where the preview answers NOW. Parsed with the contract: only a loopback http(s) URL ever reaches an iframe. */
+/** Where the preview answers NOW. Parsed with the contract: only an http(s) URL on the loopback or under /preview/ (and Preview.tsx: of THIS origin) reaches an iframe. */
 export async function readPreview(documentId: string): Promise<Preview> {
   const res = await fetch(`/api/documents/${documentId}/preview`, { headers: { "x-dev-user": devUser } });
   if (!res.ok) throw new Error(`GET preview answered ${String(res.status)}`);

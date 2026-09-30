@@ -62,17 +62,27 @@ export type Run = z.infer<typeof Run>;
  */
 export const PreviewOutput = z.strictObject({ url: z.url({ protocol: /^https?$/u }) });
 export type PreviewOutput = z.infer<typeof PreviewOutput>;
+// `URL.canParse` first: Zod runs a refine even when the format check before it failed, and a
+// `new URL()` that throws inside a refine makes safeParse THROW. A stored row must never be a 500.
+const onLoopback = (url: string): boolean => URL.canParse(url) && new URL(url).hostname === "127.0.0.1";
+/**
+ * Where a sandbox answers, as the worker stores it: this machine's loopback, nowhere else. Until the
+ * per-document proxy (noon-9gz) every preview is http://127.0.0.1:<port>, and a row that said otherwise
+ * must never frame another site.
+ */
+export const SandboxUrl = PreviewOutput.shape.url.refine(onLoopback, "a preview answers on 127.0.0.1");
 /**
  * A document's preview as the canvas reads it (F15): its newest sandbox job. `none` = never opened.
  * `url` is set only while the job runs and the sandbox answers; null while it (re)starts = "rebuilding".
- * Loopback only, on the way in to the canvas too: until the per-document proxy (noon-9gz) every
- * preview is http://127.0.0.1:<port>, and a row that said otherwise must never frame another site.
+ * The stored loopback address, or, when the app is reached through one public URL (noon-l96), the same
+ * path on the canvas's own origin, which carries it as /preview/<document>/<port>/. That host is the
+ * api's configuration, not the row's; the canvas frames only its own origin or the loopback.
  */
 export const Preview = z.strictObject({
   status: z.enum(["none", ...RunStatus.options]),
-  // `URL.canParse` first: Zod runs a refine even when the format check before it failed, and a
-  // `new URL()` that throws inside a refine makes safeParse THROW. A stored row must never be a 500.
-  url: PreviewOutput.shape.url.refine((url) => URL.canParse(url) && new URL(url).hostname === "127.0.0.1", "a preview answers on 127.0.0.1").nullable(),
+  url: PreviewOutput.shape.url
+    .refine((url) => onLoopback(url) || (URL.canParse(url) && /^\/preview\/[0-9a-f-]{36}\/\d+\//u.test(new URL(url).pathname)), "a preview answers on 127.0.0.1, or under /preview/")
+    .nullable(),
 });
 export type Preview = z.infer<typeof Preview>;
 
