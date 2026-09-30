@@ -71,3 +71,12 @@ test("what the table would refuse is refused before the write", async () => {
   }
   await expect(t.rawQuery("insert into git_events (ref, before_sha, after_sha) values ('refs/heads/x', 'nope', $1)", [A])).rejects.toMatchObject({ code: "23514" });
 });
+
+test("a generated page's document names its org, whatever org that is; an unknown or malformed id names none", async () => {
+  const org = await t.createOrg("Pushed to");
+  const ws = await t.db.forOrg(org.id).createWorkspace({ name: "ws" });
+  const doc = await t.db.forOrg(org.id).createDocument({ workspaceId: ws.id, title: "page" });
+  expect(await t.db.gitStore().documentOrg(doc?.id ?? "")).toBe(org.id);
+  expect(await t.db.gitStore().documentOrg("0f9c7a0e-1b2c-4d3e-8f00-00000000dead")).toBeUndefined();
+  expect(await t.db.gitStore().documentOrg("not-a-uuid")).toBeUndefined();
+});

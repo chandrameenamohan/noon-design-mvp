@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { moved, pageDocument, parseHeads } from "./git.ts";
+import { moved, nodeIdsIn, pageDocument, parseHeads } from "./git.ts";
 import { pagePath } from "./sandbox.ts";
 
 const A = "a".repeat(40);
@@ -26,4 +26,17 @@ test("the reconcile records exactly the branches that moved, a new one from zero
     { ref: "refs/heads/new", before: "0".repeat(40), after: A },
   ]);
   expect(moved(recorded, recorded)).toEqual([]);
+});
+
+test("a page's history names every node id it ever added, in any quoting, and nothing from removed or header lines", () => {
+  const log = [
+    "diff --git a/src/pages/noon-x.tsx b/src/pages/noon-x.tsx",
+    "+++ b/src/pages/noon-x.tsx data-node-id=\"header\"",
+    "+    <div data-node-id=\"root\">",
+    "+      <Button data-node-id='b1' label={\"x\"} /><Text data-node-id={\"t-2\"} />",
+    "-      <Card data-node-id=\"only-removed\" />",
+    "+      <Card data-node-id = `c_3` />",
+    " context data-node-id=\"ctx\"",
+  ].join("\n");
+  expect(nodeIdsIn(log)).toEqual(new Set(["root", "b1", "t-2", "c_3"]));
 });

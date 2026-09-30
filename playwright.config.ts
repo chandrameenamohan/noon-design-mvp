@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 // The e2e layer runs the api and the sync server FROM SOURCE, on ports of its own: the Docker
@@ -27,6 +29,9 @@ export default defineConfig({
     // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
     // stack's sandboxes, nor theirs its. It prints this line once it is draining its queue.
     { command: fromEnv(`PATH="$PATH:${DOCKER_BIN}" WORKER_QUEUE=sandbox SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git SANDBOX_POOL=noon-e2e SANDBOX_PROXY_PORT=${String(PORTS.sandboxProxy)} DOCKER=${DOCKER_BIN}/docker SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },
+    // The REAL git peer (E5.3b), from source, against the dev stack's Gitea, with a mirror of its own. setup.ts
+    // stops the compose one: both would drain the same inbox, and that one would edit through the compose sync.
+    { command: fromEnv(`WORKER_QUEUE=git SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git GIT_PEER_DIR=${join(tmpdir(), "noon-e2e-git")} SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /git peer watching/u }, reuseExistingServer: false },
     { command: `PUBLIC_HOST=localhost SANDBOX_PROXY_URL=http://127.0.0.1:${String(PORTS.sandboxProxy)} API_TARGET=http://localhost:${String(PORTS.api)} pnpm --filter @noon/web exec vite --port ${String(PORTS.web)} --strictPort`, url: `http://localhost:${String(PORTS.web)}`, reuseExistingServer: false },
   ],
 });

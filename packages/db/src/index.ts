@@ -82,6 +82,11 @@ export type GitStore = {
   requestReconcile(): Promise<void>;
   /** Clears the flag; true when it was set. Called as a reconcile STARTS, so an open during it sets it again. */
   takeReconcileRequest(): Promise<boolean>;
+  /**
+   * The org a generated page's document belongs to, for the git peer's session (E5.3b). Across orgs, as
+   * the repo is the stack's one: the page's path names the document and nothing else. Undefined: none.
+   */
+  documentOrg(documentId: string): Promise<string | undefined>;
 };
 // The same rules the table's checks hold, parsed BEFORE the write: a bad value is a caller's bug, named here.
 const GitSha = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
@@ -417,6 +422,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         await pool.query("update git_reconcile set requested = true where not requested"); // no write, no row lock, when it is already asked for
       },
       takeReconcileRequest: async () => (await pool.query("update git_reconcile set requested = false where requested")).rowCount === 1,
+      documentOrg: async (documentId) =>
+        isId(documentId) ? (await one(z.object({ org_id: z.string() }), "select org_id from documents where id = $1", [documentId]))?.org_id : undefined,
     }),
 
     getDocumentForMember: async (documentId, userId) =>

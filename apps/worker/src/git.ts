@@ -10,12 +10,15 @@ import { cli, fingerprint, gitEnv, type SeedRepo } from "./sandbox.ts";
  * in its own directory (a volume: SPEC §2.15), records every branch that moved in Gitea but has no commit
  * event yet (Gitea never retries a failed delivery), and works through the events one at a time, each
  * in a worktree of its own that is removed however the job ends. What a commit means for a document
- * (ops through peer-client) is E5.3b's: this hands it each generated page the commit touched.
+ * (ops through peer-client) is E5.3b's (push.ts): this hands it each generated page the commit touched,
+ * and on request the page as it was before.
  */
 
 /** A generated page a commit touched. Refused: deleted, not a regular file (a symlink could point anywhere), or over parse's cap. */
 export type ChangedPage = { documentId: string; path: string } & ({ tsx: string } | { refused: "deleted" | "not_a_file" | "too_large" });
-export type Apply = (event: GitEvent, page: ChangedPage) => Promise<void>;
+/** The page before the push, for E5.3b's three-way diff: its text at the base commit (when a regular file within the cap), and every node id it held up to there. */
+export type PageBase = { tsx: string | undefined; earlierIds: ReadonlySet<string> };
+export type Apply = (event: GitEvent, page: ChangedPage, base: () => Promise<PageBase>) => Promise<unknown>;
 type Moved = { ref: string; before: string; after: string };
 
 const PAGE = /^src\/pages\/noon-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tsx$/u; // sandbox.ts's pagePath
@@ -26,6 +29,19 @@ const BRANCH = /^refs\/heads\/[A-Za-z0-9._/-]{1,200}$/u;
 const SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/u;
 const ZERO = /^0+$/u;
 const EVENTS_PER_TICK = 20;
+
+/**
+ * Every node id on an added line of `git log -p -U0` of a page: each id the page ever held was added on
+ * some commit. Wider than parse (any quote, a `{"..."}`): an id counted that was not one only refuses more.
+ */
+export function nodeIdsIn(log: string): Set<string> {
+  const ids = new Set<string>();
+  for (const line of log.split("\n")) {
+    if (!line.startsWith("+") || line.startsWith("+++")) continue;
+    for (const match of line.matchAll(/data-node-id\s*=\s*\{?\s*["'`]([A-Za-z0-9_-]{1,64})["'`]/gu)) ids.add(match[1] ?? "");
+  }
+  return ids;
+}
 
 /** The document a path in the repo belongs to, if it is one of our generated pages. */
 export const pageDocument = (path: string): string | undefined => PAGE.exec(path)?.[1];
@@ -100,6 +116,27 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
     return pages;
   }
 
+  /**
+   * What the push is diffed against: `before` when the mirror has it; otherwise (a new branch, a force-push
+   * that dropped it) the tip's first parent, so the push's last commit is the change. None: a root commit.
+   * ponytail: a new branch of several commits is taken as its last one; upgrade: its merge-base with main.
+   */
+  async function baseCommit(event: GitEvent): Promise<string | undefined> {
+    if (!ZERO.test(event.before) && (await has(event.before))) return event.before;
+    return (await git("-C", mirror, "rev-list", "--parents", "-n", "1", event.after)).trim().split(" ")[1];
+  }
+
+  async function pageBase(commit: string | undefined, path: string): Promise<PageBase> {
+    if (commit === undefined) return { tsx: undefined, earlierIds: new Set() };
+    // "<mode> blob <object> <size>\t<path>": only a regular file within parse's cap is read (a symlink's blob is its target's name).
+    const entry = /^100(?:644|755) blob ([0-9a-f]{40,64}) +(\d+)\t/u.exec(await git("-C", mirror, "ls-tree", "-l", "-z", commit, "--", path));
+    const tsx = entry?.[1] !== undefined && Number(entry[2]) <= MAX_PAGE_BYTES ? await git("-C", mirror, "cat-file", "blob", entry[1]) : undefined;
+    // --full-history: an id added and removed again on a side branch that a merge left out still counts.
+    // ponytail: the whole history of one file, held in memory (cli's buffer cap); upgrade: stream it.
+    const log = await git("-C", mirror, "log", "--full-history", "--no-renames", "--no-ext-diff", "--no-textconv", "--no-color", "-p", "-U0", "--format=", commit, "--", path);
+    return { tsx, earlierIds: nodeIdsIn(log) };
+  }
+
   async function removeWorktree(worktree: string): Promise<void> {
     // Each step on its own: a failed `worktree remove` (the checkout never finished) must still leave nothing.
     await git("-C", mirror, "worktree", "remove", "--force", worktree).catch(() => undefined);
@@ -126,7 +163,8 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
       }
       await mkdir(worktrees, { recursive: true });
       await git("-C", mirror, "worktree", "add", "--quiet", "--detach", worktree, event.after);
-      for (const page of await changedPages(event, worktree)) await apply(event, page);
+      let base: Promise<string | undefined> | undefined;
+      for (const page of await changedPages(event, worktree)) await apply(event, page, async () => pageBase(await (base ??= baseCommit(event)), page.path));
       await store.finish(event.id, "done");
     } catch (err) {
       log(`${event.ref} ${event.after} failed: ${describeError(err)}`);

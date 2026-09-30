@@ -7,6 +7,7 @@ import { createAiHandler } from "./ai.ts";
 import { loadConfig } from "./config.ts";
 import { createGitPeer } from "./git.ts";
 import { createPreviewHandler } from "./preview.ts";
+import { createPushApplier } from "./push.ts";
 import { reapSandboxes } from "./sandbox.ts";
 import { probeTools, sdkRunner } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
@@ -56,12 +57,14 @@ const onAlive = (): void => { writeFileSync("/tmp/worker-alive", ""); };
 // The git peer (E5.3a) is driven by its inbox in Postgres, not by queue messages: the webhook has no org to
 // put in one. ponytail: a 1 s poll of a partial index; LISTEN/NOTIFY if a second's delay ever matters.
 function startGitPeer(): Promise<{ stop(): Promise<void> }> {
+  const store = db.gitStore();
+  const toOps = createPushApplier({ sessions: config.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId) });
   const peer = createGitPeer({
-    seed: config.sandbox.seed, dir: config.gitDir, store: db.gitStore(), log,
-    // E5.3b turns each page into ops through peer-client. Until then the peer says what it would apply.
-    apply: (event, page) => {
-      process.stdout.write(`${JSON.stringify({ level: "info", source: "git", ref: event.ref, commit: event.after, document: page.documentId, refused: "refused" in page ? page.refused : undefined })}\n`);
-      return Promise.resolve();
+    seed: config.sandbox.seed, dir: config.gitDir, store, log,
+    // E5.3b: each page becomes ops through peer-client. A conflict is only logged until E5.4 shows it on the document.
+    apply: async (event, page, base) => {
+      const outcome = await toOps(event, page, base);
+      process.stdout.write(`${JSON.stringify({ level: "info", source: "git", ref: event.ref, commit: event.after, document: page.documentId, ...outcome })}\n`);
     },
   });
   return peer.start({ pollMs: 1000, reconcileMs: 30_000, onAlive });
