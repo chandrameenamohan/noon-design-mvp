@@ -37,3 +37,8 @@ sandbox-image: ; docker build --tag noon-sandbox:dev --file apps/worker/sandbox/
 # Regenerates the component manifest from the sample app's types. `make check` fails when it is stale.
 .PHONY: manifest
 manifest: ; pnpm --filter @noon/design-system generate
+
+# check:catalog-complete (Z.2a, SPEC §4a A0): every property in antithesis/scratchbook/ has a type, priority, assertion
+# site, evidence and, for an always, its sometimes vacuity guard. Also runs inside `make check` as a unit test.
+.PHONY: catalog-check
+catalog-check: ; node scripts/catalog-check.ts
