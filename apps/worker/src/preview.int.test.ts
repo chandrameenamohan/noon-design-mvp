@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -114,7 +114,9 @@ test("a sandbox that dies is started again and given the current page, and the n
     sampling = true;
     await docker("rm", "--force", sandboxName(run.documentId));
     // Back, with the document's page (not the placeholder a fresh clone starts with), and a URL again.
-    await eventually(async () => (await pageIn(run.documentId)).includes("before the crash"), 15_000);
+    // Both waited for: the handler pushes the page FIRST and announces after (and this test's reportUrl
+    // reads the page before it records the URL), so the page alone can be seen before the announcement.
+    await eventually(async () => urls.length >= reported + 2 && (await pageIn(run.documentId)).includes("before the crash"), 15_000);
     // In between, the URL was withdrawn: the canvas says "rebuilding" instead of framing a dead port.
     expect(urls.slice(reported)).toEqual([null, expect.stringMatching(/^http:\/\/127\.0\.0\.1:/u)]);
     // A NEW address even on the same port: Vite cannot reconnect by itself inside the canvas's
@@ -178,9 +180,11 @@ test("a sandbox that cannot start fails the job by name", async () => {
 
 test("a container that dies DURING a push is started again and given the page, not failed", async () => {
   // A docker whose first push finds the container gone: the death lands between the liveness check and the push.
+  // Only the PAGE push (pushPage's `cat > "$PAGE"`): the start's seed delivery is an `exec --interactive` too,
+  // and a death there is a failed start, which this test is not about.
   const dir = mkdtempSync(join(tmpdir(), "dying-docker-"));
   const dying = join(dir, "docker");
-  writeFileSync(dying, `#!/bin/sh\nif [ "$1" = exec ] && [ "$2" = --interactive ] && [ ! -f ${dir}/died ]; then touch ${dir}/died; "${DOCKER}" rm --force "$3" >/dev/null; fi\nexec "${DOCKER}" "$@"\n`, { mode: 0o755 });
+  writeFileSync(dying, `#!/bin/sh\nif [ "$1" = exec ] && [ "$2" = --interactive ] && [ "$6" = 'cat > "$PAGE"' ] && [ ! -f ${dir}/died ]; then touch ${dir}/died; "${DOCKER}" rm --force "$3" >/dev/null; fi\nexec "${DOCKER}" "$@"\n`, { mode: 0o755 });
   const run = job();
   const human = await person(run.documentId);
   const { handle } = handler({ sandbox: { ...sandbox, docker: dying }, aliveEveryMs: 200 });
@@ -190,10 +194,10 @@ test("a container that dies DURING a push is started again and given the page, n
   ended.catch((err: unknown) => { failed = err; });
   try {
     human.send(add("t", "root", "Text", { value: "after the death" }));
-    await eventually(async () => {
-      if (failed !== undefined) throw new Error("the job failed");
-      return (await pageIn(run.documentId)).includes("after the death");
-    }, 30_000);
+    // A failed job ends the wait at once, and says why (a throw in here would be read as "not yet").
+    await eventually(async () => failed !== undefined || (await pageIn(run.documentId)).includes("after the death"), 30_000);
+    expect(failed).toBeUndefined();
+    expect(existsSync(join(dir, "died"))).toBe(true); // it DID die mid-push: the page is from the restart
   } finally {
     stop.abort();
     human.stop();
