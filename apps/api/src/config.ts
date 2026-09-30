@@ -38,10 +38,12 @@ const Env = z.object({
 });
 
 export type SessionConfig = { secret: string; sync: SyncNodes; ttlSeconds: number };
-type Config = { databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; previewOrigin: string | undefined; webhookSecret: string | undefined };
+type Config = { databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; signIn: { ttlSeconds: number; secureCookie: boolean }; previewOrigin: string | undefined; webhookSecret: string | undefined };
 
 // Long enough to open a socket, short enough that a leaked token is useless almost at once.
 const SESSION_TTL_SECONDS = 60;
+/** How long a sign-in lasts (E8.1). Fixed at sign-in, never slid: checking a session must stay a pure read. */
+export const SIGN_IN_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const parsed = parseEnv(Env, env);
@@ -51,6 +53,8 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     port: parsed.PORT,
     nodeEnv: parsed.NODE_ENV,
     sessions: { secret: parsed.SESSION_TOKEN_SECRET, sync: parsed.SYNC_PUBLIC_URL, ttlSeconds: SESSION_TTL_SECONDS },
+    // Development is served over plain http (localhost, the tunnel's origin side): a Secure cookie would never come back.
+    signIn: { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: parsed.NODE_ENV !== "development" },
     previewOrigin: parsed.PREVIEW_PUBLIC_URL,
     webhookSecret: parsed.GITEA_WEBHOOK_SECRET,
   };

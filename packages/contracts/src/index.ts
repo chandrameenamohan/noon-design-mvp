@@ -35,6 +35,22 @@ export const Document = z.object({ id: Id, orgId: Id, workspaceId: Id, title: Na
 export type Document = z.infer<typeof Document>;
 
 // --- HTTP bodies -------------------------------------------------------------
+// --- Sign-in (F23) ----------------------------------------------------------------
+/**
+ * What a person calls themselves, shown to everyone in the document (presence). Stricter than `Name`: format
+ * characters (a right-to-left override, zero-width joiners) and stacks of combining marks let one name pass for
+ * another. Cosmetic, never privilege (actor ids decide), but a person's name should read as what it is.
+ */
+const DisplayName = Name.refine((name) => !/\p{Cf}/u.test(name), "must not contain invisible formatting characters").refine((name) => !/\p{M}{3}/u.test(name), "must not stack combining marks");
+/** 8 to 128 characters (NIST 800-63B: a floor, no composition rules; the cap bounds the work one request can ask of the hash). */
+const Password = z.string().min(8, "must be at least 8 characters").max(128, "must be at most 128 characters");
+export const SignUpBody = z.strictObject({ email: User.shape.email, name: DisplayName, password: Password });
+/** Only the caps: a sign-in that breaks the sign-up rules is still just a wrong password, and says nothing more. */
+export const SignInBody = z.strictObject({ email: z.string().max(320), password: z.string().max(128) });
+/** GET /auth/me: who this browser is signed in as, or null. */
+export const Me = z.object({ user: User.nullable() });
+export type Me = z.infer<typeof Me>;
+
 export const CreateOrgBody = z.strictObject({ name: Name });
 export const CreateWorkspaceBody = z.strictObject({ name: Name });
 export const CreateDocumentBody = z.strictObject({ title: Name });
@@ -165,7 +181,7 @@ export type UsageReport = z.infer<typeof UsageReport>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;

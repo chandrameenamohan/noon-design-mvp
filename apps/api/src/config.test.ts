@@ -65,3 +65,9 @@ test("the Gitea webhook secret is optional, and a short one is refused rather th
   expect(loadConfig({ ...rest, DATABASE_URL: url, GITEA_WEBHOOK_SECRET: "w".repeat(48) }).webhookSecret).toBe("w".repeat(48));
   expect(() => loadConfig({ ...rest, DATABASE_URL: url, GITEA_WEBHOOK_SECRET: "short" })).toThrow(/GITEA_WEBHOOK_SECRET/);
 });
+
+test("the sign-in cookie is Secure everywhere except development, and unset NODE_ENV is production", () => {
+  expect(loadConfig({ ...rest, DATABASE_URL: url }).signIn).toEqual({ ttlSeconds: 7 * 24 * 60 * 60, secureCookie: true });
+  expect(loadConfig({ ...rest, DATABASE_URL: url, NODE_ENV: "test" }).signIn.secureCookie).toBe(true);
+  expect(loadConfig({ ...rest, DATABASE_URL: url, NODE_ENV: "development" }).signIn.secureCookie).toBe(false);
+});

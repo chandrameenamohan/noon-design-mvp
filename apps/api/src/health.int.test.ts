@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { HealthResponse } from "@noon/contracts";
 import type { Db } from "@noon/db";
-import { noIdentity } from "./identity.ts";
+import { sessionIdentity } from "./identity.ts";
 import { startServer, type RunningServer } from "./server.ts";
 import { TEST_SESSIONS } from "./testing.ts";
 
@@ -9,7 +9,7 @@ import { TEST_SESSIONS } from "./testing.ts";
 let server: RunningServer;
 beforeAll(async () => {
   // /health must answer without touching the database, so it gets one that cannot be used.
-  server = await startServer({ port: 0, db: {} as Db, identify: noIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // port 0 = "any free port", so tests never collide
+  server = await startServer({ port: 0, db: {} as Db, identify: sessionIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // port 0 = "any free port", so tests never collide
 });
 afterAll(() => server.close());
 

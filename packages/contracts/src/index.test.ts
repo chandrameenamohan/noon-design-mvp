@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { HealthResponse, Preview, SandboxUrl, UsageAmount } from "./index.ts";
+import { HealthResponse, Preview, SandboxUrl, SignUpBody, UsageAmount } from "./index.ts";
 
 const valid = { status: "ok", service: "api" };
 
@@ -46,4 +46,25 @@ test("a preview answers on the loopback, or under /preview/<document>/<token>/ (
 test("what the worker stores is the loopback, nowhere else, whatever the path", () => {
   expect(SandboxUrl.safeParse(`http://127.0.0.1:20000/preview/${doc}/${token}/`).success).toBe(true);
   expect(SandboxUrl.safeParse(`https://noon.example.com/preview/${doc}/${token}/`).success).toBe(false);
+});
+
+// F23, and the E2.6 finding: presence shows every name to everyone live, so the name a person signs up with
+// must read as what it is. Built with fromCharCode: the characters themselves are invisible in this file.
+test("a sign-up name refuses invisible formatting and stacked combining marks; ordinary names pass", () => {
+  const body = (name: string) => SignUpBody.safeParse({ email: "ann@example.com", name, password: "correct horse" }).success;
+  expect(body("Ann Lee")).toBe(true);
+  expect(body("Zoë Ñúñez")).toBe(true); // one combining mark, or a precomposed letter, is a name
+  expect(body("Nguyễn")).toBe(true);
+  expect(body(`adm${String.fromCharCode(0x202e)}nimda`)).toBe(false); // right-to-left override
+  expect(body(`An${String.fromCharCode(0x200b)}n`)).toBe(false); // zero-width space
+  expect(body(`Ann${String.fromCharCode(0x0301, 0x0301, 0x0301)}`)).toBe(false);
+});
+
+test("a sign-up password is 8 to 128 characters and nothing else is demanded of it", () => {
+  const body = (password: string) => SignUpBody.safeParse({ email: "ann@example.com", name: "Ann", password }).success;
+  expect(body("x".repeat(7))).toBe(false);
+  expect(body("x".repeat(8))).toBe(true);
+  expect(body("x".repeat(128))).toBe(true);
+  expect(body("x".repeat(129))).toBe(false);
+  expect(SignUpBody.safeParse({ email: "ann@example.com", name: "Ann", password: "x".repeat(8), role: "owner" }).success).toBe(false);
 });

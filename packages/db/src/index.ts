@@ -12,6 +12,16 @@ export type Db = {
   appliedMigrations(): Promise<string[]>;
   /** Finds the user with this email or creates one. Emails are compared case-insensitively. */
   upsertUser(input: { email: string; name: string }): Promise<User>;
+  /** E8.1: a new user with a password, in one statement. "taken": the email belongs to someone (with or without a password). */
+  signUp(input: { email: string; name: string; passwordHash: string }): Promise<User | "taken">;
+  /** The user with this email and their password hash; undefined when there is none, or they have no password. */
+  credentialsFor(email: string): Promise<{ user: User; passwordHash: string } | undefined>;
+  /** Records a signed-in browser by the SHA-256 of its token, and forgets this user's sessions that have expired. */
+  startSession(input: { userId: string; tokenHash: Buffer; ttlSeconds: number }): Promise<void>;
+  /** Who holds this session, if it exists and has not expired. A pure READ: asked on every request. */
+  userForSession(tokenHash: Buffer): Promise<User | undefined>;
+  /** Signs a browser out: the row goes, so the token stops working on the very next request. */
+  endSession(tokenHash: Buffer): Promise<void>;
   /** Creates the org and makes `ownerId` its owner, atomically: an org never exists without an owner. */
   createOrg(input: { name: string; ownerId: string }): Promise<Org>;
   listOrgsFor(userId: string, page?: PageInput): Promise<Page<Org> | undefined>;
@@ -375,6 +385,41 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         "insert into users (email, name) values (lower($1), $2) on conflict (email) do update set email = excluded.email returning id, email, name",
         [User.shape.email.parse(email), Name.parse(name)],
       ),
+
+    signUp: async ({ email, name, passwordHash }) =>
+      (await one(
+        UserRow,
+        // One statement: a user never exists without the password they signed up with, and two sign-ups of one
+        // email race on the unique key, where exactly one wins.
+        "with u as (insert into users (email, name) values (lower($1), $2) on conflict (email) do nothing returning id, email, name), " +
+          "c as (insert into credentials (user_id, password_hash) select id, $3 from u) select * from u",
+        [User.shape.email.parse(email), Name.parse(name), passwordHash],
+      )) ?? "taken",
+
+    credentialsFor: async (email) =>
+      one(
+        z.object({ id: z.string(), email: z.string(), name: z.string(), password_hash: z.string() }).transform((r) => ({ user: User.parse({ id: r.id, email: r.email, name: r.name }), passwordHash: r.password_hash })),
+        "select u.id, u.email, u.name, c.password_hash from users u join credentials c on c.user_id = u.id where u.email = lower($1)",
+        [email],
+      ),
+
+    startSession: async ({ userId, tokenHash, ttlSeconds }) => {
+      if (!isId(userId)) throw new Error("cannot start a session: invalid user id");
+      await pool.query(
+        // ponytail: expired rows are swept at the owner's next sign-in; ceiling: someone who never signs in again
+        // keeps dead rows; upgrade: a periodic delete by expires_at.
+        "with gone as (delete from auth_sessions where user_id = $1 and expires_at <= now()) " +
+          "insert into auth_sessions (user_id, token_hash, expires_at) values ($1, $2, now() + make_interval(secs => $3))",
+        [userId, tokenHash, ttlSeconds],
+      );
+    },
+
+    userForSession: async (tokenHash) =>
+      one(UserRow, "select u.id, u.email, u.name from auth_sessions s join users u on u.id = s.user_id where s.token_hash = $1 and s.expires_at > now()", [tokenHash]),
+
+    endSession: async (tokenHash) => {
+      await pool.query("delete from auth_sessions where token_hash = $1", [tokenHash]);
+    },
 
     // Inputs are parsed with the SAME contract the reader uses, BEFORE the write: a row that
     // cannot be read back must never be stored (it would make every later list throw).

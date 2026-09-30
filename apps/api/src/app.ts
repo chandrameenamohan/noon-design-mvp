@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import { HTTPException } from "hono/http-exception";
 import type { z } from "zod";
@@ -11,9 +12,12 @@ import {
   DocumentConflict,
   DocumentShip,
   PageQuery,
+  SignInBody,
+  SignUpBody,
   type ErrorBody,
   type HealthResponse,
   type Org,
+  type Me,
   type Preview,
   type SessionResponse,
   type User,
@@ -22,8 +26,9 @@ import type { Db } from "@noon/db";
 import { syncRouter, type Holder } from "@noon/lease";
 import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
-import type { SessionConfig } from "./config.ts";
-import type { Identify } from "./identity.ts";
+import { SIGN_IN_TTL_SECONDS, type SessionConfig } from "./config.ts";
+import { SESSION_COOKIE, type Identify } from "./identity.ts";
+import { dummyHash, hashPassword, hashToken, isSessionToken, newSessionToken, verifyPassword } from "./password.ts";
 import { readPush, signatureMatches } from "./webhook.ts";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -32,7 +37,7 @@ const MAX_WEBHOOK_BYTES = 1024 * 1024;
 const WEBHOOK_PATH = "/webhooks/gitea";
 
 type ErrorCode = ErrorBody["error"];
-const fail = (c: Context, status: 400 | 401 | 404 | 409 | 413 | 415 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
+const fail = (c: Context, status: 400 | 401 | 404 | 409 | 413 | 415 | 429 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
 
@@ -89,6 +94,13 @@ export type AppDeps = {
   previewOrigin?: string | undefined;
   /** GITEA_WEBHOOK_SECRET. Unset: the webhook is a 404, and the git peer's reconcile alone notices pushes. */
   webhookSecret?: string | undefined;
+  /** E8.1: how long a sign-in lasts, and whether its cookie is Secure (everywhere but development, which is plain http). */
+  signIn?: { ttlSeconds: number; secureCookie: boolean };
+  /**
+   * E8.1: may this sign-up or sign-in go ahead? `key` names the route and the email. False is 429. The seam for
+   * E9.6's limiter. ponytail: allows everything until then; ceiling: an online guesser pays only scrypt's cost per try.
+   */
+  allowAttempt?: (key: string) => Promise<boolean>;
 };
 
 /**
@@ -102,9 +114,11 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true) }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
   const route = syncRouter({ nodes: sessions.sync, owner, alive });
+  // Paid for now, not by the first sign-in with an unknown email (whose extra hash would be a timing tell).
+  dummyHash().catch(() => undefined);
 
   app.use(async (c, next) => {
     await next();
@@ -134,7 +148,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // Identity fails CLOSED: every route needs a caller unless it is listed here. A new top-level
   // route (E1.5's POST /documents/:id/session, for one) is protected without anyone remembering to.
   // createMiddleware carries the Variables type, so `c.var.user` is typed (not `any`) downstream.
-  const PUBLIC_PATHS = new Set(["/health", "/ready", WEBHOOK_PATH]);
+  const PUBLIC_PATHS = new Set(["/health", "/ready", WEBHOOK_PATH, "/auth/signup", "/auth/signin", "/auth/signout", "/auth/me"]);
   const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
     if (PUBLIC_PATHS.has(c.req.path)) return next();
     const user = await identify(c, db);
@@ -162,6 +176,44 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     const recorded = await db.gitStore().record({ ref: push.ref, before: push.before, after: push.after, deliveryId: delivery });
     return recorded ? c.json({ result: "recorded" }, 202) : c.json({ result: "duplicate" });
   });
+
+  // E8.1 (F23): sign up, sign in, sign out. The session is a cookie the page's script cannot read (HttpOnly)
+  // and the browser never sends from another site (SameSite=Strict): that is the CSRF defence for every
+  // write, including POST /documents/:id/session, which reads no body and so skips body()'s JSON check.
+  const cookieOptions = { httpOnly: true, secure: signIn.secureCookie, sameSite: "Strict", path: "/" } as const;
+  async function signedIn(c: Context, user: User, status: 200 | 201) {
+    // A new token every time: nothing a browser held before signing in (a planted cookie) becomes a session.
+    const { token, hash } = newSessionToken();
+    await db.startSession({ userId: user.id, tokenHash: hash, ttlSeconds: signIn.ttlSeconds });
+    setCookie(c, SESSION_COOKIE, token, { ...cookieOptions, maxAge: signIn.ttlSeconds });
+    return c.json(user, status);
+  }
+  // Sign-up must say when an email is taken: without email (a non-goal) there is no way to answer "maybe" and
+  // still create the account. That is the one place an account's existence shows, and it is rate limited.
+  app.post("/auth/signup", async (c) => {
+    const { email, name, password } = await body(c, SignUpBody);
+    if (!(await allowAttempt(`signup:${email.toLowerCase()}`))) return fail(c, 429, "too_many_attempts");
+    const user = await db.signUp({ email, name, passwordHash: await hashPassword(password) });
+    return user === "taken" ? fail(c, 409, "email_taken") : signedIn(c, user, 201);
+  });
+  // No such email and the wrong password are one answer, in one time: both cost exactly one scrypt.
+  app.post("/auth/signin", async (c) => {
+    const { email, password } = await body(c, SignInBody);
+    if (!(await allowAttempt(`signin:${email.toLowerCase()}`))) return fail(c, 429, "too_many_attempts");
+    const found = await db.credentialsFor(email);
+    const matches = await verifyPassword(password, found?.passwordHash ?? (await dummyHash()));
+    return found && matches ? signedIn(c, found.user, 200) : fail(c, 401, "invalid_credentials");
+  });
+  // Public, and always 204: signing out twice, or with a cookie that expired, is not an error. The row goes,
+  // so a copy of the token (another tab, a stolen cookie) stops working on its very next request.
+  app.post("/auth/signout", async (c) => {
+    const token = getCookie(c, SESSION_COOKIE);
+    if (isSessionToken(token)) await db.endSession(hashToken(token));
+    deleteCookie(c, SESSION_COOKIE, cookieOptions);
+    return c.body(null, 204);
+  });
+  // Public, and 200 either way: a signed-out home page is not an error (a 401 here would be one in every console).
+  app.get("/auth/me", async (c) => c.json({ user: (await identify(c, db)) ?? null } satisfies Me));
 
   app.post("/orgs", async (c) => {
     const { name } = await body(c, CreateOrgBody);

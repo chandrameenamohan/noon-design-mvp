@@ -35,3 +35,9 @@ input, select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid #5b6472
 .conflict code { overflow-wrap: anywhere; }
 .ship-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-block: 1rem; }
 .ship-panel button:disabled { color: #5b6472; cursor: not-allowed; }
+.sign-in { display: grid; gap: 0.5rem; max-width: 24rem; }
+.sign-in label { display: grid; gap: 0.2rem; }
+.sign-in p { margin: 0; font-size: 0.9rem; color: #3d4654; }
+.sign-in-actions { display: flex; gap: 0.5rem; }
+.sign-in button:disabled { color: #5b6472; cursor: not-allowed; }
+input:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }

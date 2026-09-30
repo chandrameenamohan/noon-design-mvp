@@ -1,9 +1,11 @@
-import { Document, DocumentConflict, DocumentShip, Org, Preview, Run, SessionResponse, Ship, Workspace } from "@noon/contracts";
+import { Document, DocumentConflict, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, User, Workspace } from "@noon/contracts";
 import type { z } from "zod";
 
-// Until epic 8 the api takes the caller's identity from a header, in development only (SPEC §2.16).
-// `?user=` lets two browser windows be two people; without it everyone is the same dev user.
-const devUser = new URLSearchParams(location.search).get("user") ?? "dev@example.com";
+// The caller is whoever signed in (E8.1): the session is an HttpOnly cookie the browser sends by itself on
+// these same-origin requests. In development only, `?user=` still names the caller in a header (SPEC §2.16),
+// so two browser windows can be two people without signing up twice; an api outside development ignores it.
+const devUser = new URLSearchParams(location.search).get("user") ?? undefined;
+const devHeaders: Record<string, string> = devUser === undefined ? {} : { "x-dev-user": devUser };
 
 /** "The answer is no, and asking again will not change it": not found, not yours, not an id. */
 class Refused extends Error {
@@ -18,7 +20,7 @@ class Refused extends Error {
 async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown): Promise<z.infer<S>> {
   const res = await fetch(`/api${path}`, {
     method: "POST",
-    headers: { "x-dev-user": devUser, "content-type": "application/json" },
+    headers: { ...devHeaders, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new Refused(`POST ${path} answered ${String(res.status)}`, res.status);
@@ -26,9 +28,30 @@ async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown
   return schema.parse(await res.json());
 }
 
-/** A fresh org, workspace and document. ponytail: the real flow (pick an org, a workspace) comes with auth in epic 8. */
-export async function createDocument(): Promise<string> {
-  const org = await post("/orgs", Org, { name: `${devUser}'s org` });
+// --- Signing in (F23) ------------------------------------------------------------------------------
+/** Who is signed in, or null when nobody is. */
+export async function whoAmI(): Promise<User | null> {
+  const res = await fetch("/api/auth/me", { headers: devHeaders });
+  if (!res.ok) throw new Error(`GET /auth/me answered ${String(res.status)}`);
+  return Me.parse(await res.json()).user;
+}
+/** The signed-in user, or the api's error NAME (invalid_credentials, email_taken, invalid_body...) for the form to explain. */
+async function authenticate(path: string, body: unknown): Promise<User | ErrorBody["error"]> {
+  const res = await fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  if (res.ok) return User.parse(await res.json());
+  const error = ErrorBody.safeParse(await res.json().catch(() => undefined));
+  return error.success ? error.data.error : "internal";
+}
+export const signUp = (body: { email: string; name: string; password: string }) => authenticate("/auth/signup", body);
+export const signIn = (body: { email: string; password: string }) => authenticate("/auth/signin", body);
+export async function signOut(): Promise<void> {
+  const res = await fetch("/api/auth/signout", { method: "POST" });
+  if (!res.ok) throw new Error(`POST /auth/signout answered ${String(res.status)}`);
+}
+
+/** A fresh org, workspace and document. ponytail: the real flow (pick an org, a workspace) is not built; ceiling: every document is a new org. */
+export async function createDocument(owner: User): Promise<string> {
+  const org = await post("/orgs", Org, { name: `${owner.name}'s org` });
   const workspace = await post(`/orgs/${org.id}/workspaces`, Workspace, { name: "Designs" });
   const doc = await post(`/orgs/${org.id}/workspaces/${workspace.id}/documents`, Document, { title: "Untitled" });
   return doc.id;
@@ -59,7 +82,7 @@ export async function startRun(documentId: string, instruction: string): Promise
 }
 export const cancelRun = (run: Run): Promise<Run> => post(`/documents/${run.documentId}/runs/${run.id}/cancel`, Run);
 export async function readRun(run: Run): Promise<Run> {
-  const res = await fetch(`/api/documents/${run.documentId}/runs/${run.id}`, { headers: { "x-dev-user": devUser } });
+  const res = await fetch(`/api/documents/${run.documentId}/runs/${run.id}`, { headers: devHeaders });
   if (!res.ok) throw new Error(`GET run answered ${String(res.status)}`);
   return Run.parse(await res.json());
 }
@@ -76,7 +99,7 @@ export async function openPreview(documentId: string): Promise<Preview | "busy">
 }
 /** Where the preview answers NOW. Parsed with the contract: only an http(s) URL on the loopback or under /preview/ (and Preview.tsx: of THIS origin) reaches an iframe. */
 export async function readPreview(documentId: string): Promise<Preview> {
-  const res = await fetch(`/api/documents/${documentId}/preview`, { headers: { "x-dev-user": devUser } });
+  const res = await fetch(`/api/documents/${documentId}/preview`, { headers: devHeaders });
   if (!res.ok) throw new Error(`GET preview answered ${String(res.status)}`);
   return Preview.parse(await res.json());
 }
@@ -87,7 +110,7 @@ export async function readPreview(documentId: string): Promise<Preview> {
  * file are an engineer's text. "gone": not found or not yours (404), and asking again will not change it.
  */
 export async function readConflict(documentId: string): Promise<DocumentConflict["conflict"] | "gone"> {
-  const res = await fetch(`/api/documents/${documentId}/conflict`, { headers: { "x-dev-user": devUser } });
+  const res = await fetch(`/api/documents/${documentId}/conflict`, { headers: devHeaders });
   if (res.status === 404) return "gone";
   if (!res.ok) throw new Error(`GET conflict answered ${String(res.status)}`);
   return DocumentConflict.parse(await res.json()).conflict;
@@ -98,7 +121,7 @@ export async function readConflict(documentId: string): Promise<DocumentConflict
 export const startShip = (documentId: string): Promise<Ship> => post(`/documents/${documentId}/ship`, Ship);
 /** The document's newest ship, or null when it was never shipped. */
 export async function readShip(documentId: string): Promise<Ship | null> {
-  const res = await fetch(`/api/documents/${documentId}/ship`, { headers: { "x-dev-user": devUser } });
+  const res = await fetch(`/api/documents/${documentId}/ship`, { headers: devHeaders });
   if (!res.ok) throw new Error(`GET ship answered ${String(res.status)}`);
   return DocumentShip.parse(await res.json()).ship;
 }
