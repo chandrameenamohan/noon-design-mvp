@@ -7,7 +7,7 @@
 //                                          api's response and the view's words, so this one edit reaches all three.
 //   2. apps/web/src/audit.ts               stops compiling: SENTENCES is a Record over the WHOLE enum, and it now lacks a
 //                                          key. Write its sentence: "Signed out." (the same trick as reasons.ts).
-//   3. packages/db/migrations/0018_*.sql   the CHECK constraint on audit_log.action is a type too, and Postgres does not
+//   3. packages/db/migrations/NNNN_*.sql   (the next free number) the CHECK constraint on audit_log.action is a type too, and Postgres does not
 //                                          know the contract changed. Drop and re-add it with the new value (Postgres
 //                                          named the inline check `audit_log_action_check`). Never touch the trigger.
 //   4. packages/db/src/index.ts            `endSession` writes the row IN THE SAME STATEMENT as the delete, exactly as
