@@ -20,23 +20,48 @@ grep -q "make -s check" "$hook" || { echo "FAIL: the pre-commit gate is not inst
 # Local secrets: random, generated once, kept in the git-ignored .env that compose reads by itself.
 # Hex only, so a value can sit inside a postgres:// URL without escaping.
 touch .env
-for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD; do
+for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD GITEA_ADMIN_PASSWORD GITEA_WEBHOOK_SECRET; do
   grep -q "^$name=" .env || printf '%s=%s\n' "$name" "$(openssl rand -hex 24)" >> .env
 done
 . ./.env
 
-docker compose up -d --wait postgres redis
+docker compose up -d --wait postgres redis gitea
 # POSTGRES_PASSWORD only applies when the data volume is first created. Setting it here as well keeps an
 # existing volume (and one created with an older password) in step with .env. Local socket, no password needed.
 docker compose exec -T postgres psql -U noon -d noon -qc "alter role noon password '$POSTGRES_PASSWORD'" >/dev/null
+# E5.1: Gitea, the local git host. Its user is `noon` (`admin` is reserved); the password is set on every run,
+# like Postgres's above, so an existing volume follows .env.
+gitea_url="http://localhost:${GITEA_PORT:-3002}"
+gitea() { docker compose exec -T -u git gitea gitea "$@"; }
+gitea admin user list | awk 'NR > 1 { print $2 }' | grep -qx noon ||
+  gitea admin user create --username noon --password "$GITEA_ADMIN_PASSWORD" --email noon@localhost --admin --must-change-password=false >/dev/null
+gitea admin user change-password --username noon --password "$GITEA_ADMIN_PASSWORD" --must-change-password=false >/dev/null
+# A secret goes to curl on stdin (-K -), never in its arguments, where any process on this machine can read it.
+curl_with() { secret=$1; shift; printf '%s\n' "$secret" | curl -K - "$@"; }
+# The worker's token: kept while Gitea still accepts it, else made anew (a new volume forgets every token).
+# ponytail: one token for bootstrap and worker, so the worker's can also manage the noon account (write:user,
+# which creating a repo needs). Upgrade: a second, read/write:repository-only token for the worker.
+if [ "$(curl_with "header = \"Authorization: token ${GITEA_TOKEN:-none}\"" -s -o /dev/null -w '%{http_code}' "$gitea_url/api/v1/user")" != 200 ]; then
+  curl_with "user = \"noon:$GITEA_ADMIN_PASSWORD\"" -s -o /dev/null -X DELETE "$gitea_url/api/v1/users/noon/tokens/noon-worker"
+  GITEA_TOKEN=$(curl_with "user = \"noon:$GITEA_ADMIN_PASSWORD\"" -fsS -X POST -H 'content-type: application/json' \
+    -d '{"name":"noon-worker","scopes":["write:repository","write:user"]}' "$gitea_url/api/v1/users/noon/tokens" | sed -n 's/.*"sha1":"\([0-9a-f]*\)".*/\1/p')
+  [ -n "$GITEA_TOKEN" ] || { echo "FAIL: Gitea did not issue a token"; exit 1; }
+  { grep -v '^GITEA_TOKEN=' .env; printf 'GITEA_TOKEN=%s\n' "$GITEA_TOKEN"; } > .env.new && mv .env.new .env
+fi
+# The private repo noon/sample-app, the seed pushed into it while it is empty, the push webhook to the api.
+GITEA_URL="$gitea_url" GITEA_TOKEN="$GITEA_TOKEN" GITEA_WEBHOOK_SECRET="$GITEA_WEBHOOK_SECRET" node scripts/gitea-bootstrap.ts || { echo "FAIL: Gitea bootstrap"; exit 1; }
 # The per-document preview sandbox (epic 4), BEFORE the worker that starts it. Minutes on a first run:
-# it installs the sample app's dependencies.
+# it installs the sample app's dependencies. Its source is NOT in the image: the worker fetches it from Gitea.
 docker build --quiet --tag noon-sandbox:dev --file apps/worker/sandbox/Dockerfile seed/sample-app >/dev/null
 docker compose up -d --build --wait api sync worker worker-sandbox
 
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")
 [ "$answer" = "1" ] || { echo "FAIL: postgres smoke query returned '$answer'"; exit 1; }
+# Smoke test: the seed is in Gitea, readable with the worker's token and by nobody without one.
+curl_with "header = \"Authorization: token $GITEA_TOKEN\"" -fsS -o /dev/null "$gitea_url/api/v1/repos/noon/sample-app/raw/package.json?ref=main" || { echo "FAIL: the seed is not in Gitea"; exit 1; }
+anonymous=$(curl -s -o /dev/null -w '%{http_code}' "$gitea_url/api/v1/repos/noon/sample-app")
+[ "$anonymous" != 200 ] || { echo "FAIL: Gitea serves the repo to anyone"; exit 1; }
 # Smoke test: the api answers over real HTTP with the contract's shape.
 health=$(curl -fsS "http://localhost:${API_PORT:-3000}/health")
 [ "$health" = '{"status":"ok","service":"api"}' ] || { echo "FAIL: api /health returned '$health'"; exit 1; }
@@ -82,4 +107,4 @@ case "$status" in
 esac
 echo "AI run smoke: $status"
 docker compose exec -T postgres psql -U noon -d noon -qc "delete from orgs where name = 'init.sh smoke'; delete from users where email = 'init-smoke@example.com'" >/dev/null # leave nothing behind
-echo "PASS: dev environment is up (api writes and reads through a non-superuser role, hook installed)"
+echo "PASS: dev environment is up (api writes and reads through a non-superuser role, seed in Gitea, hook installed)"

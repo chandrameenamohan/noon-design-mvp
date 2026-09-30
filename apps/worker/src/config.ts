@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { DatabaseUrl, parseEnv } from "@noon/process/env";
 import { RedisUrl } from "@noon/queue";
+import type { SeedRepo } from "./sandbox.ts";
 
 // Either of these OUTRANKS the OAuth token inside the SDK, even when set to nothing (SPEC §2.13):
 // runs would go to another account, or fail, with nothing here to say why. So: refuse to start.
@@ -33,11 +34,16 @@ const Env = z.object({
   // The pool's sandbox proxy, on 127.0.0.1: every preview of this stack answers here (noon-9gz). The
   // canvas's dev server forwards /preview/ to it (apps/web: SANDBOX_PROXY_URL).
   SANDBOX_PROXY_PORT: z.string().regex(/^\d{4,5}$/u, "SANDBOX_PROXY_PORT must be a port number").transform(Number).refine((port) => port >= 1024 && port <= 65535, "SANDBOX_PROXY_PORT must be from 1024 to 65535").default(20000),
+  // E5.1: the repo every sandbox's clone comes from, fetched by THIS process (a sandbox has no route out).
+  // No credential in it: the URL lands in the mirror's config and in every git error. The token goes as a header.
+  SEED_REPO: z.string().refine((value) => URL.canParse(value) && ["http:", "https:"].includes(new URL(value).protocol) && new URL(value).username === "" && new URL(value).password === "", "SEED_REPO must be an http(s) URL without credentials").default("http://gitea:3000/noon/sample-app.git"),
+  GITEA_USER: z.string().min(1).default("noon"),
+  GITEA_TOKEN: z.string().optional().transform((value) => (value === "" ? undefined : value)),
 });
 
 export function loadConfig(env: Record<string, string | undefined>): {
   databaseUrl: string; redisUrl: string; sessions: { secret: string; syncUrl: string }; oauthToken: string | undefined; model: string;
-  queue: "ai" | "sandbox"; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string };
+  queue: "ai" | "sandbox"; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string; seed: SeedRepo };
 } {
   const parsed = parseEnv(Env, env);
   // The preview tokens' key, derived and not a new secret in .env: the sync server's secret never leaves
@@ -45,6 +51,7 @@ export function loadConfig(env: Record<string, string | undefined>): {
   const previewKey = createHmac("sha256", parsed.SESSION_TOKEN_SECRET).update("noon-sandbox-preview-key").digest("hex");
   return {
     databaseUrl: parsed.DATABASE_URL, redisUrl: parsed.REDIS_URL, sessions: { secret: parsed.SESSION_TOKEN_SECRET, syncUrl: parsed.SYNC_URL }, oauthToken: parsed.CLAUDE_CODE_OAUTH_TOKEN, model: parsed.AI_MODEL,
-    queue: parsed.WORKER_QUEUE, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY, proxyPort: parsed.SANDBOX_PROXY_PORT, previewKey },
+    queue: parsed.WORKER_QUEUE, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY, proxyPort: parsed.SANDBOX_PROXY_PORT, previewKey,
+      seed: { url: parsed.SEED_REPO, ...(parsed.GITEA_TOKEN === undefined ? {} : { auth: { user: parsed.GITEA_USER, token: parsed.GITEA_TOKEN } }) } },
   };
 }

@@ -60,3 +60,17 @@ test("the preview key is derived from the session secret: stable across restarts
   expect(loadConfig(good).sandbox.previewKey).toBe(key);
   expect(loadConfig({ ...good, SESSION_TOKEN_SECRET: "t".repeat(32) }).sandbox.previewKey).not.toBe(key);
 });
+
+// E5.1: where a sandbox's clone comes from. The WORKER fetches it (a sandbox has no route out, noon-9gz).
+test("the seed repo is the compose stack's Gitea unless told otherwise, and its token is optional", () => {
+  expect(loadConfig(good).sandbox.seed).toEqual({ url: "http://gitea:3000/noon/sample-app.git" });
+  const seed = { url: "http://127.0.0.1:3002/noon/sample-app.git", auth: { user: "noon", token: "t0k" } };
+  expect(loadConfig({ ...good, SEED_REPO: seed.url, GITEA_TOKEN: "t0k" }).sandbox.seed).toEqual(seed);
+  expect(loadConfig({ ...good, SEED_REPO: seed.url, GITEA_TOKEN: "t0k", GITEA_USER: "someone" }).sandbox.seed.auth).toEqual({ user: "someone", token: "t0k" });
+  expect(loadConfig({ ...good, GITEA_TOKEN: "" }).sandbox.seed).toEqual({ url: "http://gitea:3000/noon/sample-app.git" }); // an empty line in .env means unset
+  // A credential in the URL would be written into the worker's mirror config and shown in every git error.
+  for (const bad of ["", "gitea/noon/sample-app", "http://noon:t0k@gitea:3000/noon/sample-app.git", "-uhttp://x"]) {
+    expect(() => loadConfig({ ...good, SEED_REPO: bad }), bad).toThrow(/SEED_REPO/);
+  }
+  expect(() => loadConfig({ ...good, SEED_REPO: "http://noon:secret-value@gitea:3000/x.git" })).not.toThrow(/secret-value/);
+});

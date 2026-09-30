@@ -5,6 +5,8 @@ RUN corepack enable
 # The docker CLI, for the sandbox worker (E4.2b). Only `worker-sandbox` is given the daemon's socket;
 # in every other role this binary has nothing to talk to. ponytail: one image for every role.
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
+# git, for the same worker: it fetches each sandbox's seed from Gitea and hands it over (E5.1; a sandbox has no route out).
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
 
 # Manifests first (one line per workspace package: add yours here, or the frozen install fails),

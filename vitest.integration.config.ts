@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 // tests use are copied into the environment; anything else in that file stays out of the test process.
 if (existsSync(".env")) {
   const env = parseEnv(readFileSync(".env", "utf8"));
-  for (const key of ["POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD"]) process.env[key] ??= env[key];
+  for (const key of ["POSTGRES_PASSWORD", "APP_DB_PASSWORD", "REDIS_PASSWORD", "GITEA_TOKEN"]) process.env[key] ??= env[key];
 }
 
 

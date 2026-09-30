@@ -1,4 +1,4 @@
-# ponytail: only the stores an epic already needs. MinIO arrives with epic 6, Gitea with epic 5.
+# ponytail: only the stores an epic already needs. MinIO arrives with epic 6.
 #
 # Secrets: there are NO default passwords here. `./init.sh` generates random ones into .env (git-ignored),
 # and compose refuses to start when one is missing, instead of quietly using a password from a public repo.
@@ -34,6 +34,30 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # E5.1: the local git host (SPEC §2.12). ./init.sh makes its user `noon` (`admin` is reserved), the token,
+  # the private repo noon/sample-app with the seed in it, and the push webhook to the api. The worker is its
+  # only reader inside compose; sandboxes never reach it (their networks are --internal, noon-9gz).
+  gitea:
+    image: gitea/gitea:1.24
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__security__INSTALL_LOCK: "true" # no install page: init.sh makes the user from the CLI
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: "http://localhost:${GITEA_PORT:-3002}/"
+      GITEA__server__DISABLE_SSH: "true" # HTTP only, with the token
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true"
+      # Gitea delivers webhooks to external hosts only by default: the api, and nothing else, may be dialled.
+      GITEA__webhook__ALLOWED_HOST_LIST: api
+    # 3002 on the host: 3000 and 3001 are the api's and sync's.
+    ports: ["127.0.0.1:${GITEA_PORT:-3002}:3000"]
+    volumes: ["giteadata:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
   # One-shot, as the database OWNER: applies migrations and provisions the app's limited login role.
   migrate:
     build: .
@@ -140,8 +164,13 @@ services:
       # The pool's sandbox proxy, on the host's 127.0.0.1: every preview of this stack answers there, and
       # the canvas's dev server forwards /preview/ to it (noon-9gz). One per stack: e2e and clean-clone move theirs.
       SANDBOX_PROXY_PORT: "${SANDBOX_PROXY_PORT:-20000}"
+      # Every sandbox's clone (E5.1): fetched by THIS service, handed to the sandbox as a bundle.
+      SEED_REPO: http://gitea:3000/noon/sample-app.git
+      # Not `:?`: compose reads the whole file for every command, and init.sh starts Postgres before the token exists.
+      GITEA_TOKEN: "${GITEA_TOKEN:-}"
     volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
     depends_on:
+      gitea: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       sync: { condition: service_healthy }
@@ -152,3 +181,4 @@ services:
       retries: 30
 volumes:
   pgdata:
+  giteadata:

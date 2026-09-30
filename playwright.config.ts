@@ -26,7 +26,7 @@ export default defineConfig({
     { command: fromEnv(`SYNC_URL=ws://localhost:${String(PORTS.sync)} READY_PORT=${String(PORTS.worker)} node e2e/stub-worker.ts`), url: `http://localhost:${String(PORTS.worker)}`, reuseExistingServer: false },
     // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
     // stack's sandboxes, nor theirs its. It prints this line once it is draining its queue.
-    { command: fromEnv(`PATH="$PATH:${DOCKER_BIN}" WORKER_QUEUE=sandbox SANDBOX_POOL=noon-e2e SANDBOX_PROXY_PORT=${String(PORTS.sandboxProxy)} DOCKER=${DOCKER_BIN}/docker SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },
+    { command: fromEnv(`PATH="$PATH:${DOCKER_BIN}" WORKER_QUEUE=sandbox SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git SANDBOX_POOL=noon-e2e SANDBOX_PROXY_PORT=${String(PORTS.sandboxProxy)} DOCKER=${DOCKER_BIN}/docker SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },
     { command: `PUBLIC_HOST=localhost SANDBOX_PROXY_URL=http://127.0.0.1:${String(PORTS.sandboxProxy)} API_TARGET=http://localhost:${String(PORTS.api)} pnpm --filter @noon/web exec vite --port ${String(PORTS.web)} --strictPort`, url: `http://localhost:${String(PORTS.web)}`, reuseExistingServer: false },
   ],
 });

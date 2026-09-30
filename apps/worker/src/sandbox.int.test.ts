@@ -12,7 +12,7 @@ import { generate } from "@noon/codegen";
 import { manifest } from "@noon/design-system";
 import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
 import { previewToken } from "./sandbox-proxy.ts";
-import { buildImage, DOCKER, docker, dockerEnv, IMAGE, removePool, TEST_PREVIEW_KEY, testPool } from "./sandbox-testing.ts";
+import { buildImage, DOCKER, docker, dockerEnv, IMAGE, makeTestSeed, removePool, TEST_PREVIEW_KEY, TEST_SEED, testPool } from "./sandbox-testing.ts";
 import { isRunning, pagePath, previewUrl, pushPage, reapSandboxes, sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
 
 // E4.2a, integration:sandbox-start-ready. Real Docker, the real image, the real sample app.
@@ -22,7 +22,7 @@ const SILENT = "noon-sandbox:silent";
 const NEWER = "noon-sandbox:newer";
 const pool = testPool();
 // 21000: never the compose stack's proxy (20000) or the e2e stack's (20100).
-const options: SandboxOptions = { image: IMAGE, docker: DOCKER, pool, previewKey: TEST_PREVIEW_KEY, proxyPort: 21000 };
+const options: SandboxOptions = { image: IMAGE, docker: DOCKER, pool, previewKey: TEST_PREVIEW_KEY, proxyPort: 21000, seed: TEST_SEED };
 /** Another stack's pool: its own proxy, on its own port. */
 const pools = [pool];
 const otherPool = (): SandboxOptions => {
@@ -37,7 +37,7 @@ const newDocument = (): string => {
 };
 
 beforeAll(async () => {
-  await buildImage();
+  await Promise.all([buildImage(), makeTestSeed()]);
   // The same image, pointed at a seed repo that does not exist: its clone fails and it exits.
   await variant(BROKEN, "ENV SEED_REPO=/nowhere.git");
   // The same image, running but with no dev server: it never answers.
@@ -217,7 +217,7 @@ test("the disk quota: the working tree fills up at its size, and nothing else is
   await startSandbox(id, options);
   await expect(docker("exec", sandboxName(id), "sh", "-c", "dd if=/dev/zero of=big bs=1M count=300")).rejects.toThrow(/No space left/u);
   await docker("exec", sandboxName(id), "rm", "-f", "big");
-  for (const path of ["/home/node/x", "/app/node_modules/x", "/home/node/seed.git/x"]) {
+  for (const path of ["/home/node/x", "/app/node_modules/x", "/home/node/deps/x"]) {
     await expect(docker("exec", sandboxName(id), "touch", path), path).rejects.toThrow(/Read-only file system/u);
   }
   expect((await fetch((await startSandbox(id, options)).url)).status).toBe(200); // and it still serves

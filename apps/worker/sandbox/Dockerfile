@@ -22,15 +22,12 @@ COPY --chown=node:node package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --ignore-workspace && ln -s /tmp/vite-temp node_modules/.vite-temp
 WORKDIR /app
 
-# The seed repository, as a bare repo inside the image: the "remote" each container clones from
-# until Gitea exists. ponytail: epic 5 points SEED_REPO at Gitea and deletes these lines.
-COPY --chown=node:node . /tmp/seed
-RUN cd /tmp/seed && git init -q -b main && git add -A \
- && git -c user.name=noon -c user.email=noon@localhost commit -qm "seed" \
- && git clone -q --bare /tmp/seed /home/node/seed.git && rm -rf /tmp/seed
-ENV SEED_REPO=/home/node/seed.git
+# The seed repository (E5.1: the org's repo in Gitea) arrives as a git bundle in /tmp, handed over by the
+# worker right after the container starts (sandbox.ts, deliverSeed): the sandbox's network has no route
+# to Gitea, or anywhere (noon-9gz). The clone's origin is that file: no host, no credential in .git/config.
+ENV SEED_REPO=/tmp/seed.bundle
 
-# The container's OWN clone, on the document's working branch, then node_modules linked in. The
+# The container's OWN clone (of the worker's bundle), on the document's working branch, then node_modules linked in. The
 # working tree is a tmpfs (noon-9gz's disk quota), empty on every start, so in practice this clones
 # every time; the preview job pushes the document's page again after any start (preview.ts).
 #
@@ -148,6 +145,13 @@ COPY --chmod=755 <<'EOF' /home/node/start.sh
 set -eu
 mkdir -p /tmp/vite-temp
 if ! git rev-parse --quiet --verify HEAD >/dev/null 2>&1; then
+  # The worker's delivery, written whole then renamed. A minute, then give up: the worker has failed.
+  waited=0
+  while [ ! -f /tmp/seed.bundle ]; do
+    waited=$((waited + 1))
+    [ "$waited" -le 600 ] || { echo "no seed from the worker in 60 s" >&2; exit 1; }
+    sleep 0.1
+  done
   rm -rf .git
   git init --quiet --initial-branch=main
   git remote add origin "$SEED_REPO"

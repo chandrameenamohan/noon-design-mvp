@@ -1,6 +1,8 @@
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { previewToken } from "./sandbox-proxy.ts";
 
@@ -36,6 +38,17 @@ const PROXY_PROGRAM = `${readFileSync(new URL("sandbox-proxy.ts", import.meta.ur
 /** Names what a key signs without naming the key: a label anyone with `docker inspect` can read. */
 const fingerprint = (...parts: string[]): string => createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 16);
 
+/**
+ * Where every sandbox's clone comes from (E5.1: the org's repo in Gitea). The WORKER fetches it: a
+ * sandbox's network has no route out (noon-9gz). `auth` goes to git as a header in the environment,
+ * never into a URL, an argument or any repository's config.
+ */
+export type SeedRepo = { url: string; auth?: { user: string; token: string } };
+/** Where start.sh waits for the seed, and clones from: a file in the sandbox's own /tmp. */
+const SEED_BUNDLE = "/tmp/seed.bundle";
+/** The sandbox's /tmp is a 64m tmpfs: a bigger bundle could never land there, so never hold one either. */
+const MAX_BUNDLE = 64 * 1024 * 1024;
+
 /** `url` is where the dev server answers, through the pool's proxy, its base included: http://127.0.0.1:<proxy port>/preview/<document>/<token>/. */
 export type Sandbox = { container: string; url: string };
 export type SandboxOptions = {
@@ -51,6 +64,7 @@ export type SandboxOptions = {
    * sandbox never does. At least 32 characters.
    */
   previewKey: string;
+  seed: SeedRepo;
   /** The docker CLI. Docker Desktop does not always put it on PATH. */
   docker?: string;
   /** Where the pool's proxy listens, on 127.0.0.1: the one address every preview of the pool shares. */
@@ -84,6 +98,8 @@ const previewBase = (documentId: string, key: string): string => `/preview/${doc
 const starting = new Map<string, Promise<Sandbox>>();
 /** Per pool: the proxy this process last made sure of, by its label. */
 const proxies = new Map<string, { want: string; made: Promise<void> }>();
+/** Per mirror: the last fetch-and-bundle, so two starts never run git in one mirror at once (ref locks). */
+const mirrors = new Map<string, Promise<Buffer>>();
 
 /**
  * Starts the document's sandbox, or finds the one already running, and resolves once its dev
@@ -119,7 +135,8 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
   try {
     await ensureProxy(run, options.pool, options.image, options.previewKey, proxyPort);
     await ensureNetwork(run, name, documentId, options.pool);
-    await create(run, name, documentId, options);
+    // A container that was already running has its clone; one that was just (re)started waits for the seed.
+    if (await create(run, name, documentId, options)) await deliverSeed(docker, name, options.seed, deadline);
     // Every start, not only the first: a proxy made anew since (a new key, a new program) is on no
     // sandbox's network until it is joined again.
     await join(run, name, proxyName(options.pool));
@@ -135,13 +152,17 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
   }
 }
 
-/** Makes sure the container exists, is running, and is of the current image and key: started again if stopped, made anew otherwise. */
-async function create(run: Run, name: string, documentId: string, options: SandboxOptions): Promise<void> {
+/**
+ * Makes sure the container exists, is running, and is of the current image and key: started again if
+ * stopped, made anew otherwise. True when it was started here (its empty tmpfs needs the seed).
+ */
+async function create(run: Run, name: string, documentId: string, options: SandboxOptions): Promise<boolean> {
   // Asked once per start: `make sandbox-image` retags the image, and a container of the old one must
   // not be started again as if nothing had changed (E4.2a spec note 3).
   const image = (await run("image", "inspect", "--format", "{{.Id}}", options.image)).trim();
   const key = fingerprint(options.previewKey);
-  if (await restarted(run, name, image, key)) return;
+  const found = await restarted(run, name, image, key);
+  if (found) return found === "started";
   try {
     await run("run", "--detach", "--name", name,
       "--label", `${LABEL}=${options.pool}`, "--label", `noon.document=${documentId}`, "--label", `noon.key=${key}`,
@@ -158,17 +179,21 @@ async function create(run: Run, name: string, documentId: string, options: Sandb
       // so filling them costs this sandbox its own memory, never the host's disk.
       "--read-only", "--tmpfs", "/app:size=256m,uid=1000,gid=1000,mode=0755", "--tmpfs", "/tmp:size=64m",
       options.image);
+    return true;
   } catch (err) {
     // A name conflict means another process created it: find that one.
-    if (!String(err).includes("is already in use by container") || !(await restarted(run, name, image, key))) throw err;
+    const found = String(err).includes("is already in use by container") && await restarted(run, name, image, key);
+    if (!found) throw err;
+    return found === "started";
   }
 }
 
 /**
- * True when the container exists and is now running; false when there is none. One of another image,
- * or with a token signed by another key (the proxy would refuse every request), is removed: false.
+ * "running" or "started" (it was stopped) when the container exists and is now running; false when there
+ * is none. One of another image, or with a token signed by another key (the proxy would refuse every
+ * request), is removed: false.
  */
-async function restarted(run: Run, name: string, image: string, key: string): Promise<boolean> {
+async function restarted(run: Run, name: string, image: string, key: string): Promise<"running" | "started" | false> {
   let state: string;
   try {
     state = (await run("container", "inspect", "--format", `{{.State.Running}} {{.Image}} {{index .Config.Labels "noon.key"}}`, name)).trim();
@@ -181,9 +206,50 @@ async function restarted(run: Run, name: string, image: string, key: string): Pr
     await run("rm", "--force", name);
     return false;
   }
-  if (running === "true") return true;
+  if (running === "true") return "running";
   await run("start", name);
-  return true;
+  return "started";
+}
+
+/**
+ * Hands the seed to a container that just started: `main` as a git bundle, written into its /tmp, where
+ * start.sh waits for it and clones from it. The sandbox has no route to Gitea (its network is --internal,
+ * noon-9gz), so the worker, which has one, fetches and hands the history over by `docker exec`, the way it
+ * already hands over the page. The clone's `origin` is that file: no host, no credential for customer code
+ * to read in .git/config (noon-9gz note e). Written under another name and renamed: start.sh never reads half.
+ * Rejected: a route from the proxy to Gitea (customer code would reach every repo the token reads).
+ */
+async function deliverSeed(docker: string, name: string, seed: SeedRepo, deadline: AbortSignal): Promise<void> {
+  const bundle = await bundleOf(seed, deadline);
+  await dockerCli(docker, ["exec", "--interactive", name, "sh", "-c", `cat > ${SEED_BUNDLE}.part && mv ${SEED_BUNDLE}.part ${SEED_BUNDLE}`], deadline, bundle);
+}
+
+/**
+ * `main` of the seed repo as a bundle, from this process's bare mirror of it, fetched first: every start
+ * gets what Gitea has now. One git at a time per mirror. The pid is in the path: test files share a /tmp.
+ * ponytail: the mirror lives in /tmp (a restarted worker clones it again) and the bundle is held whole in
+ * memory, up to the sandbox's 64m /tmp. Ceiling: repos of that size; upgrade: the git peer's mirror volume
+ * (SPEC §2.15) and a bundle piped straight into `docker exec`.
+ */
+function bundleOf(seed: SeedRepo, deadline: AbortSignal): Promise<Buffer> {
+  const mirror = joinPath(tmpdir(), `noon-seed-${String(process.pid)}-${fingerprint(seed.url)}.git`);
+  const git = async (...args: string[]): Promise<Buffer> => (await cli("git", args, deadline, { env: gitEnv(seed), name: `git ${args.join(" ")}` })).stdout;
+  const next = (mirrors.get(mirror) ?? Promise.resolve(Buffer.alloc(0))).catch(() => undefined).then(async () => {
+    // "--" : a URL is never an option. A clone killed halfway is finished by the next fetch.
+    if (existsSync(joinPath(mirror, "HEAD"))) await git("-C", mirror, "fetch", "--quiet", "--prune", "origin");
+    else await git("clone", "--quiet", "--mirror", "--", seed.url, mirror);
+    return git("-C", mirror, "bundle", "create", "--quiet", "-", "main");
+  });
+  mirrors.set(mirror, next);
+  return next;
+}
+
+/** git's environment: the token as an HTTP header (GIT_CONFIG_*, git >= 2.31), and never a prompt. */
+function gitEnv(seed: SeedRepo): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  if (!seed.auth) return env;
+  const basic = Buffer.from(`${seed.auth.user}:${seed.auth.token}`).toString("base64");
+  return { ...env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "http.extraHeader", GIT_CONFIG_VALUE_0: `Authorization: Basic ${basic}` };
 }
 
 /**
@@ -257,7 +323,7 @@ async function baseOf(run: Run, name: string): Promise<string> {
  * api's x-dev-user, Postgres and Redis on the host's loopback), and no published port either (Docker
  * binds none for an internal-only container, measured), which is why the proxy exists. One per
  * document, not one shared with inter-container traffic off: that would cut the proxy off too (measured).
- * E5: the clone from Gitea must come through the worker or the proxy, never a route to the compose network.
+ * The clone from Gitea comes through the worker (deliverSeed), never by a route to the compose network.
  * ponytail: a network per sandbox spends one of the daemon's address pools each, about 30 by default
  * (some already taken). Ceiling: that many sandboxes at once, daemon-wide; upgrade: `default-address-pools`
  * with small subnets in the daemon's config, or explicit `--subnet`s carved from one range.
@@ -355,25 +421,31 @@ async function ready(run: Run, name: string, deadline: AbortSignal): Promise<voi
  * whatever `killSignal` says, and a CLI that ignores SIGTERM then outlives the call and keeps this
  * process's event loop alive.
  */
-function dockerCli(docker: string, args: string[], deadline: AbortSignal, input?: string): Promise<string> {
+async function dockerCli(docker: string, args: string[], deadline: AbortSignal, input?: string | Buffer): Promise<string> {
+  const { stdout, stderr } = await cli(docker, args, deadline, { name: `docker ${args[0] ?? ""}`, ...(input === undefined ? {} : { input }) });
+  // `docker logs` replays the container's stderr on its own: there, both streams are the answer.
+  return args[0] === "logs" ? stdout.toString("utf8") + stderr : stdout.toString("utf8");
+}
+
+/** One CLI call under the deadline, as dockerCli says. `name` starts its errors. */
+function cli(file: string, args: string[], deadline: AbortSignal, options: { name: string; input?: string | Buffer; env?: NodeJS.ProcessEnv }): Promise<{ stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (deadline.aborted) {
       reject(deadline.reason as Error);
       return;
     }
     const kill = (): void => { child.kill("SIGKILL"); };
-    const child = execFile(docker, args, { encoding: "utf8" }, (err, stdout, stderr) => {
+    const child = execFile(file, args, { encoding: "buffer", maxBuffer: MAX_BUNDLE, ...(options.env ? { env: options.env } : {}) }, (err, stdout, stderr) => {
       deadline.removeEventListener("abort", kill);
-      if (deadline.aborted) reject(new Error(`docker ${args[0] ?? ""}: abandoned at the deadline`, { cause: deadline.reason }));
-      else if (err) reject(new Error(`docker ${args[0] ?? ""}: ${stderr.trim() || err.message}`, { cause: err }));
-      // `docker logs` replays the container's stderr on its own: there, both streams are the answer.
-      else resolve(args[0] === "logs" ? stdout + stderr : stdout);
+      if (deadline.aborted) reject(new Error(`${options.name}: abandoned at the deadline`, { cause: deadline.reason }));
+      else if (err) reject(new Error(`${options.name}: ${stderr.toString("utf8").trim() || err.message}`, { cause: err }));
+      else resolve({ stdout, stderr: stderr.toString("utf8") });
     });
     deadline.addEventListener("abort", kill, { once: true });
     // A CLI that exits (or is killed) before reading all of `input` makes the write fail with EPIPE.
     // Unheard, that is an uncaught exception and the whole worker dies; the exit code already says it.
     child.stdin?.on("error", () => undefined);
-    child.stdin?.end(input);
+    child.stdin?.end(options.input);
   });
 }
 
