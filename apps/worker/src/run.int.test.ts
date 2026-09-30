@@ -34,7 +34,7 @@ afterAll(async () => {
   await producer.close();
   await db.drop();
 });
-const work = async (sweepMs = 60_000) => (worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai: (job, cancelled) => ai(job, cancelled) }, sweepMs, cancelPollMs: 100 }));
+const work = async (sweepMs = 60_000) => (worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai: (job, cancelled, spent) => ai(job, cancelled, spent) }, sweepMs, cancelPollMs: 100 }));
 
 const as = (user: string, method: string, path: string, body?: unknown) =>
   fetch(`${api.url}${path}`, { method, headers: { "x-dev-user": user, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -393,4 +393,29 @@ test("another org sees none of it: its own usage is empty, and asking for someon
   await db.rawQuery("delete from usage where job_id = $1", [bobs]);
   await db.db.jobStore().recordUsage({ queue: "ai", jobId: bobs, orgId: theirs.orgId }, spent);
   expect(await count("select count(*)::int as n from usage where job_id = $1", [bobs])).toBe(0);
+});
+
+// integration:usage-recorded-for-failed-run (noon-37s). A run that fails, exhausts its budget or is cancelled has
+// spent tokens too: each records the last total it reported, once, and still ends the way it ended.
+test("a failed, budget-exhausted or cancelled run records what it spent and keeps its own ending", async () => {
+  const doc = await aDocument("usage-fay@example.com");
+  const failed = { ...spent, costUsd: 0.2 };
+  ai = (_job, _cancelled, report) => { report({ ...failed, costUsd: 0.1 }); report(failed); return Promise.reject(new JobFailure("agent_failed")); };
+  const one = await terminal("usage-fay@example.com", await startRun("usage-fay@example.com", doc, "fails"));
+  expect(one).toMatchObject({ status: "failed", error: "agent_failed" });
+  const exhausted = { ...spent, costUsd: 2.01 };
+  ai = (_job, _cancelled, report) => { report(exhausted); return Promise.reject(new JobFailure("agent_failed", "error_max_budget_usd")); };
+  const two = await terminal("usage-fay@example.com", await startRun("usage-fay@example.com", doc, "exhausts"));
+  expect(two.status).toBe("failed");
+  const stopped = { ...spent, costUsd: 0.05 };
+  ai = (_job, cancelled, report) => { report(stopped); return new Promise((_, reject) => { cancelled.addEventListener("abort", () => { reject(new JobFailure("cancelled")); }); }); };
+  const running = await startRun("usage-fay@example.com", doc, "cancelled");
+  for (let i = 0; i < 200 && (await readRun("usage-fay@example.com", running)).status !== "running"; i++) await new Promise((r) => setTimeout(r, 25));
+  await cancel("usage-fay@example.com", running);
+  expect((await terminal("usage-fay@example.com", running)).status).toBe("cancelled");
+
+  const usage = UsageReport.parse(await (await as("usage-fay@example.com", "GET", `/orgs/${doc.orgId}/usage`)).json());
+  expect(Object.fromEntries(usage.items.map((each) => [each.runId, each.costUsd]))).toEqual({ [one.id]: 0.2, [two.id]: 2.01, [running.id]: 0.05 });
+  expect(usage.totals.runs).toBe(3);
+  expect(await count("select count(*)::int as n from usage where job_id = any($1)", [[one.id, two.id, running.id]])).toBe(3); // once each
 });

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSdkMcpServer, query, tool, type Options } from "@anthropic-ai/claude-agent-sdk";
+import { createSdkMcpServer, query, tool, type ModelUsage, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { MAX_COST_USD, type UsageAmount } from "@noon/contracts";
 import type { AgentTool } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
@@ -10,8 +10,11 @@ import { JobFailure } from "./worker.ts";
 const SERVER = "noon";
 const sdkName = (t: Pick<AgentTool, "name">): string => `mcp__${SERVER}__${t.name}`;
 
-/** The seam between "a run" and "a model": tests script this, production is sdkRunner(). */
-export type RunAgent = (input: { instruction: string; tools: AgentTool[]; signal: AbortSignal }) => Promise<UsageAmount>;
+/**
+ * The seam between "a run" and "a model": tests script this, production is sdkRunner(). It returns what the run
+ * consumed, and passes `spent` the running total as it goes, so a run that fails or is stopped still has one.
+ */
+export type RunAgent = (input: { instruction: string; tools: AgentTool[]; signal: AbortSignal; spent: (sofar: UsageAmount) => void }) => Promise<UsageAmount>;
 
 const SYSTEM_PROMPT = `You edit a user-interface design document: a tree of component instances from the customer's own design system.
 Your only abilities are the tools provided: read_tree, read_manifest, add_node, set_prop, move_node, remove_node. You have no files, shell or web.
@@ -137,8 +140,53 @@ export function failureReason(resultSubtype: string, apiError: string | undefine
   }
 }
 
+type TokenCounts = Parameters<typeof usageOf>[1];
+
+/**
+ * Reads a run's messages to its end: what it consumed, or a JobFailure naming why it did not work. Either way
+ * `spent` has heard the total by then, from ONE source per run, so the tokens always explain the cost:
+ * - the result's modelUsage: every model call of the run, with its cost (result.usage is the main loop only);
+ * - no result (aborted, the stream broke, a crash result with no modelUsage): the assistant turns seen so far.
+ */
+export async function consume(stream: AsyncIterable<SDKMessage>, { model, tools, signal, spent }: { model: string; tools: AgentTool[]; signal: AbortSignal; spent: (sofar: UsageAmount) => void }): Promise<UsageAmount> {
+  // Streaming repeats a message's usage on each of its content blocks: keyed by message id, a turn counts once.
+  // ponytail: a turn has no cost of its own, so a run with no result records its tokens at cost 0; upgrade: a price table.
+  const turns = new Map<string, TokenCounts>();
+  const sum = (field: keyof TokenCounts): number => [...turns.values()].reduce((n, t) => n + (typeof t[field] === "number" && Number.isFinite(t[field]) && t[field] > 0 ? t[field] : 0), 0);
+  const perTurn = (): UsageAmount => usageOf(model, { input_tokens: sum("input_tokens"), output_tokens: sum("output_tokens"), cache_read_input_tokens: sum("cache_read_input_tokens"), cache_creation_input_tokens: sum("cache_creation_input_tokens") }, 0);
+  let apiError: string | undefined;
+  for await (const message of stream) {
+    if (message.type === "system" && message.subtype === "init") checkInit(message, tools);
+    if (message.type === "assistant") {
+      if (message.error !== undefined) apiError = message.error; // the SDK's own classification: no string matching on error text
+      const usage = message.message.usage as TokenCounts | undefined;
+      turns.set(message.message.id, usage ?? {});
+      spent(perTurn());
+    }
+    if (message.type !== "result") continue;
+    const all = fromModelUsage(model, message.modelUsage) ?? perTurn();
+    spent(all);
+    if (message.subtype !== "success" || message.is_error) throw new JobFailure(failureReason(message.subtype, apiError), (message.subtype === "success" ? message.result : message.subtype).slice(0, 500));
+    return all;
+  }
+  throw new JobFailure(signal.aborted ? "cancelled" : "agent_failed");
+}
+
+/**
+ * The result's per-model totals as one amount, named after the model that cost the most (the one that SERVED the
+ * run: a gateway alias or a fallback may differ from the one asked for). Undefined when it lists no model at all.
+ */
+function fromModelUsage(model: string, byModel: Record<string, Partial<ModelUsage>> | undefined): UsageAmount | undefined {
+  const entries = Object.entries(byModel ?? {});
+  if (entries.length === 0) return undefined;
+  const ok = (n: number | undefined): number => (typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0);
+  const total = (field: keyof ModelUsage): number => entries.reduce((n, [, u]) => n + ok(u[field] as number | undefined), 0);
+  const [served] = entries.reduce((best, each) => (ok(each[1].costUSD) > ok(best[1].costUSD) ? each : best));
+  return usageOf(served.slice(0, 100) || model, { input_tokens: total("inputTokens"), output_tokens: total("outputTokens"), cache_read_input_tokens: total("cacheReadInputTokens"), cache_creation_input_tokens: total("cacheCreationInputTokens") }, total("costUSD"));
+}
+
 export function sdkRunner({ model, oauthToken }: { model: string; oauthToken: string }): RunAgent {
-  return async ({ instruction, tools, signal }) => {
+  return async ({ instruction, tools, signal, spent }) => {
     const abort = new AbortController();
     signal.addEventListener("abort", () => { abort.abort(); }, { once: true });
     const stream = query({
@@ -146,15 +194,6 @@ export function sdkRunner({ model, oauthToken }: { model: string; oauthToken: st
       // maxBudgetUsd: the SDK's own estimate, enforced by the SDK. ponytail: one cap for every run; per-org budgets are F31 (E9).
       options: options(tools, abort, { model, systemPrompt: SYSTEM_PROMPT, maxTurns: 40, maxBudgetUsd: 2, env: childEnv(oauthToken) }),
     });
-    let apiError: string | undefined;
-    for await (const message of stream) {
-      if (message.type === "system" && message.subtype === "init") checkInit(message, tools);
-      if (message.type === "assistant" && message.error !== undefined) apiError = message.error; // the SDK's own classification: no string matching on error text
-      if (message.type !== "result") continue;
-      if (message.subtype !== "success" || message.is_error) throw new JobFailure(failureReason(message.subtype, apiError), (message.subtype === "success" ? message.result : message.subtype).slice(0, 500));
-      // Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.
-      return usageOf(model, message.usage, message.total_cost_usd);
-    }
-    throw new JobFailure(signal.aborted ? "cancelled" : "agent_failed");
+    return consume(stream, { model, tools, signal, spent });
   };
 }

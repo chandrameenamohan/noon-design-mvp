@@ -3,12 +3,17 @@ import type { UsageAmount } from "@noon/contracts";
 import type { Db, Job } from "@noon/db";
 import { connection, createProducer, describeError, JobRef, QUEUES, type QueueName } from "@noon/queue";
 
+type JobKey = JobRef & { attempt: number };
+
 /** One function per queue. It gets the job as Postgres has it, never what the queue message claims. */
 /** `cancelled` is aborted when the user asks for the job to stop (F10): end quickly, keep what was done. */
-/** A handler may return what the job CONSUMED (F12); the worker records it against the job's org. */
+/**
+ * What the job CONSUMED (F12), recorded against its org: the handler's return value, or else the last amount it
+ * passed to `spent` (a running total, so a run that fails or is cancelled half way still says what it spent).
+ */
 /** A process drains ONLY the queues it has a handler for: the AI worker never holds the Docker socket the sandbox needs. */
 /** `job.attempt`: the claim this run holds (F28); whatever the handler reports under it lands only while it is the latest. */
-export type Handlers = Partial<Record<QueueName, (job: Job & { attempt: number }, cancelled: AbortSignal) => Promise<UsageAmount | undefined>>>;
+export type Handlers = Partial<Record<QueueName, (job: Job & { attempt: number }, cancelled: AbortSignal, spent: (sofar: UsageAmount) => void) => Promise<UsageAmount | undefined>>>;
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */
@@ -23,6 +28,42 @@ export class JobFailure extends Error {
 
 const log = (level: "warn" | "error", message: string, extra: Record<string, unknown> = {}) =>
   process.stderr.write(`${JSON.stringify({ level, source: "worker", message, ...extra })}\n`);
+
+type Log = (level: "warn" | "error", message: string, extra?: Record<string, unknown>) => void;
+
+/**
+ * One claimed attempt, from its handler to its row's end. However it ends (succeeded, failed, cancelled), what it
+ * consumed is recorded ONCE, BEFORE the row is finished (a crash between them leaves `running`, an owned ceiling,
+ * rather than losing the spend), and a usage row that cannot be written is logged, never how the run ended.
+ */
+export async function runAttempt({ jobs, key, job, handler, cancel, log: say = log }: {
+  jobs: Pick<ReturnType<Db["jobStore"]>, "recordUsage" | "finish">;
+  key: JobKey;
+  job: Job & { attempt: number };
+  handler: NonNullable<Handlers[QueueName]>;
+  cancel: AbortController;
+  log?: Log;
+}): Promise<void> {
+  let consumed: UsageAmount | undefined;
+  let status: "succeeded" | "failed" | "cancelled";
+  let reason: string | undefined;
+  try {
+    consumed = (await handler(job, cancel.signal, (sofar) => { consumed = sofar; })) ?? consumed;
+    // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
+    status = cancel.signal.aborted ? "cancelled" : "succeeded";
+  } catch (err) {
+    if (cancel.signal.aborted) status = "cancelled";
+    else {
+      // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user
+      // (finish() stores anything that is not a plain name as `internal`).
+      say("error", describeError(err), { jobId: key.jobId });
+      status = "failed";
+      reason = err instanceof JobFailure ? err.reason : "internal";
+    }
+  }
+  if (consumed) await jobs.recordUsage(key, consumed).catch((err: unknown) => { say("error", `usage not recorded: ${describeError(err)}`, { jobId: key.jobId }); });
+  await (reason === undefined ? jobs.finish(key, status) : jobs.finish(key, status, reason));
+}
 
 export async function startWorker({ db, redisUrl, prefix, handlers, concurrency = {}, sweepMs = 30_000, cancelPollMs = 1000, staleMs = 15_000, maxAttempts = 3, onAlive }: {
   db: Db;
@@ -77,21 +118,7 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
     try {
       const handler = handlers[job.queue]; // the row's queue, not the message's
       if (!handler) throw new Error(`no handler for the ${job.queue} queue`); // unreachable: only handled queues are drained
-      const consumed = await handler(job, cancel.signal);
-      // ponytail: only a run that reached its end reports what it consumed; a cancelled or timed-out run has
-      // spent tokens too, which the SDK only totals in its final message. Per-turn accounting is E9.5.
-      if (consumed) await jobs.recordUsage(ref, consumed).catch((err: unknown) => log("error", `usage not recorded: ${describeError(err)}`, { jobId: ref.jobId })); // a run that worked is not failed over its bookkeeping
-      // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
-      await jobs.finish(mine, cancel.signal.aborted ? "cancelled" : "succeeded");
-    } catch (err) {
-      if (cancel.signal.aborted) {
-        await jobs.finish(mine, "cancelled");
-        return;
-      }
-      // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user
-      // (finish() stores anything that is not a plain name as `internal`).
-      log("error", describeError(err), { jobId: ref.jobId });
-      await jobs.finish(mine, "failed", err instanceof JobFailure ? err.reason : "internal");
+      await runAttempt({ jobs, key: mine, job, handler, cancel });
     } finally {
       clearInterval(watch);
     }

@@ -150,7 +150,7 @@ test("when the sync server goes away in the middle of a run, the waiting tool ca
     expect((await call(tools, "add_node", { parentId: "root", component: "Card", props: {} })).ok).toBe(true);
     await doomed.close();
     toolResult = await call(tools, "add_node", { parentId: "root", component: "Card", props: {} }); // no server will ever answer this one
-    return forever({ instruction: "", tools, signal });
+    return forever({ instruction: "", tools, signal, spent: () => undefined });
   } })(job(), never);
   await expect(running).rejects.toMatchObject({ reason: "sync_unreachable" });
   expect(toolResult).toMatchObject({ ok: false, text: expect.stringContaining("connection_closed") as string });

@@ -51,8 +51,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
   connectTimeoutMs?: number;
   /** The whole run, connect to last op. ponytail: one number for every run; per-org limits are F31 (E9). */
   runTimeoutMs?: number;
-}): (job: Job & { attempt?: number }, cancelled: AbortSignal) => Promise<UsageAmount> {
-  return async (job, cancelled) => {
+}): (job: Job & { attempt?: number }, cancelled: AbortSignal, spent?: (sofar: UsageAmount) => void) => Promise<UsageAmount> {
+  return async (job, cancelled, spent = () => undefined) => {
     // Fail FAST and by name, before anything is connected or spent. A missing token does not make
     // the SDK throw: it answers with a polite "please log in", which would look like a run that
     // succeeded and did nothing (measured).
@@ -106,7 +106,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       await Promise.race([live, ended]);
       peer.setPresence({ cursor: null, selection: null }); // no pointer, but it tells the people already here that the AI has arrived
       const instruction = typeof job.input["instruction"] === "string" ? job.input["instruction"] : "";
-      const agent = runAgent({ instruction, tools, signal: abort.signal });
+      // `spent` goes straight to the worker: when `ended` wins below, the running total is all there is to record.
+      const agent = runAgent({ instruction, tools, signal: abort.signal, spent });
       agent.catch(() => undefined); // if `ended` wins, the aborted agent rejects later, to nobody
       return await Promise.race([agent, ended]); // what the run consumed (F12): the worker records it
     } finally {
