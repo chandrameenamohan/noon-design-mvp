@@ -224,7 +224,7 @@ section("limits", "6 · Rate limits in Postgres: one upsert, inside the transact
   cut("packages/db/src/index.ts", "        usage: async (input) => {", "        audit: async (input) =>"),
   "<p><strong>Usage, the other half of F31.</strong> The owner reads tokens and estimated cost per run, per person and per day, and the E3.4 review's finding is honoured in the first line: all four reads happen in one <code>REPEATABLE READ</code>, read-only transaction, so a run recorded between two of them cannot show in the totals and not in the items. The user's email is joined as it is <em>now</em>, and a deleted user's runs keep their cost and name no one. The web view is tables of text, with a caption and row and column headers, and the AI panel turns a 429 into a sentence with <code>waitWords</code>, rounded up for the same reason the verdict is.</p>",
   cut("apps/web/src/usage.ts", "/** How long to wait, in words"),
-  cut("apps/web/src/api.ts", "/** F31: \"not now\": over a rate limit.", "/** POSTs and checks the ANSWER"),
+  cut("apps/web/src/api.ts", "/** F31: \"not now\": over a rate limit.", "/** POSTs (or PUTs) and checks the ANSWER"),
   vs([("<code>insert ... on conflict (key) do update set hits = case ... end</code>: an upsert with arithmetic", "the same SQL; <code>MERGE</code> on other databases", "the same SQL"),
       ("<code>extract(epoch from clock_timestamp())</code>: the database's clock, per statement", "<code>CURRENT_TIMESTAMP</code> is the transaction's; use the same function", "the same"),
       ("<code>Math.ceil((window + 1) * windowSeconds - now)</code>", "<code>Math.ceil</code> on <code>double</code>s", "<code>math.ceil</code>"),
