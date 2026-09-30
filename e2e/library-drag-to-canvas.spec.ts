@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { axeCleanLightAndDark, componentsOf, heading, layer, pageChildren, tile, treeOf, twoBrowsersOnANewDocument } from "./editor.ts";
+import { axeCleanLightAndDark, componentsOf, heading, layer, pageChildren, tile, treeOf, twoBrowsersOnANewDocument, zoomOf } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
 
 // e2e:library-drag-to-canvas (E10.5): the library lists every manifest component as a searchable tile with a live
@@ -45,7 +45,17 @@ test("every component is a searchable tile with a live render; Enter, a click an
   // A listbox of every manifest component, each tile a REAL render (the sample app's own classes), hidden from the
   // accessibility tree so the tile's name is the component's; the old "Add X" toolbar is gone.
   const list = library(page).getByRole("listbox", { name: "Components" });
-  await expect(list.getByRole("option")).toHaveText(["Button", "Card", "Image", "Input", "Stack", "Text"]);
+  // The accessible names, from the a11y tree: textContent (toHaveText) would count the hidden render's own sample text.
+  await expect(list).toMatchAriaSnapshot(`
+    - listbox "Components":
+      - /children: equal
+      - option "Button"
+      - option "Card"
+      - option "Image"
+      - option "Input"
+      - option "Stack"
+      - option "Text"
+  `);
   await expect(tile(page, "Button").locator(".thumb-frame > button.ds-button")).toHaveText("Button");
   await expect(tile(page, "Card").locator(".thumb-frame > section.ds-card .thumb-block")).toHaveCount(2);
   await expect(tile(page, "Button").locator(".thumb")).toHaveAttribute("aria-hidden", "true");
@@ -76,7 +86,8 @@ test("every component is a searchable tile with a live render; Enter, a click an
   // The empty stack has room on the canvas to be dropped into. Drag the Button tile onto it: a box round the stack with
   // its name, a line where the button lands; letting go is ONE add_node, into the stack, and the new button is selected.
   const stack = await middle(page.locator("[data-node-id][data-component=Stack] > .ds-stack"));
-  expect(stack.height).toBeGreaterThanOrEqual(20);
+  // In the page's own px: the frame is drawn at the fitted zoom (below 1 in this viewport), the room scales with it.
+  expect(stack.height / await zoomOf(page)).toBeGreaterThanOrEqual(20);
   await carryTo(page, tile(page, "Button"), stack);
   await expect(tile(page, "Button")).toHaveAttribute("data-dragging", "");
   await expect(page.locator("[data-outline=insert]")).toHaveText("Stack 1");
