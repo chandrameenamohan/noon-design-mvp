@@ -49,11 +49,13 @@ test("a pointer rests on the Button in one browser and is drawn on the Button in
   await expect(avatar).toHaveCount(1);
   await expect(avatar).toHaveAccessibleName(/e2e-.*Button 1/u);
 
-  // WE zoom in: the cursor stays on the Button, moved by CSS alone (nothing was sent again).
+  // WE zoom in: the cursor stays on the Button, moved by CSS alone (nothing was sent again). One press is one
+  // step of x1.25 from wherever the page was fitted (about 68 % in a 1280 px window, not 100 %).
   const mySpot = await emptySpot(page);
   await page.mouse.click(mySpot.x, mySpot.y);
+  const fitted = await zoomOf(page);
   await page.keyboard.press("+");
-  await expect.poll(() => zoomOf(page)).toBeGreaterThan(1.2);
+  await expect.poll(() => zoomOf(page)).toBeGreaterThan(fitted * 1.2);
   const zoomedButton = await centreOf(page, "Button");
   expect(zoomedButton.x).not.toBeCloseTo(myButton.x, 0);
   await expect.poll(() => tipDistance(page, zoomedButton)).toBeLessThan(4);
