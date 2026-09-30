@@ -126,6 +126,10 @@ async function round(n: number): Promise<{ round: number; from: string; to: stri
     edit(20); // on the wire...
     await open(victim); // ...and the owner freezes, or loses Redis, under it
     ledger.fault();
+    // The burst above is usually ALL acknowledged before the fault bites (`docker pause` blocks this loop while the
+    // owner answers), and a peer times only what it waits for: with nothing pending it would never notice a frozen
+    // owner. These are made AFTER the fault, so both peers wait on it and their silence watchdog fires.
+    edit(3);
     await until(() => all.every(([, p]) => p.status !== "live"), "both peers see the owner gone", 30_000);
     edit(5); // made while the room is moving: held, sent after the next welcome
 
