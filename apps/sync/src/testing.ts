@@ -14,7 +14,9 @@ export const TEST_SECRET = "test-only-session-secret-0123456789abcdef";
 export const TEST_ORG = "22222222-2222-4222-8222-222222222222";
 
 /** The journal half of a fake DocumentStore, for tests that are not about the journal: it keeps nothing. */
-export const NO_JOURNAL: Pick<DocumentStore, "append" | "find" | "everAdded" | "since" | "snapshotted"> = {
+export const NO_JOURNAL: Pick<DocumentStore, "fence" | "claim" | "append" | "find" | "everAdded" | "since" | "snapshotted"> = {
+  fence: () => Promise.resolve(0),
+  claim: () => Promise.resolve(true),
   append: () => Promise.resolve(undefined),
   find: () => Promise.resolve(undefined),
   everAdded: () => Promise.resolve(false),

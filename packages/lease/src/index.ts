@@ -9,14 +9,17 @@ export { keepLease, NodeId, syncNodesField, syncRouter, takeLease, type Holder, 
  * is the document's token counter, never expiring, so a later owner always gets a larger token.
  * `<prefix>node:<nodeId>` is a sync node's heartbeat (E7.2): it expires a third of a ttl after the node's last
  * beat, so a killed owner is known dead long before its leases expire. Routing reads it; nothing safe does.
- * ponytail: the counter lives in Redis, so a flushed Redis starts the tokens again at 1; ceiling: E7.3's fence
- * must not compare a new token with one issued before the flush. Upgrade: seed the counter from Postgres.
+ * The counter lives in Redis, so a flushed Redis would start the tokens again at 1: an acquire therefore takes a
+ * `floor` (the largest token the journal's fence has seen, E7.3) and never issues a token at or below it.
  */
 export type Leases = {
   /** How long a lease lives without renewal. The holder renews every third of it. */
   readonly ttlMs: number;
-  /** Take the room if nobody holds it. Answers the holder either way: compare its nodeId (and token) with yours. */
-  acquire(documentId: string, nodeId: string): Promise<{ acquired: boolean; holder: Holder }>;
+  /**
+   * Take the room if nobody holds it, under a token above `floor`. Answers the holder either way: compare its
+   * nodeId (and token) with yours.
+   */
+  acquire(documentId: string, nodeId: string, floor?: number): Promise<{ acquired: boolean; holder: Holder }>;
   /** Extend, only if `holder` is still exactly the lease's value. False: it expired or is someone else's. */
   renew(documentId: string, holder: Holder): Promise<boolean>;
   /** Let go, only if still ours: a late release must never delete the NEXT owner's lease. */
@@ -36,6 +39,7 @@ export type Leases = {
 const ACQUIRE = `
 local current = redis.call('GET', KEYS[1])
 if current then return {0, current} end
+if tonumber(redis.call('GET', KEYS[2]) or '0') < tonumber(ARGV[3]) then redis.call('SET', KEYS[2], ARGV[3]) end
 local holder = redis.call('INCR', KEYS[2]) .. ':' .. ARGV[1]
 redis.call('SET', KEYS[1], holder, 'PX', ARGV[2])
 return {1, holder}`;
@@ -58,8 +62,8 @@ export function createLeases({ redisUrl, ttlMs = 10_000, prefix = "", timeoutMs 
   });
   return {
     ttlMs,
-    async acquire(documentId, nodeId) {
-      const [taken, value] = (await redis.eval(ACQUIRE, 2, leaseKey(documentId), `${prefix}lease-token:${documentId}`, nodeId, String(ttlMs))) as [number, string];
+    async acquire(documentId, nodeId, floor = 0) {
+      const [taken, value] = (await redis.eval(ACQUIRE, 2, leaseKey(documentId), `${prefix}lease-token:${documentId}`, nodeId, String(ttlMs), String(floor))) as [number, string];
       const holder = parseHolder(value);
       if (!holder) throw new Error(`lease of ${documentId} holds a value that is not a holder`);
       return { acquired: taken === 1, holder };

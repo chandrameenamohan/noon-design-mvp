@@ -34,6 +34,23 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # E7.3: each sync node reaches Redis through this proxy, one listener per node (scripts/chaos/toxiproxy.json), so
+  # that chaos:partition-fenced can cut ONE node off Redis (bytes stop, connections stay open) while it still
+  # reaches Postgres. A plain pass-through otherwise. The control API is published on 127.0.0.1 for the chaos runs.
+  # ponytail: in the path of every sync->Redis call, in every run; ceiling: one more hop and one more container.
+  # Upgrade: a chaos-only compose override that inserts it.
+  redis-proxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/toxiproxy.json"]
+    volumes: ["./scripts/chaos/toxiproxy.json:/toxiproxy.json:ro"]
+    ports: ["127.0.0.1:${TOXIPROXY_PORT:-8474}:8474"]
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
   # E6.2: room snapshots (SPEC §2a). Pinned: conditional writes (IfNoneMatch) need a 2024+ release, and this
   # is the one learning-tests/minio ran against. Docker Hub's minio/minio refuses pulls: quay.io it is.
   # The sync server makes its bucket at start. Only the S3 port is published; the console is not.
@@ -127,7 +144,8 @@ services:
     environment: &sync-env
       PORT: "3001"
       SYNC_NODE_ID: sync
-      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      # Through redis-proxy, on this node's own listener (E7.3); the api and the workers dial Redis directly.
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis-proxy:6379"
       # How long a room outlives a silent owner (tunable; empty = 10 s). Renewed every third of it.
       LEASE_TTL_MS: "${LEASE_TTL_MS:-}"
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
@@ -142,7 +160,7 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       minio: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      redis-proxy: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 2s
@@ -154,6 +172,7 @@ services:
     environment:
       <<: *sync-env
       SYNC_NODE_ID: sync-2
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis-proxy:6380"
     ports: ["127.0.0.1:${SYNC_2_PORT:-3003}:3001"]
   # Long-running work, one BullMQ queue per kind (`ai` now; git, ship and sandbox in later epics).
   worker:

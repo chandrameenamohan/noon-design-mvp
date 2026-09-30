@@ -41,6 +41,18 @@ test("tokens rise strictly with each acquisition, across nodes and across the sa
   expect([first.acquired, second.acquired, third.acquired]).toEqual([true, true, true]);
 });
 
+test("a floor (the journal's fence, E7.3) keeps tokens rising after the counter is lost, as a flushed Redis loses it", async () => {
+  const documentId = randomUUID();
+  const first = await a.acquire(documentId, "sync", 41);
+  expect(first.holder.token).toBe(42);
+  await a.release(documentId, first.holder);
+  await raw.del(`${prefix}lease-token:${documentId}`); // FLUSHALL, for this one document
+  const next = await b.acquire(documentId, "sync-2", 42);
+  expect(next.holder.token).toBe(43);
+  await b.release(documentId, next.holder);
+  expect((await a.acquire(documentId, "sync", 5)).holder.token).toBe(44); // a floor below the counter changes nothing
+});
+
 test("only the holder renews; a renewed lease outlives its first ttl; an expired one is anybody's", async () => {
   const documentId = randomUUID();
   const { holder } = await a.acquire(documentId, "sync");

@@ -1,0 +1,4 @@
+[
+  { "name": "sync", "listen": "0.0.0.0:6379", "upstream": "redis:6379", "enabled": true },
+  { "name": "sync-2", "listen": "0.0.0.0:6380", "upstream": "redis:6379", "enabled": true }
+]

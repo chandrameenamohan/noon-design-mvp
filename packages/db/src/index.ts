@@ -41,12 +41,20 @@ export type DocumentStore = {
   load(orgId: string, documentId: string): Promise<{ doc: Doc | undefined; seq: number; snapshotSeq: number } | undefined>;
   /** E6.2: a snapshot at `seq` is stored. Called only AFTER the object is written; never moves backwards. */
   snapshotted(orgId: string, documentId: string, seq: number): Promise<void>;
+  /** E7.3: the largest lease token that ever claimed this document (0: none); undefined when there is no such document. */
+  fence(orgId: string, documentId: string): Promise<number | undefined>;
+  /**
+   * E7.3: this opening of the room, under lease `token`, becomes the document's only writer: from now on only
+   * appends that carry `claim` land. False: a claim with an equal or larger token was made (this lease is stale).
+   */
+  claim(orgId: string, documentId: string, token: number, claim: string): Promise<boolean>;
   /**
    * E6.1a: journals an accepted op, BEFORE anyone hears of it. Undefined: written. An op: this sender's
    * opId was journaled already, and that is what it became (a resend the room had forgotten). Rejects
-   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone.
+   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone,
+   * or (E7.3) `claim` is no longer the document's: `Fenced`. No claim: only a document never claimed takes it.
    */
-  append(orgId: string, documentId: string, op: SequencedOp): Promise<SequencedOp | undefined>;
+  append(orgId: string, documentId: string, op: SequencedOp, claim?: string): Promise<SequencedOp | undefined>;
   /** What this sender's opId became, if it was ever journaled. */
   find(orgId: string, documentId: string, actorId: string, opId: string): Promise<SequencedOp | undefined>;
   /** Was this node id ever added to the document (keystone 4: a removed id is never added again)? */
@@ -54,6 +62,9 @@ export type DocumentStore = {
   /** The journaled ops after `seq`, in order: what the saved document does not hold yet. */
   since(orgId: string, documentId: string, seq: number): Promise<SequencedOp[]>;
 };
+
+/** E7.3: the append was refused because a newer owner claimed the document. This room must stop writing. */
+export class Fenced extends Error {}
 
 const QUEUES = ["ai", "sandbox", "ship"] as const;
 type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string };
@@ -406,15 +417,32 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         // `< $3`: a slow write of an older snapshot must never point the document back at it.
         await pool.query("update documents set snapshot_seq = $3 where org_id = $1 and id = $2 and snapshot_seq < $3", [orgId, documentId, seq]);
       },
-      async append(orgId, documentId, { seq, opId, actor, op }) {
+      async fence(orgId, documentId) {
+        if (!isId(orgId) || !isId(documentId)) return undefined;
+        return (await one(z.object({ fence_token: count }), "select fence_token from documents where org_id = $1 and id = $2", [orgId, documentId]))?.fence_token;
+      },
+      async claim(orgId, documentId, token, claim) {
+        if (!isId(orgId) || !isId(documentId) || !isId(claim)) return false;
+        // `<`, not `<=`: two openings under one token (a flushed Redis issuing it again) cannot both claim.
+        const claimed = await pool.query("update documents set fence_token = $3, fence_claim = $4 where org_id = $1 and id = $2 and fence_token < $3", [orgId, documentId, token, claim]);
+        return claimed.rowCount === 1;
+      },
+      async append(orgId, documentId, { seq, opId, actor, op }, claim) {
         if (!isId(orgId) || !isId(documentId)) throw new Error("journal: not a document id");
         try {
           // From the document's row, so that a document of another org (or one deleted meanwhile) takes no op.
+          // The fence is in the same statement (F22): the row must still name this room's claim, and FOR UPDATE
+          // locks it, so a claim either waits for this insert (and its reader sees the row) or comes first (and
+          // Postgres re-checks the WHERE against the claimed row: nothing is inserted). Never read-then-write.
           const written = await pool.query(
-            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2`,
-            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op)],
+            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2 and fence_claim is not distinct from $9 for update`,
+            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op), claim ?? null],
           );
-          if (written.rowCount !== 1) throw new Error("journal: the document is gone");
+          if (written.rowCount !== 1) {
+            // Only telling the two refusals apart, after the fact: nothing was written either way.
+            const exists = await pool.query("select 1 from documents where org_id = $1 and id = $2", [orgId, documentId]);
+            throw exists.rowCount === 1 ? new Fenced("journal: fenced, a newer owner claimed the document") : new Error("journal: the document is gone");
+          }
           return undefined;
         } catch (err) {
           // Two unique keys, told apart by NAME: 23505 alone cannot say whether this is a resend or a rival writer.

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -9,6 +10,7 @@ import { manifest } from "@noon/design-system";
 import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
+import { watchFence } from "./fence.ts";
 import { createRoom, type Peer, type RateLimit, type Room, type RoomLimits } from "./room.ts";
 import { decodeSnapshot, snapshotter, type SnapshotCadence, type SnapshotStore } from "./snapshots.ts";
 
@@ -118,13 +120,25 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       return "closeCode" in loaded ? loaded : owned(loaded, () => Promise.resolve());
     }
     const { leases, nodeId } = lease;
+    // The largest token that ever claimed the document (E7.3): ours must be above it, even after a Redis flush.
+    let floor = 0;
+    if (store) {
+      let fence;
+      try {
+        fence = await store.fence(orgId, documentId);
+      } catch {
+        return { closeCode: CLOSE.unavailable };
+      }
+      if (fence === undefined) return { closeCode: CLOSE.documentNotFound };
+      floor = fence;
+    }
     let holder: Holder;
     let acquiredAt: number; // BEFORE the winning send: our deadline must never outlast Redis's (lease.ts)
     try {
       // Another live node owns the room: its peers are sent back to /session, which names the owner. A dead
       // one's lease (or our own previous run's) is waited out here, up to one ttl, and then the room is ours (F21).
       const taken = await takeLease({
-        acquire: () => leases.acquire(documentId, nodeId), alive: async (id) => (await leases.alive([id])).has(id),
+        acquire: () => leases.acquire(documentId, nodeId, floor), alive: async (id) => (await leases.alive([id])).has(id),
         nodeId, ttlMs: leases.ttlMs, now: () => performance.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()),
       });
       if (!taken) return { closeCode: CLOSE.roomElsewhere };
@@ -136,18 +150,21 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     }
     // Renewal starts NOW, not after the load: a long replay must not let the lease lapse unnoticed.
     const opened: { room?: Owned } = {}; // filled once loaded
+    // The lease ran out (our clock) or the journal fenced us (a newer owner claimed the document): stop writing,
+    // send the peers to the new owner.
+    const drop = (why: string): void => {
+      clearInterval(renewing);
+      const { room } = opened;
+      if (!room || room.lost) return; // still loading: the check after load() below refuses it
+      log(documentId, `lease ${String(holder.token)} ${why}: its peers are sent to the new owner`);
+      room.lost = true;
+      room.snapshot?.stop();
+      forget(); // the next peer asks Redis again
+      for (const socket of room.sockets) socket.close(CLOSE.roomElsewhere, "room_elsewhere");
+    };
     const keeper = keepLease({
       renew: () => leases.renew(documentId, holder), ttlMs: leases.ttlMs, now: () => performance.now(), acquiredAt,
-      onLost: () => {
-        clearInterval(renewing);
-        log(documentId, `lease ${String(holder.token)} lost: its peers are sent to the new owner`);
-        const { room } = opened;
-        if (!room) return; // still loading: the check after load() below refuses it
-        room.lost = true;
-        room.snapshot?.stop();
-        forget(); // the next peer asks Redis again
-        for (const socket of room.sockets) socket.close(CLOSE.roomElsewhere, "room_elsewhere");
-      },
+      onLost: () => { drop("lost"); },
     });
     const renewing = setInterval(() => void keeper.tick(), leases.ttlMs / 3);
     renewing.unref();
@@ -158,20 +175,33 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
         log(documentId, `lease not released, it expires by itself: ${err instanceof Error ? err.message : "unknown"}`);
       });
     };
-    const loaded = await load(documentId, orgId);
+    // The fence (F22), BEFORE the journal is read: from here on only this opening's appends land, and every row a
+    // previous owner added before this moment is in what load() replays. A lost claim: a newer lease exists.
+    const claim = randomUUID();
+    let claimed = true;
+    if (store) {
+      try {
+        claimed = await store.claim(orgId, documentId, holder.token, claim);
+      } catch {
+        await release();
+        return { closeCode: CLOSE.unavailable };
+      }
+    }
+    const loaded = claimed ? await load(documentId, orgId, { claim, onFenced: () => { drop("fenced by a newer owner's claim"); } }) : { closeCode: CLOSE.roomElsewhere };
     if ("closeCode" in loaded || !keeper.held) {
       await release();
       if (!("closeCode" in loaded)) loaded.snapshot?.stop();
       return "closeCode" in loaded ? loaded : { closeCode: CLOSE.roomElsewhere };
     }
-    // E7.3's seam: `holder.token` is this room's fencing token; the journal append must refuse to land once a
-    // larger token exists (SPEC §2a, "the fenced append"). Until then a frozen owner's late write is not refused.
     opened.room = owned(loaded, release);
     return opened.room;
   }
 
-  /** Loads the document and its room, or says why it cannot be opened. Never rejects. */
-  async function load(documentId: string, orgId: string): Promise<Loaded | { closeCode: number }> {
+  /**
+   * Loads the document and its room, or says why it cannot be opened. Never rejects. `fence`: this opening's claim,
+   * which every append carries (E7.3); without leases there is none, and only a never-claimed document is written.
+   */
+  async function load(documentId: string, orgId: string, fence?: { claim: string; onFenced: () => void }): Promise<Loaded | { closeCode: number }> {
     const roomLimits = limits ?? {};
     if (!store) return { room: createRoom({ doc: emptyDoc(), manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
     let stored;
@@ -217,8 +247,13 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       return { closeCode: CLOSE.unavailable };
     }
     // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
+    // A fenced one never lands: the room is dropped, not healed (a newer owner is writing).
+    let fenced = false;
     const journal = {
-      append: (op: SequencedOp) => bounded(store.append(orgId, documentId, op)),
+      append: watchFence((op: SequencedOp) => bounded(store.append(orgId, documentId, op, fence?.claim)), () => {
+        fenced = true;
+        fence?.onFenced();
+      }),
       find: (actorId: string, opId: string) => bounded(store.find(orgId, documentId, actorId, opId)),
       everAdded: (nodeId: string) => bounded(store.everAdded(orgId, documentId, nodeId)),
       since: (after: number) => bounded(store.since(orgId, documentId, after)),
@@ -227,7 +262,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     let snapshot: ReturnType<typeof snapshotter> | undefined;
     const room: Room = createRoom({
       doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}),
-      onReadOnly: () => { heal(room); },
+      onReadOnly: () => { if (!fenced) heal(room); },
       onAccepted: (accepted) => { snapshot?.accepted(accepted); },
     });
     if (snapshots) {
@@ -359,7 +394,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       if (room.peerCount === 0 && !closing) closeRoom(documentId, opened, opening);
     });
     onFrame = (data) => {
-      if (opened.lost) return; // being sent elsewhere: take nothing more (an op already in the queue is E7.3's fence)
+      if (opened.lost) return; // being sent elsewhere: take nothing more (an op already in the queue meets the fence)
       let parsed;
       try {
         parsed = ClientMessage.safeParse(JSON.parse(frameText(data)));
@@ -379,7 +414,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
 
   /** The room's last snapshot, once the ops still in its queue are handled. False: not stored (logged). */
   async function snapshotNow(opened: Owned): Promise<boolean> {
-    // A room that lost its lease writes nothing more: the new owner is the only writer (E7.3 fences the journal).
+    // A room that lost its lease writes nothing more: the new owner is the only writer (the journal is fenced).
     if (opened.lost) return false;
     await opened.room.settled();
     return (await opened.snapshot?.take()) ?? true;
