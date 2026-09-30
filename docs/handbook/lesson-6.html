@@ -105,7 +105,7 @@ h2 { scroll-margin-top: 24px; }
   </div>
 
   <div class="aside">
-    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">e72665c</span>, so what you read is what is committed. Sections 1, 3 and 4 are the ones a distributed-systems interview will dig into; section 5 is the one that turns the promise into a checked fact.</p>
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">f21d6d2</span>, so what you read is what is committed. Sections 1, 3 and 4 are the ones a distributed-systems interview will dig into; section 5 is the one that turns the promise into a checked fact.</p>
     <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now also MinIO on 127.0.0.1:9005; sync makes its bucket at start<br>pnpm exec vitest run apps/sync/src/room.test.ts apps/sync/src/snapshots.test.ts packages/peer-client/src/peer.test.ts scripts/chaos/no-loss.test.ts&nbsp;&nbsp;# the pure halves<br>docker compose kill --signal SIGKILL sync &amp;&amp; docker compose start sync&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the F18 fault, by hand; the canvas reconnects unaided</p>
     <p>Try it, once the stack is up: section 7 walks the two faults by hand, then the suites and the chaos runs, with the exact commands and what each should show.</p>
   </div>
@@ -140,17 +140,25 @@ create index op_journal_added on op_journal (document_id, (op -&gt;&gt; &#x27;no
 //    duplicate op_id by string-comparing `err.constraint`.</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /**
    * E6.1a: journals an accepted op, BEFORE anyone hears of it. Undefined: written. An op: this sender&#x27;s
    * opId was journaled already, and that is what it became (a resend the room had forgotten). Rejects
-   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone.
+   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone,
+   * or (E7.3) `claim` is no longer the document&#x27;s: `Fenced`. No claim: only a document never claimed takes it.
    */
-  append(orgId: string, documentId: string, op: SequencedOp): Promise&lt;SequencedOp | undefined&gt;;</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async append(orgId, documentId, { seq, opId, actor, op }) {
+  append(orgId: string, documentId: string, op: SequencedOp, claim?: string): Promise&lt;SequencedOp | undefined&gt;;</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async append(orgId, documentId, { seq, opId, actor, op }, claim) {
         if (!isId(orgId) || !isId(documentId)) throw new Error(&quot;journal: not a document id&quot;);
         try {
           // From the document&#x27;s row, so that a document of another org (or one deleted meanwhile) takes no op.
+          // The fence is in the same statement (F22): the row must still name this room&#x27;s claim, and FOR UPDATE
+          // locks it, so a claim either waits for this insert (and its reader sees the row) or comes first (and
+          // Postgres re-checks the WHERE against the claimed row: nothing is inserted). Never read-then-write.
           const written = await pool.query(
-            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2`,
-            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op)],
+            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2 and fence_claim is not distinct from $9 for update`,
+            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op), claim ?? null],
           );
-          if (written.rowCount !== 1) throw new Error(&quot;journal: the document is gone&quot;);
+          if (written.rowCount !== 1) {
+            // Only telling the two refusals apart, after the fact: nothing was written either way.
+            const exists = await pool.query(&quot;select 1 from documents where org_id = $1 and id = $2&quot;, [orgId, documentId]);
+            throw exists.rowCount === 1 ? new Fenced(&quot;journal: fenced, a newer owner claimed the document&quot;) : new Error(&quot;journal: the document is gone&quot;);
+          }
           return undefined;
         } catch (err) {
           // Two unique keys, told apart by NAME: 23505 alone cannot say whether this is a resend or a rival writer.
@@ -209,7 +217,7 @@ export type Journal = {
   const journal = memoryJournal();
   const order: string[] = [];
   const room = createRoom({ doc: emptyDoc(), manifest, journal: { ...journal, append: async (op) =&gt; { await Promise.resolve(); order.push(`journal ${String(op.seq)}`); return journal.append(op); } } });
-  const watcher: Peer = { actor: { kind: &quot;user&quot;, id: &quot;w&quot; }, session: { userId: &quot;w&quot;, orgId: &quot;org&quot;, expiresAt: 0 }, send: (m) =&gt; { if (m.type === &quot;op&quot;) order.push(`broadcast ${String(m.seq)}`); } };
+  const watcher: Peer = { actor: { kind: &quot;user&quot;, id: &quot;w&quot; }, session: { userId: &quot;w&quot;, orgId: &quot;org&quot;, expiresAt: 0 }, mayEdit: true, send: (m) =&gt; { if (m.type === &quot;op&quot;) order.push(`broadcast ${String(m.seq)}`); } };
   const [a, b] = [peer(&quot;a&quot;), peer(&quot;b&quot;)];
   room.join(a); room.join(b); room.join(watcher);
   await Promise.all(Array.from({ length: 20 }, (_, i) =&gt; room.submit(i % 2 ? a : b, clientOp(add(`n${String(i)}`)))));
@@ -253,22 +261,30 @@ export type Journal = {
     // An op written before the oldest thing the room remembers MAY already have been applied. The
     // journal can tell: found, it gets its original answer; not found, it never was, and is judged now.
     // Without a journal the room cannot tell, and applying it twice would move a node twice: resync.
-    if (baseSeq &lt; forgottenUpTo) {
-      if (!journal) {
-        refuse(&quot;stale&quot;);
-        return;
-      }
+    // A client that forged a high baseSeq (buggy or lying) skips that check, so every refusal below,
+    // and the no-op ack, asks the journal first too: a resend gets its first answer, whatever it claims to
+    // have seen (noon-mo3.1.1). Asked at most once per op, and only on those rare paths.
+    let asked = false;
+    /** True when the op has been answered: with its original row, or &quot;unavailable&quot;. */
+    const answeredFromJournal = async (): Promise&lt;boolean&gt; =&gt; {
+      if (!journal || asked) return false;
+      asked = true;
       let original;
       try {
         original = await journal.find(peer.actor.id, opId);
       } catch {
         refuse(&quot;unavailable&quot;);
+        return true;
+      }
+      if (original) peer.send({ type: &quot;op&quot;, ...original });
+      return original !== undefined;
+    };
+    if (baseSeq &lt; forgottenUpTo) {
+      if (!journal) {
+        refuse(&quot;stale&quot;);
         return;
       }
-      if (original) {
-        peer.send({ type: &quot;op&quot;, ...original });
-        return;
-      }
+      if (await answeredFromJournal()) return;
     }</code></pre></div><p>The dedupe is a two-level cache. The <code>Map</code> answers most resends in memory. An op whose <code>baseSeq</code> is behind everything the room remembers used to be refused as <code>stale</code> ("I cannot tell whether I applied this"); now the journal is asked with <code>find</code>: found, the original answer; not found, the op is judged now like any other. The <code>stale</code> path is kept for a room without a journal, so the simulator and lesson 2's tests still hold. Note the shape of the error handling: a journal that cannot be <em>read</em> refuses the op as <code>unavailable</code>, the same reason as a failed write, because in both cases the room does not know and must not guess.</p><p class="label">From <span class="mono">apps/sync/src/room.ts</span></p><div class="scroll"><pre><code>    // Keystone 4: validate() only sees the document as it is; an id that was removed is in the journal.
     // ponytail: one indexed read per add (adds are rare next to drags); without a journal, unchecked.
     if (op.type === &quot;add_node&quot; &amp;&amp; journal) {
@@ -280,7 +296,7 @@ export type Journal = {
         return;
       }
       if (reused) {
-        refuse(&quot;duplicate_node&quot;);
+        if (!(await answeredFromJournal())) refuse(&quot;duplicate_node&quot;);
         return;
       }
     }</code></pre></div><p>Keystone 4 says a node id that was removed is never added again, or an edit meant for the dead node lands on the new one. <code>validate</code> only sees the document as it is; it cannot know what was removed. Lesson 5's git peer worked around it with <code>git log -p</code> for pushed pages. Now the room asks the journal for every actor: one indexed read per add, through a partial index on <code>(document_id, op -&gt;&gt; 'nodeId') where op -&gt;&gt; 'type' = 'add_node'</code>. The query is spelled exactly as the index is, because Postgres uses a partial index only when the query's predicate implies the index's.</p><p>The last piece is <em>opening</em>. A room reloaded from a saved document knows only that document's <code>seq</code>. If the process died after journaling ops the save never saw, the room would number from a stale seq and every append would break <code>op_journal_seq</code>. So opening replays <code>since(seq)</code> before the room exists:</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // The contract checked each node&#x27;s shape. Whether they form a TREE is checkDoc&#x27;s job, and a room
@@ -385,6 +401,11 @@ export type Journal = {
     };
 
     if (!peers.has(peer)) return; // dropped while this op waited in the queue
+    // F24: asked when the op&#x27;s TURN comes, not when it arrived: an op queued before a demotion is refused too.
+    if (!peer.mayEdit) {
+      refuse(&quot;forbidden&quot;);
+      return;
+    }
     // Before the dedupe: even an answer from memory is an acknowledgement, and a read-only room gives none.
     if (readOnly) {
       refuse(&quot;unavailable&quot;);
@@ -412,11 +433,18 @@ export type Journal = {
       tail = done.then(() =&gt; undefined, () =&gt; undefined);
       return done.catch(() =&gt; false);
     },</code></pre></div><p><code>recover()</code> is the design decision of the bead. The obvious version is a health probe: ping the database, and if it answers, say "writable". It was rejected for two failures it would cause. First, an append can <em>land</em> and still throw (the connection dropped after the commit): the room refused the op, the client holds it, and if the room goes writable without reading, the client's resend hits <code>op_journal_op</code>, gets the original row, and the room applies it, which is fine, but every other peer never heard the op, because the original broadcast never happened. Second, a rival row at the room's next seq (section 1's other constraint) would keep the room refusing until a restart. So <code>recover()</code> first <em>replays</em> <code>since(seq)</code> through <code>accept</code>, the same function a fresh op goes through, and only then says writable. It takes its turn in the queue, so no op is judged halfway through a replay.</p><p>Two idioms. <code>tail = done.then(() =&gt; undefined, () =&gt; undefined)</code> puts the recovery on the queue and makes sure a failure in it cannot jam the queue for every later op (<code>then</code> with two arguments handles both outcomes). <code>return done.catch(() =&gt; false)</code> gives the caller a boolean that never rejects. The room has no clock, so it cannot retry by itself; <code>onReadOnly</code> tells the server to start.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
+    // A fenced one never lands: the room is dropped, not healed (a newer owner is writing).
+    let fenced = false;
+    // An edit reaches the other browsers only after these answer: a slow one is logged, with which it was.
+    const timed = reportSlow(SLOW_JOURNAL_MS, (what, ms) =&gt; { log(documentId, `journal ${what} took ${String(ms)} ms`, &quot;warn&quot;); });
     const journal = {
-      append: (op: SequencedOp) =&gt; bounded(store.append(orgId, documentId, op)),
-      find: (actorId: string, opId: string) =&gt; bounded(store.find(orgId, documentId, actorId, opId)),
-      everAdded: (nodeId: string) =&gt; bounded(store.everAdded(orgId, documentId, nodeId)),
-      since: (after: number) =&gt; bounded(store.since(orgId, documentId, after)),
+      append: watchFence((op: SequencedOp) =&gt; timed(&quot;append&quot;, bounded(store.append(orgId, documentId, op, fence?.claim))), () =&gt; {
+        fenced = true;
+        fence?.onFenced();
+      }),
+      find: (actorId: string, opId: string) =&gt; timed(&quot;find&quot;, bounded(store.find(orgId, documentId, actorId, opId))),
+      everAdded: (nodeId: string) =&gt; timed(&quot;everAdded&quot;, bounded(store.everAdded(orgId, documentId, nodeId))),
+      since: (after: number) =&gt; timed(&quot;since&quot;, bounded(store.since(orgId, documentId, after))),
     };</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  function bounded&lt;T&gt;(work: Promise&lt;T&gt;): Promise&lt;T&gt; {
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise&lt;never&gt;((_, reject) =&gt; { timer = setTimeout(() =&gt; { reject(new Error(&quot;journal timed out&quot;)); }, journalTimeoutMs); });
@@ -454,16 +482,13 @@ export type Journal = {
     }</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>    // A refusal from a room that said it is read-only: held, not a reason to reconnect. It says when it is writable.
     const held = readOnly &amp;&amp; message.type === &quot;rejected&quot; &amp;&amp; message.reason === &quot;unavailable&quot;;
     if (effects.resync &amp;&amp; !held) { resync(); return; }</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>      // Said at once, not queued behind a room that cannot save: a person sees why, a program (the AI, the git peer) stops or waits.
-      if (readOnly) return { ok: false, reason: &quot;read_only&quot; };</code></pre></div><p>Held ops are <em>not sent again and not resynced</em>: <code>flush</code> sends nothing while read-only, and a refusal with <code>unavailable</code> under a read-only room does not trigger the resync a bare <code>unavailable</code> would. New edits are refused at once with <code>read_only</code>, so a person sees why and a program stops. And "writable" simply calls <code>flush</code>: the held ops go out in their original order with their original opIds, so if any of them landed during the outage, the room answers from the journal. The watchdog is turned off while read-only, a named ponytail: a connection that dies half-open then is noticed by the next edit or by presence going quiet.</p><p><strong>Every kind of peer hears it through the one contract.</strong> The canvas shows the status and an alert and disables Add. The AI's tool call gets <code>read_only</code> with a hint to stop. The git peer throws <code>WaitAgain</code>, and its event goes back to <code>pending</code> instead of <code>failed</code>: a push is never lost to an outage, because lesson 5's reconcile would never re-record it.</p><p class="label">From <span class="mono">apps/web/src/Canvas.tsx</span></p><div class="scroll"><pre><code>      {/* E6.1b: the room&#x27;s storage is down. An alert, so a screen reader says it the moment it happens. */}
-      {readOnly &amp;&amp; &lt;p role=&quot;alert&quot; className=&quot;read-only&quot;&gt;Read-only: the server cannot save edits right now. Edits you already made are kept and will be saved when it can; new edits are paused.&lt;/p&gt;}
-      &lt;div role=&quot;toolbar&quot; aria-label=&quot;Add a component&quot;&gt;
-        {manifest.components.map((component) =&gt; &lt;button key={component.name} type=&quot;button&quot; disabled={readOnly} onClick={() =&gt; { add(component); }}&gt;Add {component.name}&lt;/button&gt;)}
-      &lt;/div&gt;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/tools.ts</span></p><div class="scroll"><pre><code>    read_only: &quot;The document is read-only: the server cannot save edits right now. Stop and report that the edit could not be made.&quot;,</code></pre></div><p class="label">From <span class="mono">apps/worker/src/push.ts</span></p><div class="scroll"><pre><code>        // E6.1b: the room cannot save. Not a conflict (the page is fine) and not a failure (the push would be
+      if (readOnly) return { ok: false, reason: &quot;read_only&quot; };</code></pre></div><p>Held ops are <em>not sent again and not resynced</em>: <code>flush</code> sends nothing while read-only, and a refusal with <code>unavailable</code> under a read-only room does not trigger the resync a bare <code>unavailable</code> would. New edits are refused at once with <code>read_only</code>, so a person sees why and a program stops. And "writable" simply calls <code>flush</code>: the held ops go out in their original order with their original opIds, so if any of them landed during the outage, the room answers from the journal. The watchdog is turned off while read-only, a named ponytail: a connection that dies half-open then is noticed by the next edit or by presence going quiet.</p><p><strong>Every kind of peer hears it through the one contract.</strong> The canvas shows the status and an alert and disables the library. The AI's tool call gets <code>read_only</code> with a hint to stop. The git peer throws <code>WaitAgain</code>, and its event goes back to <code>pending</code> instead of <code>failed</code>: a push is never lost to an outage, because lesson 5's reconcile would never re-record it.</p><p class="label">From <span class="mono">apps/web/src/Canvas.tsx</span></p><div class="scroll"><pre><code>          {/* E6.1b: the room&#x27;s storage is down. An alert, so a screen reader says it the moment it happens. */}
+          {readOnly &amp;&amp; &lt;p role=&quot;alert&quot; className=&quot;read-only&quot;&gt;Read-only: the server cannot save edits right now. Edits you already made are kept and will be saved when it can; new edits are paused.&lt;/p&gt;}</code></pre></div><p class="label">From <span class="mono">apps/web/src/Canvas.tsx</span></p><div class="scroll"><pre><code>            &lt;LibraryPanel doc={doc} selected={node.id} labels={labels} isContainer={isContainer} disabled={readOnly} onCarry={setCarry} onAdd={addAt} /&gt;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/tools.ts</span></p><div class="scroll"><pre><code>    read_only: &quot;The document is read-only: the server cannot save edits right now. Stop and report that the edit could not be made.&quot;,</code></pre></div><p class="label">From <span class="mono">apps/worker/src/push.ts</span></p><div class="scroll"><pre><code>        // E6.1b: the room cannot save. Not a conflict (the page is fine) and not a failure (the push would be
         // lost): the event waits. Ops of this page already sent die with the peer below, unapplied.
         if (!submitted.ok &amp;&amp; submitted.reason === &quot;read_only&quot;) throw new WaitAgain(&quot;document_read_only&quot;);</code></pre></div><p class="label">From <span class="mono">apps/worker/src/git.ts</span></p><div class="scroll"><pre><code>      if (err instanceof WaitAgain) {
-        // ponytail: the whole event waits, pages already applied included (applying again diffs against the room
-        // as it is then). Ceiling: one retry per poll tick while the room stays read-only.
-        await store.finish(event.id, &quot;pending&quot;);
+        // ponytail: the whole event waits, pages already applied included (applying again is safe: push-ops takes
+        // the commit&#x27;s journaled adds as its own, noon-91u). Ceiling: one retry per poll tick while the room stays read-only.
+        await store.finish(event, &quot;pending&quot;);
         log(`${event.ref} ${event.after} waits: ${err.message}`);
         return false;
       }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/room.test.ts</span></p><div class="scroll"><pre><code>test(&quot;recover: an append that LANDED although its reply was lost is replayed to everyone with its seq, so the resend is answered, not applied twice&quot;, async () =&gt; {
@@ -636,7 +661,7 @@ export function snapshotter({ room, from, cadence, write }: { room: Source; from
     let snapshot: ReturnType&lt;typeof snapshotter&gt; | undefined;
     const room: Room = createRoom({
       doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}),
-      onReadOnly: () =&gt; { heal(room); },
+      onReadOnly: () =&gt; { if (!fenced) heal(room); },
       onAccepted: (accepted) =&gt; { snapshot?.accepted(accepted); },
     });
     if (snapshots) {
@@ -689,20 +714,25 @@ export function snapshotter({ room, from, cadence, write }: { room: Source; from
    * every op this room accepted (E6.1a), so the next open replays what the snapshot would have held.
    * This replaced F8&#x27;s save, which had to retry for ever because the room&#x27;s memory was the only copy.
    */
-  function closeRoom(documentId: string, opened: { room: Room; snapshot?: ReturnType&lt;typeof snapshotter&gt; }, opening: Promise&lt;Opened&gt;): void {
+  function closeRoom(documentId: string, opened: Owned, opening: Promise&lt;Opened&gt;): void {
     const work = (async () =&gt; {
       await snapshotNow(opened);
       // Someone may have joined WHILE the snapshot was written: then the room stays.
-      if (opened.room.peerCount === 0 &amp;&amp; rooms.get(documentId) === opening) {
+      if (opened.room.peerCount === 0 &amp;&amp; (opened.lost || rooms.get(documentId) === opening)) {
         opened.snapshot?.stop();
-        rooms.delete(documentId);
-        peerCounts.delete(documentId);
+        if (rooms.get(documentId) === opening) {
+          rooms.delete(documentId);
+          peerCounts.delete(documentId);
+        }
+        await opened.release(); // after the snapshot: the next owner opens from it
       }
     })();
     leaving.add(work);
     void work.finally(() =&gt; leaving.delete(work));
   }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>        close: async () =&gt; {
           closing = true;
+          clearInterval(beating);
+          clearInterval(sweeper);
           // FIRST snapshot every open room, while its peers are still connected. Terminating the sockets
           // first (under F8&#x27;s save) lost everything: their &#x27;close&#x27; handlers only run on a later tick, so
           // &quot;nothing pending&quot; was true and the database pool was closed.
@@ -711,6 +741,7 @@ export function snapshotter({ room, from, cadence, write }: { room: Source; from
             if (!(&quot;room&quot; in opened)) return;
             await snapshotNow(opened);
             opened.snapshot?.stop();
+            await opened.release(); // another node may take the room at once, not a ttl later
           }));</code></pre></div><p>F8's save is deleted, and with it a retry loop and a setting. It had to retry for ever because the room's memory was the only copy. Now a failed snapshot is <em>logged and not retried</em>; the rejected alternative, retrying on last leave, would have kept complexity that the journal made pointless. The shutdown order is the same lesson 2 learned the hard way: snapshot every room <em>while its peers are still connected</em>, then terminate the sockets, then close the pool.</p><p class="label">From <span class="mono">apps/sync/src/config.ts</span></p><div class="scroll"><pre><code>  // E6.2: where rooms write their snapshots. No defaults: an address or a password is never guessed.
   MINIO_URL: z.string({ error: &quot;MINIO_URL is required&quot; }).refine((value) =&gt; URL.canParse(value) &amp;&amp; /^https?:$/.test(new URL(value).protocol), &quot;MINIO_URL must be an http(s):// URL&quot;),
   MINIO_USER: z.string({ error: &quot;MINIO_USER is required&quot; }).min(1, &quot;MINIO_USER is required&quot;),
@@ -728,8 +759,12 @@ export function snapshotter({ room, from, cadence, write }: { room: Source; from
     ports: [&quot;127.0.0.1:${MINIO_PORT:-9005}:9000&quot;]
     volumes: [&quot;miniodata:/data&quot;]</code></pre></div><p class="label">From <span class="mono">apps/sync/src/main.ts</span></p><div class="scroll"><pre><code>const snapshots = s3Snapshots(config.minio);
 await snapshots.ensureBucket(); // fails the start, like a missing variable: a sync without MinIO cannot open a snapshotted document
-const server = await startSyncServer({ port: config.port, secrets: config.secrets, store: db.documentStore(), snapshots, cadence: config.cadence });
-process.stdout.write(`sync listening on ${server.url}\n`);</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.test.ts</span></p><div class="scroll"><pre><code>test(&quot;one write at a time: triggers during a write are dropped, and take waits for it, then writes what is newer&quot;, async () =&gt; {
+// Not awaited to be ready: with Redis away this node still starts and answers &quot;try again&quot; (4503) until it returns.
+const leases = createLeases({ redisUrl: config.lease.redisUrl, ttlMs: config.lease.ttlMs });
+const server = await startSyncServer({ port: config.port, secrets: config.secrets, store: db.documentStore(), snapshots, cadence: config.cadence, lease: { leases, nodeId: config.lease.nodeId }, roles: (orgId, documentId, userId) =&gt; db.roleIn(orgId, documentId, userId) });
+// E8.2 (F24): the api announces role changes on Redis; every live session they concern reads its role again.
+const access = accessSubscriber({ redisUrl: config.lease.redisUrl, onChange: (change) =&gt; void server.recheck(change) });
+process.stdout.write(`sync ${config.lease.nodeId} listening on ${server.url}\n`);</code></pre></div><p class="label">From <span class="mono">apps/sync/src/snapshots.test.ts</span></p><div class="scroll"><pre><code>test(&quot;one write at a time: triggers during a write are dropped, and take waits for it, then writes what is newer&quot;, async () =&gt; {
   const { room, written, control, snap, accept } = rig({ everyOps: 1 });
   let release = (): void =&gt; undefined;
   control.hold = new Promise((resolve) =&gt; { release = resolve; });
@@ -883,14 +918,16 @@ export function noLossViolations({ ledger, journal, docs }: { ledger: readonly L
 }</code></pre></div><p>This is what "no loss" means <em>precisely</em>, and it is worth saying in words, because an interviewer will ask. An op <strong>acknowledged before the fault</strong> must be in the journal at exactly the seq it was acknowledged with. An op <strong>in flight at the fault</strong> (sent, unanswered) or <strong>made while the server was gone</strong> must settle <code>ok</code> and appear exactly once. Nothing may be refused for a reason the run did not cause, and nothing refused before the fault may be in the journal. The journal's seqs are <code>1..n</code> with no gap or repeat, no opId appears twice, and every row belongs to a tracked peer. And every peer's confirmed document is byte-identical. Then two <strong>vacuity guards</strong>: a run in which nothing was acknowledged before the fault, or nothing was in flight at it, proved nothing, and says so as a violation. SPEC §4a's rule, "every <code>always</code> has a <code>sometimes</code>", is that pair of lines.</p><p>The <code>Outcome</code> and <code>Submitted</code> types are copied from peer-client's public shape rather than imported, so the module depends on nothing. <code>ledger.fault()</code> is the one moment that matters: whatever has <em>settled</em> by then counts as "before", everything else is "in flight". <code>settle(timeoutMs)</code> is <code>Promise.race</code> between "every op settled" and a timer, with the timer cleared afterwards, so an op that never settles is left as <code>"unsettled"</code> and reported as lost rather than hanging the run.</p><p class="label">From <span class="mono">scripts/chaos/kill-sync-no-loss.ts</span></p><div class="scroll"><pre><code>/** One document, one kill. Returns what broke, in words (empty = PASS), and how much was exercised. */
 async function round(n: number): Promise&lt;{ round: number; ops: number; journaled: number; violations: string[] }&gt; {
   const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: `chaos kill sync ${String(n)}` }));
-  const wsUrl = `${syncUrl}/documents/${doc}`;
+  const session = async () =&gt; SessionResponse.parse(await post(`/documents/${doc}/session`));
   const peers = {
-    person: connectPeer({ manifest, session: async () =&gt; SessionResponse.parse(await post(`/documents/${doc}/session`)) }),
-    ai: connectPeer({ manifest, session: () =&gt; Promise.resolve({ wsUrl, token: signSessionToken({ userId: randomUUID(), orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: &quot;agent&quot;, runId: randomUUID() } }) }) }),
+    person: connectPeer({ manifest, session }),
+    // The api&#x27;s address (the room&#x27;s owner, E7.1) with the worker&#x27;s kind of token: the AI routes as the worker does.
+    ai: connectPeer({ manifest, session: async () =&gt; ({ wsUrl: (await session()).wsUrl, token: signSessionToken({ userId: me, orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: &quot;agent&quot;, runId: randomUUID() } }) }) }),
   };
   const all = Object.entries(peers);
   const ledger = createLedger();
   let made = 0;
+  let victim = &quot;sync&quot;;
   const edit = (count: number): void =&gt; {
     for (let i = 0; i &lt; count; i++) for (const [name, peer] of all) ledger.track(name, peer.submit(add(`${name}-${String(made++)}`)));
   };
@@ -899,13 +936,15 @@ async function round(n: number): Promise&lt;{ round: number; ops: number; journa
     edit(5);
     await ledger.settle(10_000); // acknowledged before the fault
 
+    victim = ownerOf(doc);
     edit(20); // on the wire...
-    compose(&quot;kill&quot;, &quot;--signal&quot;, &quot;SIGKILL&quot;, &quot;sync&quot;); // ...and the server dies under it. execFileSync: no ack is heard meanwhile.
+    compose(&quot;kill&quot;, &quot;--signal&quot;, &quot;SIGKILL&quot;, victim); // ...and the server dies under it. execFileSync: no ack is heard meanwhile.
     ledger.fault();
     await until(() =&gt; all.every(([, p]) =&gt; p.status !== &quot;live&quot;), &quot;both peers see the server gone&quot;, 30_000);
     edit(5); // made while the server is gone: held, sent after the next welcome
 
-    compose(&quot;start&quot;, &quot;sync&quot;);
+    // Back at once: the peers land on it or on the other node (E7.2); either waits the dead lease out (LEASE_TTL_MS).
+    compose(&quot;start&quot;, victim);
     await until(() =&gt; all.every(([, p]) =&gt; p.status === &quot;live&quot; &amp;&amp; p.pendingCount === 0), &quot;both peers reconnected unaided, nothing pending&quot;, 60_000);
     await ledger.settle(15_000);
     await until(() =&gt; all.every(([, p]) =&gt; p.seq === peers.person.seq), &quot;both peers at the same seq&quot;, 10_000);
@@ -916,7 +955,7 @@ async function round(n: number): Promise&lt;{ round: number; ops: number; journa
     return { round: n, ops: ledger.entries.length, journaled: journal.length, violations: noLossViolations({ ledger: ledger.entries, journal, docs }) };
   } finally {
     for (const [, p] of all) p.close();
-    compose(&quot;start&quot;, &quot;sync&quot;); // whatever failed above, the server comes back
+    compose(&quot;start&quot;, victim); // whatever failed above, the server comes back
   }
 }</code></pre></div><p>The kill is a <em>synchronous</em> <code>docker compose kill --signal SIGKILL sync</code> through <code>execFileSync</code>, called right after a burst of twenty edits per peer. Because the call blocks the event loop, no acknowledgement can be processed between the last <code>submit</code> and the kill: the burst is guaranteed in flight, and some of it is in the state the journal's dedupe exists for (journaled, acknowledgement never heard). The server is started again and the <em>peers are left alone</em>: F18 says they reconnect unaided, so the run waits on <code>status === "live" &amp;&amp; pendingCount === 0</code> and nothing else. Each round uses a fresh document and one fault (several kills on one ledger would blur "acknowledged before <em>which</em> fault"), and <code>ROUNDS=3</code> repeats, because a one-shot pass proves nothing. <code>finally</code> starts sync again whatever happened.</p><p class="label">From <span class="mono">scripts/chaos/kill-sync-no-loss.ts</span></p><div class="scroll"><pre><code>const secretOrNone = process.env[&quot;SESSION_TOKEN_SECRET&quot;] ?? (existsSync(&quot;.env&quot;) ? parseEnv(readFileSync(&quot;.env&quot;, &quot;utf8&quot;))[&quot;SESSION_TOKEN_SECRET&quot;] : undefined);
 if (secretOrNone === undefined) throw new Error(&quot;SESSION_TOKEN_SECRET is not set and .env has none: run ./init.sh&quot;);
@@ -950,7 +989,7 @@ async function outage(name: string, down: () =&gt; void, up: () =&gt; void, read
 }</code></pre></div><p>The second run is section 3 against the real stack, twice: Postgres <em>stopped</em> (connections refused, read-only within a round trip) and <em>paused</em> (queries hang, read-only after the 5 s journal timeout). Note the §4a pitfall the code names: the fault is opened <em>before</em> the workload, because a fast pipeline outruns a late fault. Every wait polls an observable (<code>peer.readOnly</code>, <code>peer.seq</code>) with a deadline, never a fixed sleep. And the whole thing prints one JSON line and exits non-zero on FAIL, so <code>make chaos</code> can run it in a loop.</p><p class="label">From <span class="mono">Makefile</span></p><div class="scroll"><pre><code># Outside `make check`: the chaos checks (SPEC §4a) break the REAL compose stack (./init.sh first) and prove
 # the system&#x27;s guarantees hold. Each prints one JSON line and exits non-zero on FAIL.
 .PHONY: chaos
-chaos: ; node scripts/chaos/postgres-down-read-only.ts &amp;&amp; node scripts/chaos/kill-sync-no-loss.ts</code></pre></div><p class="label">From <span class="mono">scripts/chaos/no-loss.test.ts</span></p><div class="scroll"><pre><code>  it(&quot;refuses a run that proved nothing (vacuity guards)&quot;, () =&gt; {
+chaos: ; node scripts/chaos/postgres-down-read-only.ts &amp;&amp; node scripts/chaos/kill-sync-no-loss.ts &amp;&amp; node scripts/chaos/kill-owner-failover.ts &amp;&amp; node scripts/chaos/fenced.ts zombie &amp;&amp; node scripts/chaos/fenced.ts partition &amp;&amp; node scripts/chaos/kill-worker-resumes.ts &amp;&amp; node scripts/chaos/redis-wipe-rebuild.ts</code></pre></div><p class="label">From <span class="mono">scripts/chaos/no-loss.test.ts</span></p><div class="scroll"><pre><code>  it(&quot;refuses a run that proved nothing (vacuity guards)&quot;, () =&gt; {
     expect(noLossViolations({ ledger: [acked], journal: [first], docs: same })).toEqual([&quot;vacuous: no op was in flight at the fault, so nothing was resent&quot;]);
     expect(noLossViolations({ ledger: [{ ...inFlight, outcome: { ok: true, seq: 1 } }], journal: [{ seq: 1, opId: &quot;b&quot; }], docs: same })).toEqual([&quot;vacuous: no op was acknowledged before the fault&quot;]);
   });
@@ -1002,6 +1041,8 @@ function switchableStore() {
   const store: DocumentStore = {
     load: () =&gt; gate(() =&gt; ({ doc: undefined, seq: 0, snapshotSeq: 0 })),
     snapshotted: () =&gt; gate(() =&gt; undefined),
+    fence: () =&gt; gate(() =&gt; 0),
+    claim: () =&gt; gate(() =&gt; true),
     append: (_org, _doc, op) =&gt; gate(() =&gt; {
       const original = rows.find((r) =&gt; r.actor.id === op.actor.id &amp;&amp; r.opId === op.opId);
       if (original) return original;
@@ -1087,7 +1128,7 @@ docker compose logs sync | grep snapshot     # only FAILED snapshots are logged;
 node scripts/chaos/postgres-down-read-only.ts        # one JSON line: {"chaos":"postgres-down-read-only","verdict":"PASS","steps":[...]}
 ROUNDS=3 node scripts/chaos/kill-sync-no-loss.ts     # {"chaos":"kill-sync-no-loss","verdict":"PASS","rounds":[{"ops":60,"journaled":...,"violations":[]},...]}
 make chaos                                   # both, in order; breaks and restores the real stack
-make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>e72665c</code>, and the code is right until a test says otherwise. A step that fails is a finding: write it as <em>sequence → false belief → consequence → smallest fix</em> (SPEC §4a's form) and file it against the bead that owns the code.</p></section><section id="limits"><h2>8 · What the type system could not see, epic 6 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>an op announced before it was durable</td><td>the compiler cannot see the order of two awaits</td><td>append, then <code>accept</code>; drill 2 plants the reverse</td></tr><tr><td>a failed write took a sequence number</td><td><code>seq + 1</code> looked like <code>seq++</code></td><td>the number is taken inside <code>accept</code> only</td></tr><tr><td>two unique violations look the same (23505)</td><td>the code is not the constraint</td><td>read <code>err.constraint</code> by name</td></tr><tr><td>a bare-opId key would refuse a cross-peer collision</td><td>every broadcast shows every opId</td><td>key on <code>(document, actor, opId)</code></td></tr><tr><td>a forged <code>baseSeq</code> walked past the stale guard (E2.3)</td><td>memory is bounded</td><td>the journal's key answers with the original</td></tr><tr><td>a reopened room numbered from a stale seq</td><td>the saved document is behind the journal</td><td>replay <code>since(seq)</code> at open</td></tr><tr><td>a removed id came back through any actor</td><td><code>validate</code> sees only the present</td><td><code>everAdded</code> through a partial index</td></tr><tr><td>a paused database hung the room for ever</td><td>a hang is not an error</td><td><code>bounded</code>: a timeout that means "treat as failed"</td></tr><tr><td>a health probe went writable with the room behind the journal</td><td>"answers" is not "agrees"</td><td><code>recover()</code> replays, then says writable</td></tr><tr><td>a refusal under read-only was a resync, and a reconnect storm</td><td><code>unavailable</code> meant one thing in lesson 2</td><td>the status message turns it into a hold</td></tr><tr><td>a held op that landed would be applied twice, or heard by nobody</td><td>a lost reply is not a failed write</td><td>replay before writable; the resend gets the original</td></tr><tr><td>a git event failed during an outage was gone for good</td><td><code>(ref, after_sha)</code> is never re-recorded</td><td><code>WaitAgain</code>: back to <code>pending</code></td></tr><tr><td>a snapshot named <code>seq</code> held a later document</td><td>the room edits <code>doc</code> in place</td><td>encode in the same tick as <code>seq</code></td></tr><tr><td>the pointer could name a missing object</td><td>two writes, one crash between them</td><td>MinIO first, then <code>snapshot_seq</code></td></tr><tr><td>a slow old snapshot could move the pointer back</td><td>writes finish out of order</td><td><code>where snapshot_seq &lt; $3</code></td></tr><tr><td>"10" sorted before "9"</td><td>S3 keys are strings</td><td>zero-pad to 16 digits</td></tr><tr><td>finding the newest snapshot by listing</td><td>1000 keys a page, ascending only (measured)</td><td>a pointer row; build the key</td></tr><tr><td>MinIO down read as "no snapshot"</td><td>one <code>undefined</code> for two facts</td><td><code>NoSuchKey</code> → undefined; anything else throws; 4503 vs 4500</td></tr><tr><td>a chaos run that proved nothing passed</td><td>a green run with no op in flight</td><td>vacuity guards as violations</td></tr><tr><td>a kill that landed after the burst was acknowledged</td><td>an async kill lets acks through</td><td><code>execFileSync</code>: the loop is blocked until the kill lands</td></tr><tr><td>a narrowing that did not reach a hoisted function</td><td>declarations hoist; narrowings do not</td><td><code>const secret: string = secretOrNone</code></td></tr><tr><td>the checker's tests were not collected</td><td>the unit pattern stopped at <code>packages</code></td><td><code>scripts/**/*.test.ts</code> in the include</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lessons 2 to 5 said types prove shapes and say nothing about order, time, repetition, memory, who is speaking, or which side of a boundary a thing is on. Epic 6 adds the two that durability turns on: types cannot see <em>whether a write happened</em> (a rejected promise may have landed; a hung one may too) and <em>what order two effects took</em> (announce, then persist, compiles as well as the reverse). Both were answered the same way as before: put the truth in one place, read it before you believe anything, and write a test that watches the order.</p></section>
+make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>f21d6d2</code>, and the code is right until a test says otherwise. A step that fails is a finding: write it as <em>sequence → false belief → consequence → smallest fix</em> (SPEC §4a's form) and file it against the bead that owns the code.</p></section><section id="limits"><h2>8 · What the type system could not see, epic 6 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>an op announced before it was durable</td><td>the compiler cannot see the order of two awaits</td><td>append, then <code>accept</code>; drill 2 plants the reverse</td></tr><tr><td>a failed write took a sequence number</td><td><code>seq + 1</code> looked like <code>seq++</code></td><td>the number is taken inside <code>accept</code> only</td></tr><tr><td>two unique violations look the same (23505)</td><td>the code is not the constraint</td><td>read <code>err.constraint</code> by name</td></tr><tr><td>a bare-opId key would refuse a cross-peer collision</td><td>every broadcast shows every opId</td><td>key on <code>(document, actor, opId)</code></td></tr><tr><td>a forged <code>baseSeq</code> walked past the stale guard (E2.3)</td><td>memory is bounded</td><td>the journal's key answers with the original</td></tr><tr><td>a reopened room numbered from a stale seq</td><td>the saved document is behind the journal</td><td>replay <code>since(seq)</code> at open</td></tr><tr><td>a removed id came back through any actor</td><td><code>validate</code> sees only the present</td><td><code>everAdded</code> through a partial index</td></tr><tr><td>a paused database hung the room for ever</td><td>a hang is not an error</td><td><code>bounded</code>: a timeout that means "treat as failed"</td></tr><tr><td>a health probe went writable with the room behind the journal</td><td>"answers" is not "agrees"</td><td><code>recover()</code> replays, then says writable</td></tr><tr><td>a refusal under read-only was a resync, and a reconnect storm</td><td><code>unavailable</code> meant one thing in lesson 2</td><td>the status message turns it into a hold</td></tr><tr><td>a held op that landed would be applied twice, or heard by nobody</td><td>a lost reply is not a failed write</td><td>replay before writable; the resend gets the original</td></tr><tr><td>a git event failed during an outage was gone for good</td><td><code>(ref, after_sha)</code> is never re-recorded</td><td><code>WaitAgain</code>: back to <code>pending</code></td></tr><tr><td>a snapshot named <code>seq</code> held a later document</td><td>the room edits <code>doc</code> in place</td><td>encode in the same tick as <code>seq</code></td></tr><tr><td>the pointer could name a missing object</td><td>two writes, one crash between them</td><td>MinIO first, then <code>snapshot_seq</code></td></tr><tr><td>a slow old snapshot could move the pointer back</td><td>writes finish out of order</td><td><code>where snapshot_seq &lt; $3</code></td></tr><tr><td>"10" sorted before "9"</td><td>S3 keys are strings</td><td>zero-pad to 16 digits</td></tr><tr><td>finding the newest snapshot by listing</td><td>1000 keys a page, ascending only (measured)</td><td>a pointer row; build the key</td></tr><tr><td>MinIO down read as "no snapshot"</td><td>one <code>undefined</code> for two facts</td><td><code>NoSuchKey</code> → undefined; anything else throws; 4503 vs 4500</td></tr><tr><td>a chaos run that proved nothing passed</td><td>a green run with no op in flight</td><td>vacuity guards as violations</td></tr><tr><td>a kill that landed after the burst was acknowledged</td><td>an async kill lets acks through</td><td><code>execFileSync</code>: the loop is blocked until the kill lands</td></tr><tr><td>a narrowing that did not reach a hoisted function</td><td>declarations hoist; narrowings do not</td><td><code>const secret: string = secretOrNone</code></td></tr><tr><td>the checker's tests were not collected</td><td>the unit pattern stopped at <code>packages</code></td><td><code>scripts/**/*.test.ts</code> in the include</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lessons 2 to 5 said types prove shapes and say nothing about order, time, repetition, memory, who is speaking, or which side of a boundary a thing is on. Epic 6 adds the two that durability turns on: types cannot see <em>whether a write happened</em> (a rejected promise may have landed; a hung one may too) and <em>what order two effects took</em> (announce, then persist, compiles as well as the reverse). Both were answered the same way as before: put the truth in one place, read it before you believe anything, and write a test that watches the order.</p></section>
 
   <section id="drills">
     <h2>Your turn: three drills</h2>
