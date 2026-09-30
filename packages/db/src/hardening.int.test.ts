@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { createDb } from "./index.ts";
 import { createTestDb, TEST_DATABASE_URL, type TestDb } from "./testing.ts";
@@ -56,12 +57,15 @@ test.each(["public -c statement_timeout=4321", "a;drop schema public", "Has Spac
 );
 
 test("two processes migrating a fresh database at the same moment both succeed", async () => {
+  const allMigrations = (await readdir(new URL("../migrations/", import.meta.url))).filter((f) => f.endsWith(".sql")).sort();
+  expect(allMigrations[0]).toBe("0001_init.sql");
   for (let round = 0; round < 5; round++) {
     const fresh = await createTestDb({ migrate: false });
     const other = createDb({ connectionString: TEST_DATABASE_URL, schema: fresh.schema });
     try {
       await Promise.all([fresh.db.migrate(), other.migrate()]);
-      expect(await fresh.db.appliedMigrations()).toEqual(["0001_init.sql", "0002_memberships_user_id.sql", "0003_document_content.sql", "0004_jobs.sql", "0005_jobs_review.sql", "0006_jobs_cancel.sql", "0007_usage.sql", "0008_sandbox_jobs.sql"]);
+      // every migration file on disk recorded exactly once: none skipped, none doubled by the race
+      expect(await fresh.db.appliedMigrations()).toEqual(allMigrations);
     } finally {
       await other.close();
       await fresh.drop();
