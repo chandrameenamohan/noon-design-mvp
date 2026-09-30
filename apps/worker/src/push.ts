@@ -4,7 +4,7 @@ import type { GitEvent, GitStore } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { WaitAgain, type ChangedPage, type PageBase } from "./git.ts";
-import { roomUrl, whenLive, within, type SyncSessions } from "./live.ts";
+import { roomUrl, stableOpId, whenLive, within, type SyncSessions } from "./live.ts";
 import { pushOps } from "./push-ops.ts";
 
 /**
@@ -23,7 +23,7 @@ export type PushOutcome =
   | { kind: "conflict"; reason: ConflictReason; detail: string }
   | { kind: "applied"; ops: number; refused: number };
 
-export function createPushApplier({ sessions, manifest, documentOrg, shippedCommit, connectTimeoutMs = 10_000, settleTimeoutMs = 30_000, WebSocketImpl }: {
+export function createPushApplier({ sessions, manifest, documentOrg, shippedCommit, pushedNodeIds, connectTimeoutMs = 10_000, settleTimeoutMs = 30_000, WebSocketImpl }: {
   sessions: SyncSessions;
   manifest: Manifest;
   documentOrg: (documentId: string) => Promise<string | undefined>;
@@ -32,6 +32,12 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
    * three-way diff of it against the room would undo every canvas edit that raced the ship.
    */
   shippedCommit: (sha: string) => Promise<boolean>;
+  /**
+   * noon-91u: the node ids this commit already added to the document (the journal's git ops stamped with it). A push
+   * applied again (its git peer was killed halfway, and the event resumed) finishes the page instead of taking its
+   * own adds for re-used ids.
+   */
+  pushedNodeIds: (documentId: string, commit: string) => Promise<ReadonlySet<string>>;
   connectTimeoutMs?: number;
   /** How long the room may take to answer every op of one page. */
   settleTimeoutMs?: number;
@@ -50,6 +56,9 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
 
     const peer = connectPeer({
       manifest,
+      // Named by the commit and the op itself: the same push applied again sends its ops under their first ids, and the
+      // room answers a repeat (a set_prop the canvas has changed since, included) with its first answer, not a second edit.
+      mintOpId: (op) => stableOpId(`${event.after}:${page.documentId}:${JSON.stringify(op)}`),
       ...(WebSocketImpl ? { WebSocketImpl } : {}),
       // `sub` must be a uuid: the event's id. The commit rides as the run, so every op names the commit it came from.
       session: async () => ({
@@ -60,7 +69,9 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
     try {
       await whenLive(peer, connectTimeoutMs);
       // The CONFIRMED document: the base of the diff must be what the room holds, never a guess.
-      const result = pushOps({ base: baseDoc?.ok ? baseDoc.doc : undefined, target: parsed.doc, current: peer.confirmed, earlierIds: before.earlierIds });
+      // Asked once the room is live, so an add journaled before this peer joined is in the answer.
+      const alreadyAdded = await pushedNodeIds(page.documentId, event.after);
+      const result = pushOps({ base: baseDoc?.ok ? baseDoc.doc : undefined, target: parsed.doc, current: peer.confirmed, earlierIds: before.earlierIds, alreadyAdded });
       if (!result.ok) return { kind: "conflict", reason: result.reason, detail: result.detail };
       const settled = [];
       for (const op of result.ops) {

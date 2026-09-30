@@ -3,7 +3,7 @@ import type { Manifest, Op, RunProgress, UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
-import { roomUrl, type SyncSessions } from "./live.ts";
+import { roomUrl, stableOpId, type SyncSessions } from "./live.ts";
 import { withProgress } from "./progress.ts";
 import type { RunAgent } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
@@ -23,11 +23,7 @@ export function replayIds(jobId: string): { opId: (op: Op) => string; nodeId: ()
   let nodes = 0;
   const digest = (text: string): string => createHash("sha256").update(text).digest("hex");
   return {
-    // Shaped as a version-8 (custom) UUID, which the contract's z.uuid() accepts.
-    opId: (op) => {
-      const h = digest(`${jobId}:op:${String(ops++)}:${JSON.stringify(op)}`);
-      return `${h.slice(0, 8)}-${h.slice(8, 12)}-8${h.slice(13, 16)}-${((parseInt(h.slice(16, 17), 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
-    },
+    opId: (op) => stableOpId(`${jobId}:op:${String(ops++)}:${JSON.stringify(op)}`),
     nodeId: () => `n_${digest(`${jobId}:node:${String(nodes++)}`).slice(0, 12)}`,
   };
 }

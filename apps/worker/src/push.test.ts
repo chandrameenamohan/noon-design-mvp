@@ -20,6 +20,7 @@ test("a page out of shape on the document's branch is a conflict, and nothing is
     manifest,
     documentOrg: (id) => { opened.push(`org ${id}`); return Promise.resolve("org"); },
     shippedCommit: () => Promise.resolve(false),
+    pushedNodeIds: () => Promise.resolve(new Set<string>()),
     WebSocketImpl: function NoSocket() { opened.push("socket"); throw new Error("no socket may be opened for a conflict"); } as unknown as typeof WebSocket,
   });
   const noBase = () => { opened.push("base"); return Promise.resolve({ tsx: undefined, earlierIds: new Set<string>() }); };
@@ -38,6 +39,7 @@ test("a commit Ship made is skipped before anything is read or opened: the room 
     manifest,
     documentOrg: () => { opened.push("org"); return Promise.resolve("org"); },
     shippedCommit: (sha) => { asked.push(sha); return Promise.resolve(sha === event.after); },
+    pushedNodeIds: () => Promise.resolve(new Set<string>()),
     WebSocketImpl: function NoSocket() { opened.push("socket"); throw new Error("no socket may be opened for a shipped commit"); } as unknown as typeof WebSocket,
   });
   const noBase = () => { opened.push("base"); return Promise.resolve({ tsx: undefined, earlierIds: new Set<string>() }); };
@@ -64,6 +66,7 @@ test("E6.1b: a document whose room is read-only is not edited and not failed: th
     manifest,
     documentOrg: () => Promise.resolve("0f9c7a0e-1b2c-4d3e-8f00-0000000000aa"),
     shippedCommit: () => Promise.resolve(false),
+    pushedNodeIds: () => Promise.resolve(new Set<string>()),
     WebSocketImpl: ReadOnlyRoom as unknown as typeof WebSocket,
   });
   const withStack = generate({ rootId: "root", nodes: { root: { id: "root", component: "Page", props: {}, parentId: null, children: ["n1"] }, n1: { id: "n1", component: "Stack", props: {}, parentId: "root", children: [] } } }, manifest);
@@ -92,4 +95,45 @@ test("a refused page becomes the document's conflict, naming commit and file; an
     ["record", DOC, { commit: event.after, file: path, reason: "spread", detail: "line 3: a spread" }],
     ["clear", DOC],
   ]);
+});
+
+test("noon-91u: the same push applied twice sends the same op ids (the room answers a repeat with its first answer), and asks the journal what it added", async () => {
+  const withStack = generate({ rootId: "root", nodes: { root: { id: "root", component: "Page", props: {}, parentId: null, children: ["n1"] }, n1: { id: "n1", component: "Stack", props: {}, parentId: "root", children: [] } } }, manifest);
+  if (!withStack.ok) throw new Error(withStack.reason);
+  let sent: string[] = [];
+  class Room extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => { this.answer({ type: "welcome", doc: emptyDoc(), seq: 0 }); });
+    }
+    answer(message: unknown): void { this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(message) })); }
+    send(frame: string): void {
+      const message = JSON.parse(frame) as { type: string; opId?: string };
+      if (message.type !== "op" || message.opId === undefined) return;
+      sent.push(message.opId);
+      const opId = message.opId;
+      queueMicrotask(() => { this.answer({ type: "ack", opId }); });
+    }
+    close(): void { /* the peer closes it when done */ }
+  }
+  const asked: string[] = [];
+  const toOps = createPushApplier({
+    sessions: { secret: "s".repeat(32), syncUrl: "ws://127.0.0.1:1" },
+    manifest,
+    documentOrg: () => Promise.resolve("0f9c7a0e-1b2c-4d3e-8f00-0000000000aa"),
+    shippedCommit: () => Promise.resolve(false),
+    pushedNodeIds: (documentId, commit) => { asked.push(`${documentId} ${commit}`); return Promise.resolve(new Set<string>()); },
+    WebSocketImpl: Room as unknown as typeof WebSocket,
+  });
+  const apply = (e: typeof event) => toOps(e, { documentId: DOC, path, tsx: withStack.tsx }, () => Promise.resolve({ tsx: undefined, earlierIds: new Set<string>() }));
+  expect(await apply(event)).toEqual({ kind: "applied", ops: 1, refused: 0 });
+  const first = sent;
+  sent = [];
+  await apply(event);
+  expect(sent).toEqual(first);
+  expect(asked).toEqual([`${DOC} ${event.after}`, `${DOC} ${event.after}`]);
+  sent = [];
+  await apply({ ...event, after: "c".repeat(40) }); // another commit's op is its own, however alike
+  expect(sent).toHaveLength(1);
+  expect(sent).not.toEqual(first);
 });

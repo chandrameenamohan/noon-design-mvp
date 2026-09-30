@@ -1,13 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
-import { generate } from "@noon/codegen";
 import type { Doc, Op, ShipOutput } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import type { Job } from "@noon/db";
 import { applyOp, emptyDoc } from "@noon/doc-model";
 import { bootstrapGitea } from "../../../scripts/gitea.ts";
 import { connect, TEST_ORG, TEST_SECRET, useSyncServer, type TestPeer } from "../../sync/src/testing.ts";
-import { git, localOrigin } from "./git-testing.ts";
+import { fileOf, git, localOrigin } from "./git-testing.ts";
 import { pagePath } from "./sandbox.ts";
 import { createShipHandler, shipPage } from "./ship.ts";
 
@@ -30,11 +29,6 @@ type Pull = { number: number; head: { ref: string; sha: string } };
 const openPulls = async (branch: string): Promise<Pull[]> => (await asGitea<Pull[]>("/pulls?state=open&limit=50")).filter((p) => p.head.ref === branch);
 const pageOnBranch = (documentId: string): Promise<string> => asGitea<string>(`/raw/${pagePath(documentId)}?ref=${encodeURIComponent(`noon/${documentId}`)}`);
 const tipOf = async (documentId: string): Promise<string> => (await asGitea<{ commit: { id: string } }>(`/branches/${encodeURIComponent(`noon/${documentId}`)}`)).commit.id;
-const fileOf = (doc: Doc): string => {
-  const generated = generate(doc, manifest);
-  if (!generated.ok) throw new Error(generated.reason);
-  return generated.tsx;
-};
 
 let documentId: string;
 let person: TestPeer;

@@ -31,6 +31,8 @@ const BRANCH = /^refs\/heads\/[A-Za-z0-9._/-]{1,200}$/u;
 const SHA = /^([0-9a-f]{40}|[0-9a-f]{64})$/u;
 const ZERO = /^0+$/u;
 const EVENTS_PER_TICK = 20;
+/** Thrown between pages when another peer has resumed this event: this one stops, and writes nothing more. */
+class Lost extends Error {}
 
 /**
  * Every node id on an added line of `git log -p -U0` of a page: each id the page ever held was added on
@@ -72,7 +74,7 @@ export type GitPeer = {
   start(options: { pollMs: number; reconcileMs: number; onAlive?: () => void }): Promise<{ stop(): Promise<void> }>;
 };
 
-export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000 }: {
+export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000, staleMs = 15_000, maxResumes = 3 }: {
   seed: SeedRepo;
   /** The peer's own directory: the mirror and the jobs' worktrees. Nothing else may use it. */
   dir: string;
@@ -81,6 +83,12 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
   log: (message: string) => void;
   /** Each git command's end from outside: a wedged Gitea must not hold the peer for ever. */
   timeoutMs?: number;
+  /**
+   * noon-91u: an event whose peer has not beaten for this long is resumed by another (the peer beats every third of
+   * it), at most `maxResumes` times. ponytail: constants, as the jobs' are (0019); a push applied again is safe.
+   */
+  staleMs?: number;
+  maxResumes?: number;
 }): GitPeer {
   const mirror = join(dir, `${fingerprint(seed.url)}.git`);
   const worktrees = join(dir, "worktrees");
@@ -147,16 +155,20 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
   }
 
   async function processNext(): Promise<boolean> {
-    const event = await store.claim();
+    const event = await store.claim(staleMs, maxResumes);
     if (!event) return false;
     const worktree = join(worktrees, event.id);
+    const resumed = new AbortController(); // by another peer, after this one's beats went unseen
+    const beat = setInterval(() => {
+      void store.heartbeat(event).then((alive) => { if (!alive) resumed.abort(); }, () => undefined); // a missed beat: the next one
+    }, Math.max(1, Math.floor(staleMs / 3)));
     try {
       if (!(await has(event.after))) {
         try {
           await fetch();
         } catch (err) {
           // Gitea is away: the event waits again rather than being lost (the reconcile would never re-record it).
-          await store.finish(event.id, "pending");
+          await store.finish(event, "pending");
           log(`fetch failed, ${event.ref} ${event.after} waits: ${describeError(err)}`);
           return false;
         }
@@ -166,19 +178,27 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
       await mkdir(worktrees, { recursive: true });
       await git("-C", mirror, "worktree", "add", "--quiet", "--detach", worktree, event.after);
       let base: Promise<string | undefined> | undefined;
-      for (const page of await changedPages(event, worktree)) await apply(event, page, async () => pageBase(await (base ??= baseCommit(event)), page.path));
-      await store.finish(event.id, "done");
+      for (const page of await changedPages(event, worktree)) {
+        if (resumed.signal.aborted) throw new Lost(`${event.ref} ${event.after}: another peer has resumed it`);
+        await apply(event, page, async () => pageBase(await (base ??= baseCommit(event)), page.path));
+      }
+      await store.finish(event, "done");
     } catch (err) {
+      if (err instanceof Lost) {
+        log(err.message);
+        return true;
+      }
       if (err instanceof WaitAgain) {
-        // ponytail: the whole event waits, pages already applied included (applying again diffs against the room
-        // as it is then). Ceiling: one retry per poll tick while the room stays read-only.
-        await store.finish(event.id, "pending");
+        // ponytail: the whole event waits, pages already applied included (applying again is safe: push-ops takes
+        // the commit's journaled adds as its own, noon-91u). Ceiling: one retry per poll tick while the room stays read-only.
+        await store.finish(event, "pending");
         log(`${event.ref} ${event.after} waits: ${err.message}`);
         return false;
       }
       log(`${event.ref} ${event.after} failed: ${describeError(err)}`);
-      await store.finish(event.id, "failed");
+      await store.finish(event, "failed");
     } finally {
+      clearInterval(beat);
       await removeWorktree(worktree);
     }
     return true;

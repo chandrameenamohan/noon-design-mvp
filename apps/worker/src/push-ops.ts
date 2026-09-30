@@ -18,7 +18,7 @@ import { applyOpInto, nodeOf } from "@noon/doc-model";
 
 export type PushOps = { ok: true; ops: Op[] } | { ok: false; reason: "root_mismatch" | "reused_node_id" | "component_changed"; detail: string };
 
-export function pushOps({ base, target, current, earlierIds }: {
+export function pushOps({ base, target, current, earlierIds, alreadyAdded = new Set() }: {
   /** The page before the push, if it was there and in shape. Missing: the document is the base (the push is taken as the whole page). */
   base: Doc | undefined;
   target: Doc;
@@ -26,6 +26,12 @@ export function pushOps({ base, target, current, earlierIds }: {
   current: Doc;
   /** Every node id the page has held in the repo's history up to the base: an id that is gone from the base was removed. */
   earlierIds: ReadonlySet<string>;
+  /**
+   * noon-91u: the ids THIS push (its commit) already added to the document, from the journal: the push is being
+   * applied again (its git peer was killed halfway). Each is its own add, not a re-use: it is not refused and not
+   * added twice, and one the canvas removed since is not brought back.
+   */
+  alreadyAdded?: ReadonlySet<string>;
 }): PushOps {
   if (target.rootId !== current.rootId) return { ok: false, reason: "root_mismatch", detail: `the file's page is ${target.rootId}, the document's is ${current.rootId}` };
   const from = base?.rootId === current.rootId ? base : current;
@@ -33,7 +39,7 @@ export function pushOps({ base, target, current, earlierIds }: {
   // on the new one. A new id the document already holds is the same mistake, seen from the other side.
   for (const id of preorder(target)) {
     const was = nodeOf(from, id);
-    if (!was && (earlierIds.has(id) || nodeOf(current, id))) return { ok: false, reason: "reused_node_id", detail: `${id} was part of this document before` };
+    if (!was && !alreadyAdded.has(id) && (earlierIds.has(id) || nodeOf(current, id))) return { ok: false, reason: "reused_node_id", detail: `${id} was part of this document before` };
     // No op changes what a node IS; a remove and an add would re-use its id.
     if (was && was.component !== nodeOf(target, id)?.component) return { ok: false, reason: "component_changed", detail: `${id} was a ${was.component}` };
   }
@@ -55,8 +61,10 @@ export function pushOps({ base, target, current, earlierIds }: {
     for (const id of children) {
       const node = nodeOf(target, id);
       if (!node) continue;
-      if (!nodeOf(from, id)) emit({ type: "add_node", nodeId: id, parentId, index: after(parentId, id, anchor), component: node.component, props: { ...node.props } });
-      else if (!stays.has(id)) emit({ type: "move_node", nodeId: id, newParentId: parentId, index: after(parentId, id, anchor) });
+      // Already added by this push: where it is now (and whatever the canvas did to it since) stands.
+      if (!nodeOf(from, id)) {
+        if (!alreadyAdded.has(id)) emit({ type: "add_node", nodeId: id, parentId, index: after(parentId, id, anchor), component: node.component, props: { ...node.props } });
+      } else if (!stays.has(id)) emit({ type: "move_node", nodeId: id, newParentId: parentId, index: after(parentId, id, anchor) });
       if (nodeOf(working, id)?.parentId === parentId) anchor = id;
     }
   }

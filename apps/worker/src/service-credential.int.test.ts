@@ -68,7 +68,7 @@ test("a signed-in person starts an AI run and the agent's op reaches the room; a
   const target = applyOp(current, { type: "add_node", nodeId: "from-git", parentId: "root", index: 99, component: "Button", props: { label: "Pay" } });
   const page = generate(target, manifest);
   if (!page.ok) throw new Error(page.reason);
-  const toOps = createPushApplier({ sessions, manifest, documentOrg: (id) => Promise.resolve(id === doc.id ? doc.orgId : undefined), shippedCommit: () => Promise.resolve(false) });
+  const toOps = createPushApplier({ sessions, manifest, documentOrg: (id) => Promise.resolve(id === doc.id ? doc.orgId : undefined), shippedCommit: () => Promise.resolve(false), pushedNodeIds: () => Promise.resolve(new Set<string>()) });
   const event = { id: randomUUID(), ref: `refs/heads/noon/${doc.id}`, before: "0".repeat(40), after: "a".repeat(40) };
   const outcome = await toOps(event, { documentId: doc.id, path: pagePath(doc.id), tsx: page.tsx }, () => Promise.resolve({ tsx: undefined, earlierIds: new Set() }));
   expect(outcome).toEqual({ kind: "applied", ops: 1, refused: 0 });

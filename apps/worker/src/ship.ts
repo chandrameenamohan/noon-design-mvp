@@ -176,7 +176,7 @@ export function createShipHandler({ sessions, manifest, seed, stopping, stillMem
   stopping: AbortSignal;
   /** Asked when the job STARTS, which may be long after it was created. */
   stillMember: (documentId: string, userId: string) => Promise<boolean>;
-  /** Writes the job's output (jobs.output): what the canvas shows, and what the git peer skips. */
+  /** Writes the job's output (jobs.output): what the canvas shows. Each commit also goes into ship_commits, which the git peer skips, whichever attempt made it (noon-91u). */
   report: (job: Job, output: ShipOutput) => Promise<void>;
   connectTimeoutMs?: number;
   fetchImpl?: typeof fetch;

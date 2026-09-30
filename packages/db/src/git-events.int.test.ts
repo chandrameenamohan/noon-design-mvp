@@ -12,6 +12,7 @@ const A = "a".repeat(40);
 const B = "b".repeat(40);
 const C = "c".repeat(40);
 const main = "refs/heads/main";
+const STALE = 60_000;
 
 test("the same delivery twice is one event, even if its body said something else the second time", async () => {
   const git = t.db.gitStore();
@@ -43,16 +44,61 @@ test("an event is claimed once, oldest first; handed back it waits again; finish
   const git = t.db.gitStore();
   await git.record({ ref: main, before: A, after: B });
   await git.record({ ref: main, before: B, after: C });
-  const claims = await Promise.all([git.claim(), git.claim(), git.claim()]);
+  const claims = await Promise.all([git.claim(STALE, 3), git.claim(STALE, 3), git.claim(STALE, 3)]);
   expect(claims.filter(Boolean).map((e) => e?.after).sort()).toEqual([B, C]);
   const first = claims.find((e) => e?.after === B);
   if (!first) throw new Error("unreachable");
-  await git.finish(first.id, "pending");
-  expect(await git.claim()).toEqual(first);
-  await git.finish(first.id, "done");
-  await git.finish(first.id, "pending"); // too late: not running
-  expect(await git.claim()).toBeUndefined();
+  expect(first.attempt).toBe(1);
+  await git.finish(first, "pending");
+  const again = await git.claim(STALE, 3);
+  expect(again).toEqual({ ...first, attempt: 2 });
+  if (!again) throw new Error("unreachable");
+  await git.finish(first, "done"); // the first attempt's: fenced, it ends nothing
+  expect(await t.rawQuery("select status from git_events where id = $1", [first.id])).toMatchObject({ rows: [{ status: "running" }] });
+  await git.finish(again, "done");
+  await git.finish(again, "pending"); // too late: not running
+  expect(await git.claim(STALE, 3)).toBeUndefined();
   expect(await t.rawQuery("select status from git_events where id = $1", [first.id])).toMatchObject({ rows: [{ status: "done" }] });
+});
+
+// noon-91u: an event left running by a killed git peer is resumed once its heartbeat is stale, by ONE peer.
+test("a running event is resumed only once its heartbeat is stale, by exactly one of the peers racing for it, and the dead attempt is fenced off", async () => {
+  const git = t.db.gitStore();
+  await git.record({ ref: main, before: A, after: B });
+  const dead = await git.claim(STALE, 3);
+  if (!dead) throw new Error("unreachable");
+  expect(await git.heartbeat(dead)).toBe(true);
+  expect(await git.claim(STALE, 3)).toBeUndefined(); // alive: never taken
+  await t.rawQuery("update git_events set heartbeat_at = now() - interval '2 minutes' where id = $1", [dead.id]); // its peer died
+  const raced = await Promise.all(Array.from({ length: 8 }, () => git.claim(STALE, 3)));
+  const resumed = raced.filter((e) => e !== undefined);
+  expect(resumed).toEqual([{ ...dead, attempt: 2 }]);
+  // The dead attempt, waking: its beat says "not yours", and its finish ends nothing.
+  expect(await git.heartbeat(dead)).toBe(false);
+  await git.finish(dead, "failed");
+  expect(await t.rawQuery("select status, resumes from git_events where id = $1", [dead.id])).toMatchObject({ rows: [{ status: "running", resumes: 1 }] });
+  const [survivor] = resumed;
+  if (!survivor) throw new Error("unreachable");
+  expect(await git.heartbeat(survivor)).toBe(true);
+  await git.finish(survivor, "done");
+  expect(await t.rawQuery("select status from git_events where id = $1", [dead.id])).toMatchObject({ rows: [{ status: "done" }] });
+});
+
+test("a push's own adds are read back from the journal by its commit, and nobody else's", async () => {
+  const doc = await t.createDocument("Pushed");
+  const add = (nodeId: string) => JSON.stringify({ type: "add_node", nodeId, parentId: "root", index: 0, component: "Stack", props: {} });
+  const rows: [number, string, string, string | null, string][] = [
+    [1, "git", "e1", B, add("mine")],
+    [2, "git", "e1", B, JSON.stringify({ type: "set_prop", nodeId: "mine", key: "gap", value: 2 })],
+    [3, "git", "e2", C, add("next-commit")],
+    [4, "user", "u1", null, add("canvas")],
+  ];
+  for (const [seq, kind, actor, run, op] of rows) {
+    await t.rawQuery("insert into op_journal (document_id, org_id, seq, op_id, actor_kind, actor_id, run_id, op) values ($1, $2, $3, gen_random_uuid(), $4, $5, $6, $7)", [doc.id, doc.orgId, seq, kind, actor, run, op]);
+  }
+  expect(await t.db.gitStore().pushedNodeIds(doc.id, B)).toEqual(new Set(["mine"]));
+  expect(await t.db.gitStore().pushedNodeIds(doc.id, A)).toEqual(new Set());
+  expect(await t.db.gitStore().pushedNodeIds("not-a-uuid", B)).toEqual(new Set());
 });
 
 test("reconcile requests coalesce into one flag, cleared by the one who takes it", async () => {

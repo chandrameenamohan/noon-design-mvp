@@ -76,7 +76,7 @@ test("with the ai queue saturated by long runs, one on the pushed document, a pu
 
   // The git peer, as main.ts runs it. The branch's first push (the page as it is) gives the next push its base.
   const store = t.db.gitStore();
-  const toOps = createPushApplier({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, documentOrg: (id) => Promise.resolve(id === pushed ? org.id : undefined), shippedCommit: (sha) => store.shippedCommit(sha) });
+  const toOps = createPushApplier({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, documentOrg: (id) => Promise.resolve(id === pushed ? org.id : undefined), shippedCommit: (sha) => store.shippedCommit(sha), pushedNodeIds: (id, sha) => store.pushedNodeIds(id, sha) });
   const peer = createGitPeer({ seed: { url: local.origin }, dir: join(local.root, "peer"), store, log: () => undefined, apply: async (event, page, pageBase) => { await toOps(event, page, pageBase); } });
   gitPeer = await peer.start({ pollMs: 1000, reconcileMs: 30_000 });
   /** An engineer's push, and the webhook the api would record for it. */

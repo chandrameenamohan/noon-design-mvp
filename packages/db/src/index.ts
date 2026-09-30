@@ -150,10 +150,19 @@ export type GitStore = {
   record(event: { ref: string; before: string; after: string; deliveryId?: string }): Promise<boolean>;
   /** The newest recorded commit of every branch: what the reconcile compares the mirror with. */
   heads(): Promise<Map<string, string>>;
-  /** The oldest waiting event, pending -> running. Undefined when nothing waits. */
-  claim(): Promise<GitEvent | undefined>;
-  /** Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it. */
-  finish(id: string, status: "done" | "failed" | "pending"): Promise<void>;
+  /**
+   * The oldest waiting event -> running, as its next `attempt`. Waiting: pending, or (noon-91u) running with no
+   * heartbeat for `staleMs` (its git peer died), which is resumed. One that died with its peer `maxResumes` times
+   * fails instead. Two peers never claim one event: the database decides, in one statement. Undefined: none.
+   */
+  claim(staleMs: number, maxResumes: number): Promise<(GitEvent & { attempt: number }) | undefined>;
+  /** "Still working on it", from the peer holding this attempt. False: another peer has resumed it (or it ended): stop. */
+  heartbeat(event: { id: string; attempt: number }): Promise<boolean>;
+  /**
+   * Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it. Only
+   * while the event is still this attempt's: a slow peer, given up on, ends nothing.
+   */
+  finish(event: { id: string; attempt: number }, status: "done" | "failed" | "pending"): Promise<void>;
   /** A document was opened: the git peer reconciles soon. Requests coalesce into one flag. */
   requestReconcile(): Promise<void>;
   /** Clears the flag; true when it was set. Called as a reconcile STARTS, so an open during it sets it again. */
@@ -172,14 +181,19 @@ export type GitStore = {
   clearConflict(documentId: string): Promise<void>;
   /** E5.5: did a ship job make this commit? Its page is the document as it was, so the git peer skips it. */
   shippedCommit(sha: string): Promise<boolean>;
+  /**
+   * noon-91u: the node ids a commit already added to a document, from the journal (git's add_node ops stamped with
+   * it): what a push applied again must not take for re-used ids, nor add twice.
+   */
+  pushedNodeIds(documentId: string, commit: string): Promise<Set<string>>;
 };
 // The same rules the table's checks hold, parsed BEFORE the write: a bad value is a caller's bug, named here.
 const GitSha = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
 const GitEventInput = z.object({ ref: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,200}$/), before: GitSha, after: GitSha, deliveryId: z.string().regex(/^[\x21-\x7e]{1,100}$/).optional() });
 // `detail` is parse's words about a file an engineer wrote: capped here, not refused (the conflict must still be shown).
 const ConflictInput = Conflict.omit({ at: true, detail: true }).extend({ detail: z.string().transform((d) => d.slice(0, 300)) });
-const GitEventRow = z.object({ id: z.string(), ref: z.string(), before_sha: z.string(), after_sha: z.string() })
-  .transform((r): GitEvent => ({ id: r.id, ref: r.ref, before: r.before_sha, after: r.after_sha }));
+const GitEventRow = z.object({ id: z.string(), ref: z.string(), before_sha: z.string(), after_sha: z.string(), attempts: z.number().int() })
+  .transform((r): GitEvent & { attempt: number } => ({ id: r.id, ref: r.ref, before: r.before_sha, after: r.after_sha, attempt: r.attempts }));
 
 type PageInput = { limit?: number; cursor?: string | undefined };
 
@@ -719,7 +733,17 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       async report({ queue, jobId, orgId, attempt }, output) {
         const valid = (queue === "ship" ? ShipOutput : queue === "ai" ? RunProgress : PreviewOutput).nullable().parse(output); // the contract the reader will use, BEFORE the write
         if (!isId(jobId) || !isId(orgId)) return;
-        await pool.query("update jobs set output = $3 where org_id = $1 and id = $2 and status = 'running' and ($4::int is null or attempts = $4)", [orgId, jobId, JSON.stringify(valid), attempt ?? null]);
+        const commit = valid !== null && "commit" in valid ? valid.commit : null;
+        // noon-91u, a ship's commit is never lost: (1) it goes into ship_commits whatever the job's state (a slow attempt's
+        // push may still be on its way, and the git peer must know it is Ship's); (2) a retried ship that found nothing
+        // new to commit (null) keeps the commit its earlier attempt showed, instead of wiping it.
+        await pool.query(
+          `with c as (insert into ship_commits (commit_sha, job_id) select $5, id from jobs where org_id = $1 and id = $2 and queue = 'ship' and $5::text is not null on conflict do nothing)
+           update jobs set output = case when queue = 'ship' and jsonb_typeof($3::jsonb) = 'object' and $3::jsonb -> 'commit' = 'null' and output ->> 'commit' is not null
+             then jsonb_set($3::jsonb, '{commit}', output -> 'commit') else $3::jsonb end
+           where org_id = $1 and id = $2 and status = 'running' and ($4::int is null or attempts = $4)`,
+          [orgId, jobId, JSON.stringify(valid), attempt ?? null, commit],
+        );
       },
       sandboxesInUse: (graceMs) =>
         rows(
@@ -742,12 +766,26 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           "select distinct on (ref) ref, after_sha from git_events order by ref, created_at desc, id desc",
           [],
         )),
-      // `skip locked`: two peers never claim one event, and neither waits for the other.
-      claim: () =>
-        one(GitEventRow, "update git_events set status = 'running' where id = (select id from git_events where status = 'pending' order by created_at, id limit 1 for update skip locked) returning *", []),
-      async finish(id, status) {
+      async claim(staleMs, maxResumes) {
+        // coalesce(heartbeat_at, created_at): a row left running by a peer from before heartbeats (0021) is stale too.
+        const stale = "status = 'running' and coalesce(heartbeat_at, created_at) < now() - make_interval(secs => $1::float8 / 1000)";
+        // An event that took its peer down every time must end, or it would take every peer down in turn.
+        await pool.query(`update git_events set status = 'failed', finished_at = now() where ${stale} and resumes >= $2`, [staleMs, maxResumes]);
+        // ONE statement, `skip locked`: two peers never claim one event, and neither waits for the other. The row is
+        // locked and its WHERE checked again on the newest version (read committed), so a stale event another peer
+        // has just resumed (fresh heartbeat) is skipped, never resumed twice. `status` on the right is the OLD one.
+        return one(
+          GitEventRow,
+          `update git_events set status = 'running', heartbeat_at = now(), attempts = attempts + 1, resumes = resumes + (status = 'running')::int
+           where id = (select id from git_events where status = 'pending' or (${stale} and resumes < $2) order by created_at, id limit 1 for update skip locked) returning *`,
+          [staleMs, maxResumes],
+        );
+      },
+      heartbeat: async ({ id, attempt }) =>
+        isId(id) && (await pool.query("update git_events set heartbeat_at = now() where id = $1 and status = 'running' and attempts = $2", [id, attempt])).rowCount === 1,
+      async finish({ id, attempt }, status) {
         if (!isId(id)) return;
-        await pool.query("update git_events set status = $2, finished_at = case when $2 = 'pending' then null else now() end where id = $1 and status = 'running'", [id, status]);
+        await pool.query("update git_events set status = $2, finished_at = case when $2 = 'pending' then null else now() end where id = $1 and status = 'running' and attempts = $3", [id, status, attempt]);
       },
       async requestReconcile() {
         await pool.query("update git_reconcile set requested = true where not requested"); // no write, no row lock, when it is already asked for
@@ -772,7 +810,16 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       async clearConflict(documentId) {
         if (isId(documentId)) await pool.query("delete from document_conflicts where document_id = $1", [documentId]);
       },
-      shippedCommit: async (sha) => (await pool.query("select 1 from jobs where queue = 'ship' and output ->> 'commit' = $1 limit 1", [GitSha.parse(sha)])).rowCount === 1,
+      shippedCommit: async (sha) => (await pool.query("select 1 from ship_commits where commit_sha = $1", [GitSha.parse(sha)])).rowCount === 1,
+      pushedNodeIds: async (documentId, commit) =>
+        new Set(isId(documentId)
+          ? await rows(
+            z.object({ id: z.string() }).transform((r) => r.id),
+            // op_journal_added: the document's adds alone are read, and of those the ones this commit sent.
+            "select op ->> 'nodeId' as id from op_journal where document_id = $1 and op ->> 'type' = 'add_node' and actor_kind = 'git' and run_id = $2",
+            [documentId, GitSha.parse(commit)],
+          )
+          : []),
     }),
 
     getDocumentForMember: async (documentId, userId) =>

@@ -86,13 +86,19 @@ test("an id that was ever part of the page is never added again, and the root mu
   expect(pushOps({ base: page, target: otherRoot, current: page, earlierIds: none })).toMatchObject({ ok: false, reason: "root_mismatch" });
 });
 
+/** A random page (`base`) and a random edit of it (`target`), the same for the same seed. */
+function randomPush(seed: number): { random: () => number; base: Doc; target: Doc } {
+  const random = seeded(seed);
+  let base = emptyDoc();
+  for (let i = 0; i < 25; i++) base = applyOp(base, randomOp(random, base));
+  let target = base;
+  for (let i = 0; i < 12; i++) target = applyOp(target, randomOp(random, target));
+  return { random, base, target };
+}
+
 test("for random pages and random edits, the ops rebuild the pushed page exactly, and the same inputs give the same ops", () => {
   for (let seed = 1; seed <= 300; seed++) {
-    const random = seeded(seed);
-    let base = emptyDoc();
-    for (let i = 0; i < 25; i++) base = applyOp(base, randomOp(random, base));
-    let target = base;
-    for (let i = 0; i < 12; i++) target = applyOp(target, randomOp(random, target));
+    const { base, target } = randomPush(seed);
     // The generator re-uses ids: a node removed and added again as another component is refused, never patched.
     const changed = Object.keys(target.nodes).some((id) => base.nodes[id] && base.nodes[id].component !== target.nodes[id]?.component);
     if (changed) {
@@ -103,5 +109,44 @@ test("for random pages and random edits, the ops rebuild the pushed page exactly
     expect(shape(result.reduce(applyOp, base)), `seed ${String(seed)}`).toBe(shape(target));
     expect(ops(base, target, base)).toEqual(result);
     expect(ops(target, target, target)).toEqual([]);
+  }
+});
+
+// noon-91u: the same push applied twice (a git peer killed halfway, its event resumed by another) finishes the page
+// and repeats nothing. What it added the first time comes from the journal (ops stamped with its commit).
+const addedBy = (sent: readonly Op[]): Set<string> => new Set(sent.flatMap((op) => (op.type === "add_node" ? [op.nodeId] : [])));
+
+test("a push applied again after dying halfway sends only what is left, wherever it died", () => {
+  const target = [add("g", "root", "Card", { title: "G" }, 0), add("g1", "g", "Button", { label: "in G" }), { type: "set_prop", nodeId: "b", key: "label", value: "from git" }, { type: "remove_node", nodeId: "c" }] satisfies Op[];
+  const pushed = target.reduce(applyOp, page);
+  const first = ops(page, pushed, page);
+  for (let died = 0; died <= first.length; died++) {
+    const halfway = first.slice(0, died).reduce(applyOp, page);
+    const again = pushOps({ base: page, target: pushed, current: halfway, earlierIds: none, alreadyAdded: addedBy(first.slice(0, died)) });
+    if (!again.ok) throw new Error(`died after ${String(died)}: ${again.reason}`);
+    expect(again.ops, `died after ${String(died)}`).toEqual(first.slice(died));
+    expect(shape(again.ops.reduce(applyOp, halfway))).toBe(shape(pushed));
+  }
+});
+
+test("a node the push added and the canvas removed before the push was applied again is not brought back", () => {
+  const pushed = [add("g", "root", "Card", { title: "G" }), add("g1", "g", "Button", { label: "in G" })].reduce(applyOp, page);
+  const first = ops(page, pushed, page);
+  const removedSince = applyOp(first.reduce(applyOp, page), { type: "remove_node", nodeId: "g" });
+  expect(pushOps({ base: page, target: pushed, current: removedSince, earlierIds: none, alreadyAdded: addedBy(first) })).toEqual({ ok: true, ops: [] });
+  // Only its OWN adds are excused: the same ids from a push that did not add them are still a re-use.
+  expect(pushOps({ base: page, target: pushed, current: first.reduce(applyOp, page), earlierIds: none })).toMatchObject({ ok: false, reason: "reused_node_id" });
+});
+
+test("for random pushes killed at a random op, the push applied again rebuilds the pushed page exactly", () => {
+  for (let seed = 1; seed <= 300; seed++) {
+    const { random, base, target } = randomPush(seed);
+    const result = pushOps({ base, target, current: base, earlierIds: none });
+    if (!result.ok) continue; // component_changed: the test above covers it
+    const died = Math.floor(random() * (result.ops.length + 1));
+    const halfway = result.ops.slice(0, died).reduce(applyOp, base);
+    const again = pushOps({ base, target, current: halfway, earlierIds: none, alreadyAdded: addedBy(result.ops.slice(0, died)) });
+    if (!again.ok) throw new Error(`seed ${String(seed)}: ${again.reason}`);
+    expect(shape(again.ops.reduce(applyOp, halfway)), `seed ${String(seed)}`).toBe(shape(target));
   }
 });

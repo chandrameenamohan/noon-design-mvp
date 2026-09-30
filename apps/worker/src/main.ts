@@ -71,7 +71,7 @@ const onAlive = (): void => { writeFileSync("/tmp/worker-alive", ""); };
 // put in one. ponytail: a 1 s poll of a partial index; LISTEN/NOTIFY if a second's delay ever matters.
 function startGitPeer(): Promise<{ stop(): Promise<void> }> {
   const store = db.gitStore();
-  const toOps = createPushApplier({ sessions: sync.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId), shippedCommit: (sha) => store.shippedCommit(sha) });
+  const toOps = createPushApplier({ sessions: sync.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId), shippedCommit: (sha) => store.shippedCommit(sha), pushedNodeIds: (documentId, commit) => store.pushedNodeIds(documentId, commit) });
   const peer = createGitPeer({
     seed: config.sandbox.seed, dir: config.gitDir, store, log,
     // E5.3b: each page becomes ops through peer-client. E5.4: a refused one becomes the document's conflict banner.

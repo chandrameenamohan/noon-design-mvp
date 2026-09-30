@@ -3,6 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
+import { generate } from "@noon/codegen";
+import type { Doc } from "@noon/contracts";
+import { manifest } from "@noon/design-system";
 
 // Shared by the integration tests of the git peer and Ship: a local bare repo stands in for Gitea (git fetches and
 // pushes a path as it does a URL), and a clone of it is where "an engineer" commits and pushes.
@@ -38,4 +41,11 @@ export async function localOrigin(prefix: string): Promise<LocalOrigin> {
   }
   await commit({ "README.md": "seed\n" }, "seed", "main");
   return { root, origin, work, commit, remove: () => { rmSync(root, { recursive: true, force: true }); } };
+}
+
+/** The page file of a document, exactly as codegen (and so Ship) writes it. */
+export function fileOf(page: Doc): string {
+  const generated = generate(page, manifest);
+  if (!generated.ok) throw new Error(generated.reason);
+  return generated.tsx;
 }

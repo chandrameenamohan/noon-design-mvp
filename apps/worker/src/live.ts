@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Manifest } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { createLeases, syncRouter } from "@noon/lease";
@@ -18,6 +19,16 @@ export function syncSessions(config: { secret: string } & ({ syncUrl: string } |
   if (!("nodes" in config)) return { sessions: config, close: () => Promise.resolve() };
   const leases = createLeases({ redisUrl });
   return { sessions: { secret: config.secret, route: syncRouter({ nodes: { kind: "many", nodes: config.nodes }, owner: (documentId) => leases.owner(documentId), alive: (nodeIds) => leases.alive(nodeIds) }) }, close: () => leases.close() };
+}
+
+/**
+ * An opId that is the same wherever `text` is the same: a peer that repeats an op after a crash sends it under its
+ * first id, and the room's journal (keyed by sender and opId) answers it as it did the first time. Shaped as a
+ * version-8 (custom) UUID, which the contract's z.uuid() accepts.
+ */
+export function stableOpId(text: string): string {
+  const h = createHash("sha256").update(text).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-8${h.slice(13, 16)}-${((parseInt(h.slice(16, 17), 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
 /**

@@ -1,13 +1,12 @@
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, test } from "vitest";
-import { generate } from "@noon/codegen";
 import type { Doc, Op } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { applyOp, emptyDoc } from "@noon/doc-model";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { connect, TEST_ORG, TEST_SECRET, useSyncServer, type TestPeer } from "../../sync/src/testing.ts";
 import { createGitPeer } from "./git.ts";
-import { localOrigin, type LocalOrigin } from "./git-testing.ts";
+import { fileOf, localOrigin, type LocalOrigin } from "./git-testing.ts";
 import { createPushApplier, type PushOutcome } from "./push.ts";
 import { pagePath } from "./sandbox.ts";
 
@@ -35,7 +34,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await t.rawQuery("delete from git_events");
   local = await localOrigin("noon-push-");
-  const toOps = createPushApplier({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, documentOrg: (id) => Promise.resolve(id === DOC ? TEST_ORG : undefined), shippedCommit: (sha) => t.db.gitStore().shippedCommit(sha) });
+  const toOps = createPushApplier({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, documentOrg: (id) => Promise.resolve(id === DOC ? TEST_ORG : undefined), shippedCommit: (sha) => t.db.gitStore().shippedCommit(sha), pushedNodeIds: (id, sha) => t.db.gitStore().pushedNodeIds(id, sha) });
   outcomes = [];
   peer = createGitPeer({ seed: { url: local.origin }, dir: join(local.root, "peer"), store: t.db.gitStore(), log: () => undefined, apply: async (event, page, base) => { outcomes.push(await toOps(event, page, base)); } });
   await peer.reconcile();
@@ -49,12 +48,6 @@ beforeEach(async () => {
 });
 
 const commit = (files: Record<string, string>, message: string, branch = BRANCH): Promise<string> => local.commit(files, message, branch, true);
-/** The page file for a document, exactly as codegen writes it. */
-const fileOf = (page: Doc): string => {
-  const generated = generate(page, manifest);
-  if (!generated.ok) throw new Error(generated.reason);
-  return generated.tsx;
-};
 /** What the person does on the canvas: an op, then its echo from the room. */
 async function edit(op: Op): Promise<void> {
   const opId = person.send(op);
@@ -140,7 +133,8 @@ test("a commit Ship made is skipped: a canvas edit that raced the ship stays (E5
   const workspace = await t.db.forOrg(org.id).createWorkspace({ name: "w" });
   const document = await t.db.forOrg(org.id).createDocument({ workspaceId: workspace.id, title: "d" });
   await push(shipped, BRANCH, async (sha) => {
-    await t.rawQuery("insert into jobs (org_id, document_id, queue, status, started_at, input, output) values ($1, $2, 'ship', 'running', now(), '{}', $3)", [org.id, document?.id, JSON.stringify({ commit: sha, pr: null })]);
+    const job = (await t.rawQuery("insert into jobs (org_id, document_id, queue, status, started_at, input) values ($1, $2, 'ship', 'running', now(), '{}') returning id", [org.id, document?.id])) as { rows: [{ id: string }] };
+    await t.db.jobStore().report({ queue: "ship", jobId: job.rows[0].id, orgId: org.id }, { commit: sha, pr: null }); // as ship.ts's recordCommit does
   });
   expect(outcomes.at(-1)).toEqual({ kind: "skipped", why: "shipped" });
   // Diffed, "Before" -> "Shipped" would have been replayed onto the room: the racing edit, undone.
