@@ -24,7 +24,7 @@ test("twenty presses at once make ONE ship, enqueued once; every press is answer
   const doc = await shippable("ann@example.com");
   expect(await newest("ann@example.com", doc)).toBeNull();
   const answers = await Promise.all(Array.from({ length: 20 }, () => ship("ann@example.com", doc)));
-  expect(answers.map((a) => a.status).sort()).toEqual([201, ...Array<number>(19).fill(200)]);
+  expect(answers.map((a) => a.status).sort()).toEqual([...Array<number>(19).fill(200), 201]);
   const ships = await Promise.all(answers.map(async (a) => Ship.parse(await a.json())));
   const [job] = await shipJobs(doc);
   expect(await shipJobs(doc)).toEqual([{ id: job?.id, status: "queued" }]);
