@@ -78,3 +78,8 @@ test("the seed repo is the compose stack's Gitea unless told otherwise, and its 
   }
   expect(() => loadConfig({ ...good, SEED_REPO: "http://noon:secret-value@gitea:3000/x.git" })).not.toThrow(/secret-value/);
 });
+
+test("SYNC_URL is one node's address, or a routing table of nodes inside the Docker network", () => {
+  expect(loadConfig({ ...good, SYNC_URL: "sync=ws://sync:3001,sync-2=ws://sync-2:3001" }).sessions).toEqual({ secret: good.SESSION_TOKEN_SECRET, nodes: new Map([["sync", "ws://sync:3001"], ["sync-2", "ws://sync-2:3001"]]) });
+  for (const bad of ["http://sync:3001", "sync=ws://a,sync=ws://b"]) expect(() => loadConfig({ ...good, SYNC_URL: bad }), bad).toThrow(/SYNC_URL/);
+});

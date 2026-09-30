@@ -3,7 +3,7 @@ import { loadConfig } from "./config.ts";
 
 const secret = "s".repeat(32);
 const DATABASE_URL = "postgres://app:pw@db:5432/noon";
-const MINIO = { MINIO_URL: "http://minio:9000", MINIO_USER: "noon", MINIO_PASSWORD: "p".repeat(48) };
+const MINIO = { MINIO_URL: "http://minio:9000", MINIO_USER: "noon", MINIO_PASSWORD: "p".repeat(48), REDIS_URL: "redis://redis:6379", SYNC_NODE_ID: "sync" }; // and Redis, for leases
 
 test("the session secret is required, may be a rotation list, and every entry must be long enough", () => {
   expect(() => loadConfig({ DATABASE_URL, ...MINIO })).toThrow(/SESSION_TOKEN_SECRET/);
@@ -29,4 +29,13 @@ test("MinIO has no defaults for its address or credentials; the snapshot cadence
   });
   expect(loadConfig({ ...base, ...MINIO, SNAPSHOT_EVERY_OPS: "50", SNAPSHOT_EVERY_SECONDS: "5" })).toMatchObject({ cadence: { everyOps: 50, everyMs: 5000 } });
   for (const bad of ["0", "-5", "1.5", "0x10", "ten"]) expect(() => loadConfig({ ...base, ...MINIO, SNAPSHOT_EVERY_OPS: bad })).toThrow(/SNAPSHOT_EVERY_OPS/);
+});
+
+test("a node needs Redis and an id its routing tables can name; the lease ttl is tunable", () => {
+  const base = { DATABASE_URL, SESSION_TOKEN_SECRET: secret, ...MINIO };
+  expect(() => loadConfig({ ...base, REDIS_URL: undefined })).toThrow(/REDIS_URL/);
+  expect(() => loadConfig({ ...base, SYNC_NODE_ID: undefined })).toThrow(/SYNC_NODE_ID/);
+  for (const bad of ["", "Sync", "sync 2", "-sync", "a".repeat(33)]) expect(() => loadConfig({ ...base, SYNC_NODE_ID: bad }), bad).toThrow(/SYNC_NODE_ID/);
+  expect(loadConfig(base)).toMatchObject({ lease: { redisUrl: "redis://redis:6379", nodeId: "sync", ttlMs: 10_000 } });
+  expect(loadConfig({ ...base, SYNC_NODE_ID: "sync-2", LEASE_TTL_MS: "3000" })).toMatchObject({ lease: { nodeId: "sync-2", ttlMs: 3000 } });
 });

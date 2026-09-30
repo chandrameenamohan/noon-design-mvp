@@ -2,7 +2,7 @@
 //   ./init.sh   (or: docker compose up -d), then   node scripts/chaos/kill-sync-no-loss.ts   (ROUNDS=3 by default)
 // Each round, on a fresh document: a person (the api's session route) and the AI (a token signed as its worker
 // signs it) join through @noon/peer-client and get a few edits acknowledged. Then each fires a burst of edits
-// and the sync server is `kill -9`ed at once, so the burst is caught in flight: some journaled with the
+// and the sync node that owns the room (E7.1: read from its lease in Redis) is `kill -9`ed at once, so the burst is caught in flight: some journaled with the
 // acknowledgement never heard, some never received. More edits are made while the server is gone. The server
 // is started again; the PEERS are left alone and must reconnect by themselves. scripts/chaos/no-loss.ts then
 // holds the ledger of every edit against the journal (F18: every acknowledged op present, none twice,
@@ -22,7 +22,6 @@ import { signSessionToken } from "../../packages/session-token/src/index.ts";
 import { createLedger, noLossViolations } from "./no-loss.ts";
 
 const api = process.env["API_URL"] ?? "http://localhost:3000";
-const syncUrl = process.env["SYNC_URL"] ?? "ws://localhost:3001";
 const rounds = Number(process.env["ROUNDS"] ?? "3");
 // Only the one key the AI peer signs with is read from .env; nothing else leaves that file.
 const secretOrNone = process.env["SESSION_TOKEN_SECRET"] ?? (existsSync(".env") ? parseEnv(readFileSync(".env", "utf8"))["SESSION_TOKEN_SECRET"] : undefined);
@@ -31,6 +30,14 @@ const secret: string = secretOrNone; // round() is a function declaration: the n
 const env = { ...process.env, PATH: `${process.env["PATH"] ?? ""}:/Applications/Docker.app/Contents/Resources/bin` };
 const compose = (...args: string[]): string => execFileSync("docker", ["compose", ...args], { env, encoding: "utf8" });
 const psql = (sql: string): string => compose("exec", "-T", "postgres", "psql", "-U", "noon", "-d", "noon", "-tAc", sql).trim();
+// The room's owner, "<token>:<node id>" in its lease; the node id is its compose service name. (The container
+// has REDISCLI_AUTH for its healthcheck, so no password passes through here.)
+const ownerOf = (documentId: string): string => {
+  const holder = compose("exec", "-T", "redis", "redis-cli", "--no-auth-warning", "GET", `lease:${documentId}`).trim();
+  const node = /^\d+:([a-z0-9-]+)$/.exec(holder)?.[1];
+  if (node === undefined) throw new Error(`no sync node holds the lease of ${documentId} (read: ${JSON.stringify(holder)})`);
+  return node;
+};
 
 const email = "chaos-kill-sync@example.com";
 const headers = { "x-dev-user": email, "content-type": "application/json" };
@@ -56,14 +63,16 @@ const workspace = idOf(await post(`/orgs/${org}/workspaces`, { name: "chaos" }))
 /** One document, one kill. Returns what broke, in words (empty = PASS), and how much was exercised. */
 async function round(n: number): Promise<{ round: number; ops: number; journaled: number; violations: string[] }> {
   const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: `chaos kill sync ${String(n)}` }));
-  const wsUrl = `${syncUrl}/documents/${doc}`;
+  const session = async () => SessionResponse.parse(await post(`/documents/${doc}/session`));
   const peers = {
-    person: connectPeer({ manifest, session: async () => SessionResponse.parse(await post(`/documents/${doc}/session`)) }),
-    ai: connectPeer({ manifest, session: () => Promise.resolve({ wsUrl, token: signSessionToken({ userId: randomUUID(), orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: "agent", runId: randomUUID() } }) }) }),
+    person: connectPeer({ manifest, session }),
+    // The api's address (the room's owner, E7.1) with the worker's kind of token: the AI routes as the worker does.
+    ai: connectPeer({ manifest, session: async () => ({ wsUrl: (await session()).wsUrl, token: signSessionToken({ userId: randomUUID(), orgId: org, documentId: doc, secret, ttlSeconds: 600, actor: { kind: "agent", runId: randomUUID() } }) }) }),
   };
   const all = Object.entries(peers);
   const ledger = createLedger();
   let made = 0;
+  let victim = "sync";
   const edit = (count: number): void => {
     for (let i = 0; i < count; i++) for (const [name, peer] of all) ledger.track(name, peer.submit(add(`${name}-${String(made++)}`)));
   };
@@ -72,13 +81,16 @@ async function round(n: number): Promise<{ round: number; ops: number; journaled
     edit(5);
     await ledger.settle(10_000); // acknowledged before the fault
 
+    victim = ownerOf(doc);
     edit(20); // on the wire...
-    compose("kill", "--signal", "SIGKILL", "sync"); // ...and the server dies under it. execFileSync: no ack is heard meanwhile.
+    compose("kill", "--signal", "SIGKILL", victim); // ...and the server dies under it. execFileSync: no ack is heard meanwhile.
     ledger.fault();
     await until(() => all.every(([, p]) => p.status !== "live"), "both peers see the server gone", 30_000);
     edit(5); // made while the server is gone: held, sent after the next welcome
 
-    compose("start", "sync");
+    // Back under the same node id: its dead holder's lease must expire first (LEASE_TTL_MS), so peers bounce
+    // with 4409 until then. ponytail: no quicker reclaim; E7.2 moves the room to the live node instead.
+    compose("start", victim);
     await until(() => all.every(([, p]) => p.status === "live" && p.pendingCount === 0), "both peers reconnected unaided, nothing pending", 60_000);
     await ledger.settle(15_000);
     await until(() => all.every(([, p]) => p.seq === peers.person.seq), "both peers at the same seq", 10_000);
@@ -89,7 +101,7 @@ async function round(n: number): Promise<{ round: number; ops: number; journaled
     return { round: n, ops: ledger.entries.length, journaled: journal.length, violations: noLossViolations({ ledger: ledger.entries, journal, docs }) };
   } finally {
     for (const [, p] of all) p.close();
-    compose("start", "sync"); // whatever failed above, the server comes back
+    compose("start", victim); // whatever failed above, the server comes back
   }
 }
 

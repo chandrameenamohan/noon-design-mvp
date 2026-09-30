@@ -165,7 +165,7 @@ export type UsageReport = z.infer<typeof UsageReport>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "preview_limit", "not_ready", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;

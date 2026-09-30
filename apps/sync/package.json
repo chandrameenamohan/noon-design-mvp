@@ -12,7 +12,9 @@
     "@noon/db": "workspace:^",
     "@noon/design-system": "workspace:^",
     "@noon/doc-model": "workspace:^",
+    "@noon/lease": "workspace:^",
     "@noon/process": "workspace:^",
+    "@noon/queue": "workspace:^",
     "@noon/session-token": "workspace:^",
     "ws": "^8.21.3",
     "zod": "^4.6.5"

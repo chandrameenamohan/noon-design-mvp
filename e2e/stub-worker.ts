@@ -7,6 +7,7 @@ import { createDb } from "@noon/db";
 import { manifest } from "@noon/design-system";
 import { createAiHandler, type RunAgent } from "../apps/worker/src/ai.ts";
 import { loadConfig } from "../apps/worker/src/config.ts";
+import { syncSessions } from "../apps/worker/src/live.ts";
 import { JobFailure, startWorker } from "../apps/worker/src/worker.ts";
 
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
@@ -36,14 +37,15 @@ const scripted: RunAgent = async ({ instruction, tools, signal }) => {
 
 const config = loadConfig(process.env);
 const db = createDb({ connectionString: config.databaseUrl });
+const sync = syncSessions(config.sessions, config.redisUrl);
 const stopping = new AbortController();
 const worker = await startWorker({
   db,
   redisUrl: config.redisUrl,
   sweepMs: 2000,
   cancelPollMs: 500,
-  handlers: { ai: createAiHandler({ sessions: config.sessions, manifest, oauthToken: "stub", ready: Promise.resolve(), stopping: stopping.signal, stillMember: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId)) !== undefined, runAgent: scripted }) },
+  handlers: { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: "stub", ready: Promise.resolve(), stopping: stopping.signal, stillMember: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId)) !== undefined, runAgent: scripted }) },
 });
 // Playwright waits for a URL to answer: this is that URL, and nothing else.
 createServer((_, res) => res.end("ready")).listen(Number(process.env["READY_PORT"] ?? "3102"));
-for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { stopping.abort(); void worker.close().then(() => db.close()).finally(() => process.exit(0)); });
+for (const signal of ["SIGTERM", "SIGINT"] as const) process.on(signal, () => { stopping.abort(); void worker.close().then(() => sync.close()).then(() => db.close()).finally(() => process.exit(0)); });

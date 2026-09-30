@@ -31,9 +31,17 @@ test("the session secret and the public sync address are required, with no defau
   }
   expect(loadConfig({ ...rest, DATABASE_URL: url, SYNC_PUBLIC_URL: "wss://sync.example.com/" }).sessions).toEqual({
     secret: rest.SESSION_TOKEN_SECRET,
-    syncUrl: "wss://sync.example.com", // no trailing slash, so joining a path never doubles it
+    sync: { kind: "one", url: "wss://sync.example.com" }, // no trailing slash, so joining a path never doubles it
     ttlSeconds: 60,
   });
+});
+
+test("several sync nodes are a routing table: one public address per node id, all behind one host if need be", () => {
+  expect(loadConfig({ ...rest, DATABASE_URL: url, SYNC_PUBLIC_URL: "sync=wss://noon.example.com/sync,sync-2=wss://noon.example.com/sync-2" }).sessions.sync).toEqual({
+    kind: "many",
+    nodes: new Map([["sync", "wss://noon.example.com/sync"], ["sync-2", "wss://noon.example.com/sync-2"]]),
+  });
+  for (const bad of ["sync=http://a", "sync=ws://a,sync=ws://b", "Sync=ws://a"]) expect(() => loadConfig({ ...rest, DATABASE_URL: url, SYNC_PUBLIC_URL: bad }), bad).toThrow(/SYNC_PUBLIC_URL/);
 });
 
 test("refuses to start without a REDIS_URL: a run that can never be queued must not be accepted quietly", () => {

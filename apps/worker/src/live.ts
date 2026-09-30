@@ -1,17 +1,34 @@
 import type { Manifest } from "@noon/contracts";
 import type { Job } from "@noon/db";
+import { createLeases, syncRouter } from "@noon/lease";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 
 /**
- * A peer in the job's document, signed for the person who made the job: it reads, and never submits anything
- * (the preview and Ship). `syncUrl` is how THIS process reaches the sync server.
+ * How THIS process reaches a document's room (not the browsers' address): one sync node's `syncUrl`, or, with
+ * several nodes (E7.1), a `route` to whichever node owns the room. Asked before every connection, like /session.
  */
-export function readingPeer(job: Job, userId: string, sessions: { secret: string; syncUrl: string }, manifest: Manifest): ReturnType<typeof connectPeer> {
+export type SyncSessions = { secret: string } & ({ syncUrl: string } | { route: (documentId: string) => Promise<string> });
+
+export const roomUrl = (sessions: SyncSessions, documentId: string): Promise<string> =>
+  "route" in sessions ? sessions.route(documentId) : Promise.resolve(`${sessions.syncUrl}/documents/${documentId}`);
+
+/** SYNC_URL (config.ts) made usable: a table of nodes reads each room's owner from its lease in Redis. */
+export function syncSessions(config: { secret: string } & ({ syncUrl: string } | { nodes: ReadonlyMap<string, string> }), redisUrl: string): { sessions: SyncSessions; close: () => Promise<void> } {
+  if (!("nodes" in config)) return { sessions: config, close: () => Promise.resolve() };
+  const leases = createLeases({ redisUrl });
+  return { sessions: { secret: config.secret, route: syncRouter({ nodes: { kind: "many", nodes: config.nodes }, owner: (documentId) => leases.owner(documentId) }) }, close: () => leases.close() };
+}
+
+/**
+ * A peer in the job's document, signed for the person who made the job: it reads, and never submits anything
+ * (the preview and Ship).
+ */
+export function readingPeer(job: Job, userId: string, sessions: SyncSessions, manifest: Manifest): ReturnType<typeof connectPeer> {
   return connectPeer({
     manifest,
-    session: () => Promise.resolve({
-      wsUrl: `${sessions.syncUrl}/documents/${job.documentId}`,
+    session: async () => ({
+      wsUrl: await roomUrl(sessions, job.documentId),
       token: signSessionToken({ userId, orgId: job.orgId, documentId: job.documentId, secret: sessions.secret, ttlSeconds: 60 }),
     }),
   });

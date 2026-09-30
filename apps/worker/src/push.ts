@@ -4,7 +4,7 @@ import type { GitEvent, GitStore } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { WaitAgain, type ChangedPage, type PageBase } from "./git.ts";
-import { whenLive, within } from "./live.ts";
+import { roomUrl, whenLive, within, type SyncSessions } from "./live.ts";
 import { pushOps } from "./push-ops.ts";
 
 /**
@@ -24,8 +24,7 @@ export type PushOutcome =
   | { kind: "applied"; ops: number; refused: number };
 
 export function createPushApplier({ sessions, manifest, documentOrg, shippedCommit, connectTimeoutMs = 10_000, settleTimeoutMs = 30_000, WebSocketImpl }: {
-  /** `syncUrl` is how THIS process reaches the sync server. */
-  sessions: { secret: string; syncUrl: string };
+  sessions: SyncSessions;
   manifest: Manifest;
   documentOrg: (documentId: string) => Promise<string | undefined>;
   /**
@@ -53,8 +52,8 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
       manifest,
       ...(WebSocketImpl ? { WebSocketImpl } : {}),
       // `sub` must be a uuid: the event's id. The commit rides as the run, so every op names the commit it came from.
-      session: () => Promise.resolve({
-        wsUrl: `${sessions.syncUrl}/documents/${page.documentId}`,
+      session: async () => ({
+        wsUrl: await roomUrl(sessions, page.documentId),
         token: signSessionToken({ userId: event.id, orgId, documentId: page.documentId, secret: sessions.secret, ttlSeconds: 60, actor: { kind: "git", runId: event.after } }),
       }),
     });

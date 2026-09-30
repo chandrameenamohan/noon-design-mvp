@@ -13,6 +13,7 @@
     "@noon/db": "workspace:^",
     "@noon/design-system": "workspace:^",
     "@noon/doc-model": "workspace:^",
+    "@noon/lease": "workspace:^",
     "@noon/peer-client": "workspace:^",
     "@noon/process": "workspace:^",
     "@noon/queue": "workspace:^",

@@ -19,6 +19,7 @@ import {
   type User,
 } from "@noon/contracts";
 import type { Db } from "@noon/db";
+import { syncRouter, type Holder } from "@noon/lease";
 import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
 import type { SessionConfig } from "./config.ts";
@@ -80,6 +81,8 @@ export type AppDeps = {
   sessions: SessionConfig;
   /** Tells a worker that a job is waiting. A seam, so most api tests need no Redis. */
   enqueue: (ref: JobRef) => Promise<void>;
+  /** Which sync node owns a document's room (the lease in Redis, E7.1). Only asked with several nodes; a seam like `enqueue`. */
+  owner?: (documentId: string) => Promise<Holder | undefined>;
   /** PREVIEW_PUBLIC_URL: the canvas's public origin, which carries previews as /preview/... (noon-l96). */
   previewOrigin?: string | undefined;
   /** GITEA_WEBHOOK_SECRET. Unset: the webhook is a 404, and the git peer's reconcile alone notices pushes. */
@@ -97,8 +100,9 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, previewOrigin, webhookSecret }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
+  const route = syncRouter({ nodes: sessions.sync, owner });
 
   app.use(async (c, next) => {
     await next();
@@ -218,9 +222,9 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin, webho
 
   app.route("/orgs/:orgId", org);
 
-  // The routing hook (SPEC §2.11): a peer never knows a sync address in advance, it asks here.
-  // Today there is one sync server; from epic 7 this answers with whichever node owns the room,
-  // and no client changes. The path names no org, so the lookup itself is membership-filtered.
+  // The routing hook (SPEC §2.11): a peer never knows a sync address in advance, it asks here, and gets the
+  // node that owns the room (E7.1), or any node when nobody does yet. The path names no org, so the lookup
+  // itself is membership-filtered.
   app.post("/documents/:id/session", async (c) => {
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     if (!doc) return notFound(c);
@@ -229,10 +233,18 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin, webho
     await db.gitStore().requestReconcile().catch((err: unknown) => {
       process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `reconcile not requested: ${describeError(err)}` })}\n`);
     });
+    let wsUrl;
+    try {
+      wsUrl = await route(doc.id);
+    } catch (err) {
+      // Redis cannot say who owns the room, and no node would open it without knowing: "try again".
+      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `no sync node: ${describeError(err)}` })}\n`);
+      return fail(c, 503, "sync_unavailable");
+    }
     const now = Math.floor(Date.now() / 1000);
     const token = signSessionToken({ userId: c.var.user.id, name: c.var.user.name, orgId: doc.orgId, documentId: doc.id, secret: sessions.secret, ttlSeconds: sessions.ttlSeconds, now });
     return c.json({
-      wsUrl: `${sessions.syncUrl}/documents/${doc.id}`,
+      wsUrl,
       token,
       expiresAt: new Date((now + sessions.ttlSeconds) * 1000).toISOString(),
     } satisfies SessionResponse);

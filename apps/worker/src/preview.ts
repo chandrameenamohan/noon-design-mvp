@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { Manifest } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { generate } from "@noon/codegen";
-import { readingPeer } from "./live.ts";
+import { readingPeer, type SyncSessions } from "./live.ts";
 import { isRunning, previewUrl, pushPage, startSandbox, type SandboxOptions } from "./sandbox.ts";
 import { JobFailure } from "./worker.ts";
 
@@ -22,8 +22,7 @@ import { JobFailure } from "./worker.ts";
  * needs a clock anyway, and a loop has exactly one place where it ends.
  */
 export function createPreviewHandler({ sessions, manifest, sandbox, stopping, stillMember, reportUrl, tickMs = 100, paceMs = 300, aliveEveryMs = 1000, idleMs = 60_000 }: {
-  /** `syncUrl` is how THIS process reaches the sync server, not the browsers' address. */
-  sessions: { secret: string; syncUrl: string };
+  sessions: SyncSessions;
   manifest: Manifest;
   sandbox: Omit<SandboxOptions, "signal">;
   /** Aborted when the worker is told to stop (SIGTERM). */

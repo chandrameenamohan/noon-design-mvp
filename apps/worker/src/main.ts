@@ -8,6 +8,7 @@ import { loadConfig } from "./config.ts";
 import { createGitPeer } from "./git.ts";
 import { createPreviewHandler } from "./preview.ts";
 import { createPushApplier, keepConflict } from "./push.ts";
+import { syncSessions } from "./live.ts";
 import { reapSandboxes } from "./sandbox.ts";
 import { createShipHandler } from "./ship.ts";
 import { probeTools, sdkRunner } from "./sdk.ts";
@@ -16,6 +17,7 @@ import { startWorker, type Handlers } from "./worker.ts";
 
 const config = loadConfig(process.env); // refuses to start when ANTHROPIC_API_KEY is set
 const db = createDb({ connectionString: config.databaseUrl });
+const sync = syncSessions(config.sessions, config.redisUrl);
 
 const stopping = new AbortController();
 const stillMember = async (documentId: string, userId: string): Promise<boolean> => (await db.getDocumentForMember(documentId, userId)) !== undefined;
@@ -29,7 +31,7 @@ function aiHandlers(): Handlers {
   // still reach a terminal status the user can read): it fails every run as `tools_missing`.
   const ready = probeTools(buildTools({ submit: () => ({ ok: false, reason: "not_ready" }), get doc(): never { throw new Error("the probe calls no tool"); } }, manifest));
   ready.then(() => process.stdout.write("agent tools registered and isolated\n"), (err: unknown) => { log(`agent tool probe failed: ${describeError(err)}`); });
-  return { ai: createAiHandler({ sessions: config.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, stillMember, runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
+  return { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, stillMember, runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
 }
 function sandboxHandlers(): Handlers {
   const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool, proxyPort: config.sandbox.proxyPort, previewKey: config.sandbox.previewKey, seed: config.sandbox.seed };
@@ -46,7 +48,7 @@ function sandboxHandlers(): Handlers {
   }, 30_000);
   return {
     sandbox: createPreviewHandler({
-      sessions: config.sessions, manifest, sandbox, stopping: stopping.signal, stillMember,
+      sessions: sync.sessions, manifest, sandbox, stopping: stopping.signal, stillMember,
       reportUrl: (job, url) => db.jobStore().report({ queue: "sandbox", jobId: job.id, orgId: job.orgId }, url === null ? null : { url }),
     }),
   };
@@ -56,7 +58,7 @@ function sandboxHandlers(): Handlers {
 function shipHandlers(): Handlers {
   return {
     ship: createShipHandler({
-      sessions: config.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
+      sessions: sync.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
       report: (job, output) => db.jobStore().report({ queue: "ship", jobId: job.id, orgId: job.orgId }, output),
     }),
   };
@@ -69,7 +71,7 @@ const onAlive = (): void => { writeFileSync("/tmp/worker-alive", ""); };
 // put in one. ponytail: a 1 s poll of a partial index; LISTEN/NOTIFY if a second's delay ever matters.
 function startGitPeer(): Promise<{ stop(): Promise<void> }> {
   const store = db.gitStore();
-  const toOps = createPushApplier({ sessions: config.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId), shippedCommit: (sha) => store.shippedCommit(sha) });
+  const toOps = createPushApplier({ sessions: sync.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId), shippedCommit: (sha) => store.shippedCommit(sha) });
   const peer = createGitPeer({
     seed: config.sandbox.seed, dir: config.gitDir, store, log,
     // E5.3b: each page becomes ops through peer-client. E5.4: a refused one becomes the document's conflict banner.
@@ -102,6 +104,6 @@ process.stdout.write(config.queue === "ai"
 
 // Tell the runs in flight to end NOW (as failed/worker_stopped: a row left `running` would block its
 // document's next run for ever), stop taking jobs, wait for those endings to be written, close the pool.
-const shutdown = createShutdown({ steps: [() => { clearInterval(reaper); stopping.abort(); return worker.close(); }, () => db.close()], timeoutMs: 8000, exit: (code) => process.exit(code) });
+const shutdown = createShutdown({ steps: [() => { clearInterval(reaper); stopping.abort(); return worker.close(); }, () => sync.close(), () => db.close()], timeoutMs: 8000, exit: (code) => process.exit(code) });
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGINT", () => void shutdown());

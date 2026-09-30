@@ -2,6 +2,7 @@ import type { Manifest, UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
+import { roomUrl, type SyncSessions } from "./live.ts";
 import type { RunAgent } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
@@ -14,8 +15,8 @@ export type { RunAgent };
  * validation, the same ordering, the same rate limit and the same rollback as a person's.
  */
 export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, stillMember, stopping, connectTimeoutMs = 10_000, runTimeoutMs = 5 * 60_000 }: {
-  /** `syncUrl` is how THIS process reaches the sync server (inside Docker: ws://sync:3001), not the browsers' address. */
-  sessions: { secret: string; syncUrl: string };
+  /** How THIS process reaches the document's room (inside Docker: ws://sync:3001), not the browsers' address. */
+  sessions: SyncSessions;
   manifest: Manifest;
   oauthToken: string | undefined;
   runAgent: RunAgent;
@@ -46,8 +47,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       manifest,
       // The worker holds the signing secret, so it mints its own session. The ROOM stamps every op
       // with this actor; nothing the agent sends can claim to be a person, or another run.
-      session: () => Promise.resolve({
-        wsUrl: `${sessions.syncUrl}/documents/${job.documentId}`,
+      session: async () => ({
+        wsUrl: await roomUrl(sessions, job.documentId),
         token: signSessionToken({ userId, orgId: job.orgId, documentId: job.documentId, secret: sessions.secret, ttlSeconds: 60, actor: { kind: "agent", runId: job.id } }),
       }),
     });

@@ -17,8 +17,8 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
-  # Queues now (epic 3); rate limits and leases later. NOT durable on purpose: no volume, no AOF. The
-  # Postgres `jobs` table is the truth and the worker re-queues from it, so losing Redis loses nothing.
+  # Queues (epic 3) and room leases (E7.1). NOT durable on purpose: no volume, no AOF. The Postgres `jobs`
+  # table is the truth and the worker re-queues from it; a lost lease is taken again. Losing Redis loses nothing.
   redis:
     image: redis:7
     # noeviction + a ceiling: when full, Redis REFUSES writes (the api still answers, the sweep retries)
@@ -94,9 +94,11 @@ services:
       # Unset, the api behaves as production and answers 401 to everything until epic 8.
       NODE_ENV: development
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
-      # What a BROWSER on this machine dials to reach the sync server (which arrives in epic 2).
-      # Hosting: SYNC_PUBLIC_URL=wss://<public host>/sync, set in the shell, not .env (init.sh smoke-tests locally).
-      SYNC_PUBLIC_URL: "${SYNC_PUBLIC_URL:-ws://localhost:${SYNC_PORT:-3001}}"
+      # What a BROWSER on this machine dials to reach each sync node: id=url per node, ids as their SYNC_NODE_ID
+      # (E7.1). /session answers with the address of the node that owns the document's room.
+      # Hosting through one public host (Vite proxies /sync and /sync-2 to the two nodes), set in the shell, not .env:
+      #   SYNC_PUBLIC_URL=sync=wss://<public host>/sync,sync-2=wss://<public host>/sync-2
+      SYNC_PUBLIC_URL: "${SYNC_PUBLIC_URL:-sync=ws://localhost:${SYNC_PORT:-3001},sync-2=ws://localhost:${SYNC_2_PORT:-3003}}"
       # Hosting, too: PREVIEW_PUBLIC_URL=https://<public host>, and the canvas frames the preview through
       # Vite's /preview/ proxy (started with PUBLIC_HOST). Empty: the sandbox proxy's loopback address.
       PREVIEW_PUBLIC_URL: "${PREVIEW_PUBLIC_URL:-}"
@@ -117,12 +119,17 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
-  # One room per open document. A single process until epic 7 adds leases and a second node.
-  sync:
+  # One room per open document, on exactly ONE of the sync nodes: whichever holds the document's lease in
+  # Redis (E7.1, F20). Two nodes, `sync` and `sync-2`; the service name is the node id the routing tables use.
+  sync: &sync
     build: .
     command: ["node", "apps/sync/src/main.ts"]
-    environment:
+    environment: &sync-env
       PORT: "3001"
+      SYNC_NODE_ID: sync
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      # How long a room outlives a silent owner (tunable; empty = 10 s). Renewed every third of it.
+      LEASE_TTL_MS: "${LEASE_TTL_MS:-}"
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
       MINIO_URL: http://minio:9000
@@ -135,11 +142,19 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       minio: { condition: service_healthy }
+      redis: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 2s
       timeout: 2s
       retries: 30
+  # The second node: the same service, another id and host port (3002 is Gitea's).
+  sync-2:
+    <<: *sync
+    environment:
+      <<: *sync-env
+      SYNC_NODE_ID: sync-2
+    ports: ["127.0.0.1:${SYNC_2_PORT:-3003}:3001"]
   # Long-running work, one BullMQ queue per kind (`ai` now; git, ship and sandbox in later epics).
   worker:
     build: .
@@ -150,7 +165,7 @@ services:
       # The AI peer joins documents like any other peer: it signs its own session (actor = agent)
       # with the secret the sync server verifies, and dials sync INSIDE the Docker network.
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
-      SYNC_URL: "ws://sync:3001"
+      SYNC_URL: "sync=ws://sync:3001,sync-2=ws://sync-2:3001"
       # The owner's `claude setup-token` value, from .env. Optional: without it every AI run fails at
       # once as `token_missing`. ANTHROPIC_API_KEY must NOT be set here: the worker refuses to start.
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
@@ -159,6 +174,7 @@ services:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       sync: { condition: service_healthy }
+      sync-2: { condition: service_healthy }
     healthcheck:
       # No port to ask: main.ts touches this file while its queue connection is alive.
       test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
@@ -182,7 +198,7 @@ services:
       REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
       # It follows each document as a silent peer: its own session, signed with the sync server's secret.
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
-      SYNC_URL: "ws://sync:3001"
+      SYNC_URL: "sync=ws://sync:3001,sync-2=ws://sync-2:3001"
       SANDBOX_IMAGE: noon-sandbox:dev # built on the host by ./init.sh (or `make sandbox-image`)
       # This stack's sandboxes, and the only ones its reaper removes: `make clean-clone` and the test
       # suites run their own sandboxes on the same Docker daemon.
@@ -200,6 +216,7 @@ services:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       sync: { condition: service_healthy }
+      sync-2: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
       interval: 2s
@@ -216,7 +233,7 @@ services:
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
-      SYNC_URL: "ws://sync:3001"
+      SYNC_URL: "sync=ws://sync:3001,sync-2=ws://sync-2:3001"
       SEED_REPO: http://gitea:3000/noon/sample-app.git
       GITEA_TOKEN: "${GITEA_TOKEN:-}"
       GIT_PEER_DIR: /var/lib/noon-git
@@ -241,7 +258,7 @@ services:
       REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
       # It reads the document from the room, as a silent peer: its own session, signed with the sync server's secret.
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
-      SYNC_URL: "ws://sync:3001"
+      SYNC_URL: "sync=ws://sync:3001,sync-2=ws://sync-2:3001"
       SEED_REPO: http://gitea:3000/noon/sample-app.git
       GITEA_TOKEN: "${GITEA_TOKEN:-}"
     depends_on:
@@ -249,6 +266,7 @@ services:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       sync: { condition: service_healthy }
+      sync-2: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
       interval: 2s

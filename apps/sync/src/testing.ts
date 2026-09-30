@@ -3,7 +3,9 @@ import { afterAll, beforeAll } from "vitest";
 import WebSocket from "ws";
 import { ServerMessage, type ClientMessage, type Op } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
+import { createLeases, syncRouter, type Leases } from "@noon/lease";
 import { signSessionToken } from "@noon/session-token";
+import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
 import { frameText } from "./raw.ts";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
 import { s3Snapshots, snapshotKey, type SnapshotStore } from "./snapshots.ts";
@@ -148,4 +150,50 @@ export async function until(condition: () => boolean, what: string, timeoutMs = 
     if (Date.now() > deadline) throw new Error(`timed out waiting for: ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+/**
+ * Two sync nodes sharing one Redis (keys under a prefix of this file's own), for the F20 tests: each node holds
+ * rooms only under its lease. `route` is what the api's /session answers: the owner's address, else `pick`.
+ * Redis is the compose stack's (./init.sh).
+ */
+export function useTwoNodes({ ttlMs = 600 }: { ttlMs?: number } = {}) {
+  const prefix = `test-nodes-${randomUUID()}:`;
+  const ids = ["node-a", "node-b"] as const;
+  let state: { servers: [RunningSyncServer, RunningSyncServer]; leases: Leases[]; route: (documentId: string, pick?: (typeof ids)[number]) => Promise<string> } | undefined;
+  beforeAll(async () => {
+    const leases = ids.map(() => createLeases({ redisUrl: TEST_REDIS_URL, ttlMs, prefix }));
+    await Promise.all(leases.map((each) => each.ready()));
+    const servers = await Promise.all(ids.map((nodeId, i) => startSyncServer({ port: 0, secrets: [TEST_SECRET], lease: { leases: leases[i] as Leases, nodeId } }))) as [RunningSyncServer, RunningSyncServer];
+    const nodes = { kind: "many", nodes: new Map(ids.map((id, i) => [id, (servers[i] as RunningSyncServer).url])) } as const;
+    const lookup = leases[0] as Leases;
+    state = {
+      servers, leases,
+      route: (documentId, pick) => syncRouter({ nodes, owner: (id) => lookup.owner(id), ...(pick === undefined ? {} : { pick: () => pick }) })(documentId),
+    };
+  });
+  afterAll(async () => {
+    await Promise.all(state?.servers.map((server) => server.close()) ?? []);
+    await Promise.all(state?.leases.map((each) => each.close()) ?? []);
+  });
+  const ready = () => {
+    if (!state) throw new Error("useTwoNodes: used before beforeAll ran");
+    return state;
+  };
+  return {
+    prefix,
+    get servers() { return ready().servers; },
+    /** A Redis client for the same keys (node-a's), to read or take leases as a third party would. */
+    get leases() { return ready().leases[0] as Leases; },
+    get owner() { return (documentId: string) => (ready().leases[0] as Leases).owner(documentId); },
+    /** Resolves when neither node has a last-leave snapshot (and its lease release) in flight. */
+    idle: async () => { await Promise.all(ready().servers.map((server) => server.idle())); },
+    route: (documentId: string, pick?: (typeof ids)[number]) => ready().route(documentId, pick),
+    /** Which node, by index, holds the room of `documentId` in memory; -1 for none, and throws for two. */
+    roomAt(documentId: string): number {
+      const at = ready().servers.map((server, i) => (server.peerCount(documentId) > 0 ? i : -1)).filter((i) => i >= 0);
+      if (at.length > 1) throw new Error(`two rooms for ${documentId}: one per node`);
+      return at[0] ?? -1;
+    },
+  };
 }

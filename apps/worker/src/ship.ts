@@ -5,7 +5,7 @@ import { z } from "zod";
 import { generate } from "@noon/codegen";
 import type { Doc, Manifest, ShipOutput } from "@noon/contracts";
 import type { Job } from "@noon/db";
-import { readingPeer, whenLive } from "./live.ts";
+import { readingPeer, whenLive, type SyncSessions } from "./live.ts";
 import { cli, gitEnv, pagePath, type SeedRepo } from "./sandbox.ts";
 import { JobFailure } from "./worker.ts";
 
@@ -169,8 +169,7 @@ export async function ensurePull({ seed, documentId, signal, fetchImpl = fetch, 
 }
 
 export function createShipHandler({ sessions, manifest, seed, stopping, stillMember, report, connectTimeoutMs = 10_000, fetchImpl }: {
-  /** `syncUrl` is how THIS process reaches the sync server. */
-  sessions: { secret: string; syncUrl: string };
+  sessions: SyncSessions;
   manifest: Manifest;
   seed: SeedRepo;
   /** Aborted when the worker is told to stop (SIGTERM). */

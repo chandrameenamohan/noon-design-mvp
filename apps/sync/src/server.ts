@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { ClientMessage, type Doc, type HealthResponse, type SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
+import { keepLease, type Holder, type Leases } from "@noon/lease";
 import { manifest } from "@noon/design-system";
 import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
@@ -25,7 +26,9 @@ const MAX_FRAME_BYTES = 64 * 1024; // an op is small; the contract caps props, t
 const TOKEN_LEEWAY_SECONDS = 5; // the api signs, this process verifies: two clocks never agree exactly
 const DOCUMENT_PATH = /^\/documents\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 // 4000-4999 are ours to define. They mirror the HTTP status a REST call would have had.
-const CLOSE = { invalidMessage: 4400, documentNotFound: 4404, tooManyRequests: 4429, documentCorrupt: 4500, unavailable: 4503 } as const;
+// roomElsewhere (a 409, "conflict"): another sync node owns this document's room. Not fatal to a peer: it
+// asks /session again, which answers with the owner's address.
+const CLOSE = { invalidMessage: 4400, documentNotFound: 4404, roomElsewhere: 4409, tooManyRequests: 4429, documentCorrupt: 4500, unavailable: 4503 } as const;
 
 type Options = {
   port: number;
@@ -47,14 +50,23 @@ type Options = {
   journalTimeoutMs?: number;
   /** How often a read-only room asks the journal whether it can write again (E6.1b). */
   recoverMs?: number;
+  /**
+   * Room ownership across sync nodes (F20): a room opens here only while this node holds the document's lease
+   * in Redis. Without it this process opens every room it is asked for, which is right for exactly one node.
+   */
+  lease?: { leases: Leases; nodeId: string };
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease }: Options): Promise<RunningSyncServer> {
   const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
   // the REASON when a document cannot be opened, so every peer waiting on it is told the same thing.
-  type Opened = { room: Room; orgId: string; snapshot?: ReturnType<typeof snapshotter> } | { closeCode: number };
+  type Loaded = { room: Room; orgId: string; snapshot?: ReturnType<typeof snapshotter> };
+  // With leases, an open room also knows its sockets (to send them elsewhere when the lease is lost), whether
+  // it lost the lease, and how to let the lease go.
+  type Owned = Loaded & { sockets: Set<WebSocket>; lost: boolean; release: () => Promise<void> };
+  type Opened = Owned | { closeCode: number };
   const rooms = new Map<string, Promise<Opened>>();
   const leaving = new Set<Promise<void>>();
   const peerCounts = new Map<string, () => number>(); // answered by the ROOM: who has joined, not which sockets exist
@@ -89,8 +101,70 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     });
   });
 
-  /** Loads the document and opens its room, or says why it cannot be opened. Never rejects. */
-  async function open(documentId: string, orgId: string): Promise<Opened> {
+  /**
+   * Takes the document's lease (when there are several nodes), then loads the room. Never rejects.
+   * `forget` drops this room from `rooms` if it is still the current one there.
+   */
+  async function open(documentId: string, orgId: string, forget: () => void): Promise<Opened> {
+    const owned = (loaded: Loaded, release: () => Promise<void>): Owned => ({ ...loaded, sockets: new Set(), lost: false, release });
+    if (!lease) {
+      const loaded = await load(documentId, orgId);
+      return "closeCode" in loaded ? loaded : owned(loaded, () => Promise.resolve());
+    }
+    const { leases, nodeId } = lease;
+    const acquiredAt = performance.now(); // BEFORE the send: our deadline must never outlast Redis's (lease.ts)
+    let holder: Holder;
+    try {
+      const taken = await leases.acquire(documentId, nodeId);
+      // Another node owns the room: its peers are sent back to /session, which now names the owner.
+      // ponytail: a lease under OUR node id that this process does not hold (an acquire whose reply was lost, or
+      // the previous run of this node, killed) is waited out like anyone's; ceiling: up to one ttl of 4409s for
+      // that document. Upgrade: a per-process id in the holder, so a node can tell its own dead lease apart.
+      if (!taken.acquired) return { closeCode: CLOSE.roomElsewhere };
+      holder = taken.holder;
+    } catch (err) {
+      // Redis cannot say who owns it: opening anyway could make a second room. "Try again" instead.
+      log(documentId, `lease not taken: ${err instanceof Error ? err.message : "unknown"}`);
+      return { closeCode: CLOSE.unavailable };
+    }
+    // Renewal starts NOW, not after the load: a long replay must not let the lease lapse unnoticed.
+    const opened: { room?: Owned } = {}; // filled once loaded
+    const keeper = keepLease({
+      renew: () => leases.renew(documentId, holder), ttlMs: leases.ttlMs, now: () => performance.now(), acquiredAt,
+      onLost: () => {
+        clearInterval(renewing);
+        log(documentId, `lease ${String(holder.token)} lost: its peers are sent to the new owner`);
+        const { room } = opened;
+        if (!room) return; // still loading: the check after load() below refuses it
+        room.lost = true;
+        room.snapshot?.stop();
+        forget(); // the next peer asks Redis again
+        for (const socket of room.sockets) socket.close(CLOSE.roomElsewhere, "room_elsewhere");
+      },
+    });
+    const renewing = setInterval(() => void keeper.tick(), leases.ttlMs / 3);
+    renewing.unref();
+    const release = async (): Promise<void> => {
+      clearInterval(renewing);
+      if (!keeper.held) return;
+      await leases.release(documentId, holder).catch((err: unknown) => {
+        log(documentId, `lease not released, it expires by itself: ${err instanceof Error ? err.message : "unknown"}`);
+      });
+    };
+    const loaded = await load(documentId, orgId);
+    if ("closeCode" in loaded || !keeper.held) {
+      await release();
+      if (!("closeCode" in loaded)) loaded.snapshot?.stop();
+      return "closeCode" in loaded ? loaded : { closeCode: CLOSE.roomElsewhere };
+    }
+    // E7.3's seam: `holder.token` is this room's fencing token; the journal append must refuse to land once a
+    // larger token exists (SPEC §2a, "the fenced append"). Until then a frozen owner's late write is not refused.
+    opened.room = owned(loaded, release);
+    return opened.room;
+  }
+
+  /** Loads the document and its room, or says why it cannot be opened. Never rejects. */
+  async function load(documentId: string, orgId: string): Promise<Loaded | { closeCode: number }> {
     const roomLimits = limits ?? {};
     if (!store) return { room: createRoom({ doc: emptyDoc(), manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
     let stored;
@@ -207,7 +281,12 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
 
     let pending = rooms.get(documentId);
     if (!pending) {
-      pending = open(documentId, claims.orgId);
+      const fresh: Promise<Opened> = open(documentId, claims.orgId, () => {
+        if (rooms.get(documentId) !== fresh) return;
+        rooms.delete(documentId);
+        peerCounts.delete(documentId);
+      });
+      pending = fresh;
       rooms.set(documentId, pending);
     }
     const opening = pending;
@@ -221,6 +300,10 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     // AI worker); a token for this document under ANOTHER org is a stranger, whoever signed it.
     if (claims.orgId !== opened.orgId) {
       ws.close(CLOSE.documentNotFound, "cannot_open_document");
+      return;
+    }
+    if (opened.lost) {
+      ws.close(CLOSE.roomElsewhere, "room_elsewhere"); // it lost its lease while this peer was on its way in
       return;
     }
     const { room } = opened;
@@ -261,12 +344,15 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       ws.ping();
     }, heartbeatMs);
 
+    opened.sockets.add(ws);
     ws.on("close", () => {
       clearInterval(heartbeat);
+      opened.sockets.delete(ws);
       room.leave(peer);
       if (room.peerCount === 0 && !closing) closeRoom(documentId, opened, opening);
     });
     onFrame = (data) => {
+      if (opened.lost) return; // being sent elsewhere: take nothing more (an op already in the queue is E7.3's fence)
       let parsed;
       try {
         parsed = ClientMessage.safeParse(JSON.parse(frameText(data)));
@@ -285,7 +371,9 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   }
 
   /** The room's last snapshot, once the ops still in its queue are handled. False: not stored (logged). */
-  async function snapshotNow(opened: { room: Room; snapshot?: ReturnType<typeof snapshotter> }): Promise<boolean> {
+  async function snapshotNow(opened: Owned): Promise<boolean> {
+    // A room that lost its lease writes nothing more: the new owner is the only writer (E7.3 fences the journal).
+    if (opened.lost) return false;
     await opened.room.settled();
     return (await opened.snapshot?.take()) ?? true;
   }
@@ -295,14 +383,17 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
    * every op this room accepted (E6.1a), so the next open replays what the snapshot would have held.
    * This replaced F8's save, which had to retry for ever because the room's memory was the only copy.
    */
-  function closeRoom(documentId: string, opened: { room: Room; snapshot?: ReturnType<typeof snapshotter> }, opening: Promise<Opened>): void {
+  function closeRoom(documentId: string, opened: Owned, opening: Promise<Opened>): void {
     const work = (async () => {
       await snapshotNow(opened);
       // Someone may have joined WHILE the snapshot was written: then the room stays.
-      if (opened.room.peerCount === 0 && rooms.get(documentId) === opening) {
+      if (opened.room.peerCount === 0 && (opened.lost || rooms.get(documentId) === opening)) {
         opened.snapshot?.stop();
-        rooms.delete(documentId);
-        peerCounts.delete(documentId);
+        if (rooms.get(documentId) === opening) {
+          rooms.delete(documentId);
+          peerCounts.delete(documentId);
+        }
+        await opened.release(); // after the snapshot: the next owner opens from it
       }
     })();
     leaving.add(work);
@@ -330,6 +421,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
             if (!("room" in opened)) return;
             await snapshotNow(opened);
             opened.snapshot?.stop();
+            await opened.release(); // another node may take the room at once, not a ttl later
           }));
           for (const client of wss.clients) client.terminate();
           wss.close();

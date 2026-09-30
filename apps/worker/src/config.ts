@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
+import { syncNodesField } from "@noon/lease";
 import { DatabaseUrl, parseEnv } from "@noon/process/env";
 import { RedisUrl } from "@noon/queue";
 import type { SeedRepo } from "./sandbox.ts";
@@ -13,8 +14,9 @@ const Env = z.object({
   REDIS_URL: RedisUrl,
   // The worker signs its own session tokens (actor = agent) with the secret the sync server verifies.
   SESSION_TOKEN_SECRET: z.string({ error: "SESSION_TOKEN_SECRET is required" }).min(32, "SESSION_TOKEN_SECRET must be at least 32 characters"),
-  // How THIS process reaches the sync server. Not SYNC_PUBLIC_URL: that one is for browsers.
-  SYNC_URL: z.string({ error: "SYNC_URL is required" }).refine((value) => URL.canParse(value) && ["ws:", "wss:"].includes(new URL(value).protocol), "SYNC_URL must be a ws:// or wss:// URL").transform((value) => value.replace(/\/+$/, "")),
+  // How THIS process reaches the sync server. Not SYNC_PUBLIC_URL: that one is for browsers. One URL, or with
+  // several nodes (E7.1) the routing table `id=url,id=url` over their addresses inside the Docker network.
+  SYNC_URL: syncNodesField("SYNC_URL"),
   // Optional at startup: without it every run fails at once as `token_missing`, which the user can read.
   CLAUDE_CODE_OAUTH_TOKEN: z.string().optional().transform((value) => (value === "" ? undefined : value)),
   // Written into every usage row, where the contract caps it at 100 characters (a gateway alias or an
@@ -46,7 +48,7 @@ const Env = z.object({
 });
 
 export function loadConfig(env: Record<string, string | undefined>): {
-  databaseUrl: string; redisUrl: string; sessions: { secret: string; syncUrl: string }; oauthToken: string | undefined; model: string;
+  databaseUrl: string; redisUrl: string; sessions: { secret: string } & ({ syncUrl: string } | { nodes: ReadonlyMap<string, string> }); oauthToken: string | undefined; model: string;
   queue: "ai" | "sandbox" | "git" | "ship"; gitDir: string; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string; seed: SeedRepo };
 } {
   const parsed = parseEnv(Env, env);
@@ -54,7 +56,7 @@ export function loadConfig(env: Record<string, string | undefined>): {
   // this process (the proxy gets only the derived key), and a stack whose .env predates noon-9gz starts.
   const previewKey = createHmac("sha256", parsed.SESSION_TOKEN_SECRET).update("noon-sandbox-preview-key").digest("hex");
   return {
-    databaseUrl: parsed.DATABASE_URL, redisUrl: parsed.REDIS_URL, sessions: { secret: parsed.SESSION_TOKEN_SECRET, syncUrl: parsed.SYNC_URL }, oauthToken: parsed.CLAUDE_CODE_OAUTH_TOKEN, model: parsed.AI_MODEL,
+    databaseUrl: parsed.DATABASE_URL, redisUrl: parsed.REDIS_URL, sessions: { secret: parsed.SESSION_TOKEN_SECRET, ...(parsed.SYNC_URL.kind === "one" ? { syncUrl: parsed.SYNC_URL.url } : { nodes: parsed.SYNC_URL.nodes }) }, oauthToken: parsed.CLAUDE_CODE_OAUTH_TOKEN, model: parsed.AI_MODEL,
     queue: parsed.WORKER_QUEUE, gitDir: parsed.GIT_PEER_DIR, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY, proxyPort: parsed.SANDBOX_PROXY_PORT, previewKey,
       seed: { url: parsed.SEED_REPO, ...(parsed.GITEA_TOKEN === undefined ? {} : { auth: { user: parsed.GITEA_USER, token: parsed.GITEA_TOKEN } }) } },
   };
