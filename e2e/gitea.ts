@@ -21,8 +21,13 @@ const gitEnv = {
 };
 const git = async (cwd: string, ...args: string[]): Promise<string> => (await exec("git", args, { cwd, env: gitEnv })).stdout.trim();
 
-/** Pushes `tsx` as the document's page. `remove` deletes the branch again and the local clone: call it in `finally`. */
-export async function pushPage(documentId: string, tsx: string, message: string): Promise<{ commit: string; path: string; remove: () => Promise<void> }> {
+/**
+ * Pushes `tsx` as the document's page. `remove` deletes the branch again and the local clone: call it in `finally`.
+ * `onBranch`: on top of the document's branch, which exists already (Gitea's webhook then tells the git peer; a new
+ * branch waits for the reconcile). `base`: first a commit of the page as the engineer found it, so the pushed one is
+ * diffed from it (the git peer takes a new branch as its last commit) and not from the document as a whole.
+ */
+export async function pushPage(documentId: string, tsx: string, message: string, { onBranch = false, base }: { onBranch?: boolean; base?: string } = {}): Promise<{ commit: string; path: string; remove: () => Promise<void> }> {
   const work = mkdtempSync(join(tmpdir(), "noon-e2e-push-"));
   const branch = `refs/heads/noon/${documentId}`;
   const path = `src/pages/noon-${documentId}.tsx`;
@@ -32,9 +37,14 @@ export async function pushPage(documentId: string, tsx: string, message: string)
   };
   try {
     await git(work, "init", "--quiet");
-    await git(work, "fetch", "--quiet", "--depth=1", "--", REPO, "main");
+    await git(work, "fetch", "--quiet", "--depth=1", "--", REPO, onBranch ? branch : "main");
     await git(work, "checkout", "--quiet", "FETCH_HEAD");
     mkdirSync(join(work, "src/pages"), { recursive: true });
+    if (base !== undefined) {
+      writeFileSync(join(work, path), base);
+      await git(work, "add", "--all");
+      await git(work, "commit", "--quiet", "-m", "the page as generated");
+    }
     writeFileSync(join(work, path), tsx);
     await git(work, "add", "--all");
     await git(work, "commit", "--quiet", "-m", message);

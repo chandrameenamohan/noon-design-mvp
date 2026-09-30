@@ -7,6 +7,12 @@
         "scripts/*.ts",
         "scripts/chaos/*.ts"
       ],
+      "playwright": {
+        "config": [
+          "playwright.config.ts",
+          "playwright.scenario.config.ts"
+        ]
+      },
       "vitest": {
         "config": [
           "vitest.config.ts",

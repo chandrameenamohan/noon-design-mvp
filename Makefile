@@ -1,5 +1,5 @@
 # The gate. `make check` is the only judge of done; each layer is also runnable alone.
-.PHONY: check lint typecheck unit integration deadcode dup e2e
+.PHONY: check lint typecheck unit integration deadcode dup e2e e2e-scenario
 check: lint typecheck unit integration deadcode dup e2e
 
 lint:      ; pnpm exec eslint . --max-warnings 0
@@ -9,6 +9,8 @@ integration: ; pnpm exec vitest run --config vitest.integration.config.ts
 deadcode:  ; pnpm exec knip
 dup:       ; pnpm exec jscpd .
 e2e:       ; pnpm exec playwright test
+# e2e:spec-scenario: the browser half of SPEC §8, on two sync nodes, one of which it kills (outside `make e2e`).
+e2e-scenario: ; pnpm exec playwright test --config playwright.scenario.config.ts
 
 # The reconcile simulator (SPEC F8a). Its committed seeds also run inside `make check`, as unit tests
 # (apps/sync/src/sim.test.ts); this target is for a person: `make sim`, or one seed with its trace:
@@ -28,6 +30,10 @@ chaos: ; node scripts/chaos/postgres-down-read-only.ts && node scripts/chaos/kil
 # Outside `make check` (minutes, builds an image): F1 on a fresh clone of the committed HEAD.
 .PHONY: clean-clone
 clean-clone: ; sh scripts/clean-clone.sh
+
+# Outside `make check` (the longest run there is): SPEC §8 end to end on a fresh clone, two sync nodes, `make chaos` included.
+.PHONY: scenario
+scenario: ; sh scripts/clean-clone.sh sh scripts/spec-scenario.sh
 
 # The sandbox image (E4.2a): the sample app's dev server with node_modules baked in. Minutes the first
 # time, cached after. The sandbox integration test builds it too, so `make check` never runs a stale one.
