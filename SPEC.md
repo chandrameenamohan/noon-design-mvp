@@ -104,7 +104,8 @@ Boxes". This project is also a course: see §7.
 16. **Identity before epic 8.** Until F23 lands, the caller's user and org come
     from a development-only header that `api` trusts only when
     `NODE_ENV != production`; session tokens and `org_id` scoping are real from
-    epic 1. Epic 8 replaces the header, nothing else.
+    epic 1. Epic 8 adds real sign-in; the header stays, and only when
+    `NODE_ENV=development` (changed 2026-09-30, E8.1).
 
 ## 2a. Rules learned from the real dependencies (`learning-tests/`)
 
@@ -362,16 +363,20 @@ a finding).
 
 ## 5. Non-goals
 
-- Freeform vector drawing, absolute positioning, a Figma clone.
+- Freeform vector drawing, freehand shapes, absolute positioning, a Figma or
+  Excalidraw clone: a design is a tree of real components, so it can become code.
 - Offline editing, CRDTs, operational transform.
 - Undo/redo (ops are designed to be invertible; nothing else is built).
 - AI writing or changing component code, files, or anything outside the tree.
 - Parsing arbitrary code back into the document.
 - Cloud deployment, Kubernetes, Terraform, backups, HA for Postgres or MinIO.
+  (Showing the app from the owner's laptop through a tunnel is in scope: E11.)
 - Real GitHub, a GitHub App, webhooks over the public internet.
 - SSO, SCIM, billing, payments, email.
 - Multiple pages per document, comments, version history UI, assets upload.
-- A polished UI. The frontend exists to drive the backend.
+- A pixel-perfect UI. Until epic Z the frontend only drives the backend; E10
+  then gives it a polished editor that feels like Figma, in Noon's own style,
+  over the same component tree (owner decision, 2026-09-30).
 - Offering this to other users on a Claude subscription token (not permitted
   by Anthropic; an API key is required before anyone else uses it).
 
