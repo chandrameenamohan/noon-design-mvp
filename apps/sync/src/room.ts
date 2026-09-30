@@ -268,33 +268,41 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
     // An op written before the oldest thing the room remembers MAY already have been applied. The
     // journal can tell: found, it gets its original answer; not found, it never was, and is judged now.
     // Without a journal the room cannot tell, and applying it twice would move a node twice: resync.
-    if (baseSeq < forgottenUpTo) {
-      if (!journal) {
-        refuse("stale");
-        return;
-      }
+    // A client that forged a high baseSeq (buggy or lying) skips that check, so every refusal below,
+    // and the no-op ack, asks the journal first too: a resend gets its first answer, whatever it claims to
+    // have seen (noon-mo3.1.1). Asked at most once per op, and only on those rare paths.
+    let asked = false;
+    /** True when the op has been answered: with its original row, or "unavailable". */
+    const answeredFromJournal = async (): Promise<boolean> => {
+      if (!journal || asked) return false;
+      asked = true;
       let original;
       try {
         original = await journal.find(peer.actor.id, opId);
       } catch {
         refuse("unavailable");
+        return true;
+      }
+      if (original) peer.send({ type: "op", ...original });
+      return original !== undefined;
+    };
+    if (baseSeq < forgottenUpTo) {
+      if (!journal) {
+        refuse("stale");
         return;
       }
-      if (original) {
-        peer.send({ type: "op", ...original });
-        return;
-      }
+      if (await answeredFromJournal()) return;
     }
 
     // 2. The document's rules first (they give the precise reason: a move into its own subtree is a
     //    "cycle", not a depth problem), then the room's limits. A refusal goes to the sender only.
     const verdict = validate(doc, op, manifest);
     if (!verdict.ok) {
-      refuse(verdict.reason);
+      if (!(await answeredFromJournal())) refuse(verdict.reason);
       return;
     }
     if (overLimit(op)) {
-      refuse("document_limit");
+      if (!(await answeredFromJournal())) refuse("document_limit");
       return;
     }
     // Keystone 4: validate() only sees the document as it is; an id that was removed is in the journal.
@@ -308,7 +316,7 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
         return;
       }
       if (reused) {
-        refuse("duplicate_node");
+        if (!(await answeredFromJournal())) refuse("duplicate_node");
         return;
       }
     }
@@ -316,6 +324,7 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
     // An op that changes nothing (the value is already that) is answered and goes no further: no seq,
     // no journal row, no broadcast. Remembered like any other, so that its resend is still a no-op.
     if (!changes(doc, op)) {
+      if (await answeredFromJournal()) return;
       rememberedNoOps.add(key);
       if (rememberedNoOps.size > REMEMBERED_NO_OPS) rememberedNoOps.delete(rememberedNoOps.values().next().value ?? key);
       peer.send({ type: "ack", opId });

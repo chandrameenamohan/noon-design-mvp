@@ -180,6 +180,38 @@ test("journal: a client that resends its own forgotten op with a FORGED high bas
   expect(journal.rows.filter((r) => r.opId === setOnce.opId)).toHaveLength(1);
 });
 
+test("journal: after a restart, a FORGED-baseSeq resend of an add, a remove or a now-unchanged set gets its original seq, not duplicate_node, gone or a bare ack (noon-mo3.1.1)", async () => {
+  const journal = memoryJournal();
+  const first = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  first.join(a);
+  const sent = [clientOp(add("outer")), clientOp(add("inner", "outer"), 1), clientOp(setGap("outer", 24), 2), clientOp(add("doomed"), 3), clientOp({ type: "remove_node", nodeId: "doomed" }, 4)];
+  for (const op of sent) await first.submit(a, op);
+  // journal.int.test.ts's sequence: the room is rebuilt at seq 5 and remembers nothing; each op is resent claiming to have seen everything.
+  const again = createRoom({ doc: structuredClone(first.doc), seq: first.seq, manifest, journal });
+  const back = peer("a");
+  again.join(back);
+  const resent = [0, 2, 4, 3].map((i) => ({ opId: sent[i]?.opId, seq: i + 1 }));
+  for (const i of [0, 2, 4, 3]) await again.submit(back, { ...(sent[i] as ClientOp), baseSeq: again.seq });
+  expect(rejects(back)).toEqual([]);
+  expect(back.inbox.filter((m) => m.type === "ack")).toEqual([]);
+  expect(ops(back).map(({ opId, seq }) => ({ opId, seq }))).toEqual(resent);
+  expect(again.seq).toBe(5);
+  expect(again.doc).toEqual(first.doc);
+  expect(journal.rows).toHaveLength(5);
+});
+
+test("journal: a FORGED-baseSeq op that was never journaled is still refused for what it is", async () => {
+  const journal = memoryJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  room.join(a);
+  await room.submit(a, clientOp(add("n1")));
+  const twin = clientOp(add("n1"), 1);
+  await room.submit(a, twin);
+  expect(rejects(a)).toEqual([{ type: "rejected", opId: twin.opId, reason: "duplicate_node" }]);
+});
+
 test("journal: an op sent against an old seq that never arrived is judged now, not refused as stale", async () => {
   const journal = memoryJournal();
   const room = createRoom({ doc: emptyDoc(), seq: 0, manifest, journal });
