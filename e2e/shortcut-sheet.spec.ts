@@ -12,6 +12,8 @@ const tile = (page: Page, name: string) => page.getByRole("option", { name, exac
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const sheet = (page: Page) => page.getByRole("dialog", { name: "Keyboard shortcuts" });
 const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
+// Whole text, not a substring: "Enter" must not also count the "Shift + Enter" row, nor "↑" the "Alt + ↑" one.
+const exactly = (text: string): RegExp => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}$`);
 const focusInSheet = (page: Page): Promise<boolean> => page.evaluate(() => document.activeElement?.closest("dialog") !== null && document.activeElement !== document.body);
 const axeClean = async (page: Page, theme: string): Promise<void> => {
   const axe = await new AxeBuilder({ page }).analyze();
@@ -38,11 +40,11 @@ test("? opens the sheet with every registered shortcut by scope; focus stays ins
 
   // The registry, rendered: every scope's title, and every shortcut's keys and sentence.
   for (const scope of SCOPES) {
-    const section = sheet(page).getByRole("region", { name: scope.title });
+    const section = sheet(page).getByRole("region", { name: scope.title, exact: true }) // "Library" is not "Library search";
     await expect(section).toBeVisible();
     for (const s of shortcutsIn(scope.id)) {
-      await expect(section.getByRole("term").filter({ hasText: describeKeys(s) })).toHaveCount(1);
-      await expect(section.getByRole("definition").filter({ hasText: s.does })).toHaveCount(1);
+      await expect(section.getByRole("term").filter({ hasText: exactly(describeKeys(s)) })).toHaveCount(1);
+      await expect(section.getByRole("definition").filter({ hasText: exactly(s.does) })).toHaveCount(1);
     }
   }
   await expect(sheet(page).getByRole("term")).toHaveCount(SHORTCUTS.length);
@@ -54,7 +56,7 @@ test("? opens the sheet with every registered shortcut by scope; focus stays ins
     expect(await focusInSheet(page), `Tab ${String(i + 1)} stays in the sheet`).toBe(true);
   }
   await page.keyboard.press("p"); // the global preview toggle: nothing, the sheet is up
-  await expect(page.getByRole("region", { name: "Preview" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Preview", exact: true })).toHaveCount(0); // not the sheet's "Preview divider"
 
   // Escape closes it, and the canvas has focus again.
   await page.keyboard.press("Escape");
@@ -122,17 +124,19 @@ test("the keys the sheet lists are the keys that work: one from each scope, pres
   await page.keyboard.press("Home");
   await expect(heading(page)).toHaveText("Page");
 
-  // Library: from the search box, Down reaches the components; End the last; Enter adds it into the page.
+  // Library: from the search box, Down reaches the components (the roving tab stop: the Text tile, the last one
+  // pressed above); End the last; Enter adds it into the page.
   const search = page.getByLabel("Search components");
   await search.click();
   await page.keyboard.press("ArrowDown");
-  await expect(page.getByRole("listbox", { name: "Components" }).getByRole("option").first()).toBeFocused();
+  await expect(tile(page, "Text")).toBeFocused();
   await page.keyboard.press("End");
   const last = page.getByRole("listbox", { name: "Components" }).getByRole("option").last();
   await expect(last).toBeFocused();
-  const count = await page.locator("[data-node-id]").count();
+  const nodes = page.locator("[data-node-id][data-component]"); // the canvas's nodes: a layers row carries data-node-id too
+  const count = await nodes.count();
   await page.keyboard.press("Enter");
-  await expect(page.locator("[data-node-id]")).toHaveCount(count + 1);
+  await expect(nodes).toHaveCount(count + 1);
 
   // Inspector: Enter applies a typed value.
   await layer(page, "Button 1").click();

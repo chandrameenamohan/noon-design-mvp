@@ -49,6 +49,8 @@ test("actionFor reads a keydown as its scope does: Alt and Shift tell shortcuts 
   expect(actionFor("canvas", press("0", { metaKey: true }))).toBeNull();
   expect(actionFor("canvas", press("q"))).toBeNull();
   expect(actionFor("sheet", press("Escape"))).toBe("close");
+  expect(actionFor("sheet", press("Tab"))).toBe("cycle");
+  expect(actionFor("sheet", press("Tab", { shiftKey: true }))).toBe("cycle"); // backwards round, too
 });
 
 test("typing in a field, a select or an editable region is never a shortcut", () => {

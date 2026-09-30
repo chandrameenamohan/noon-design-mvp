@@ -58,6 +58,7 @@ export const SHORTCUTS = [
   { scope: "splitter", action: "narrower", keys: ["ArrowRight"], does: "Narrow the preview" },
 
   { scope: "sheet", action: "close", keys: ["Escape"], does: "Close this sheet" },
+  { scope: "sheet", action: "cycle", keys: ["Tab"], does: "Move among this sheet's controls, round from the last to the first" },
 ] as const satisfies readonly Shortcut[];
 
 /** The scopes as the sheet shows them, in reading order, each with its title. */
