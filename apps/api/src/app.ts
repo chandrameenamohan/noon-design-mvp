@@ -8,6 +8,7 @@ import {
   CreateOrgBody,
   CreateRunBody,
   CreateWorkspaceBody,
+  DocumentConflict,
   PageQuery,
   type ErrorBody,
   type HealthResponse,
@@ -285,6 +286,13 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin, webho
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     const preview = doc && (await db.forOrg(doc.orgId).getPreview(doc.id));
     return preview ? c.json(publicPreview(preview, previewOrigin)) : notFound(c);
+  });
+  // F16b: the newest push to the document's branch that changed nothing, which the canvas shows as a banner.
+  // MEMBERSHIP ONLY, like the preview. The body is parsed with the contract: commit and file are an engineer's text.
+  app.get("/documents/:id/conflict", async (c) => {
+    const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
+    const conflict = doc && (await db.forOrg(doc.orgId).getConflict(doc.id));
+    return conflict === undefined ? notFound(c) : c.json(DocumentConflict.parse({ conflict }));
   });
 
   app.notFound(notFound);

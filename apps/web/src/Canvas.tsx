@@ -4,6 +4,7 @@ import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
 import { AiPanel } from "./AiPanel.tsx";
+import { ConflictBanner } from "./ConflictBanner.tsx";
 import { Inspector } from "./Inspector.tsx";
 import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
@@ -109,6 +110,7 @@ export function Canvas({ documentId }: { documentId: string }) {
       <div role="toolbar" aria-label="Add a component">
         {manifest.components.map((component) => <button key={component.name} type="button" onClick={() => { add(component); }}>Add {component.name}</button>)}
       </div>
+      <ConflictBanner documentId={documentId} />
       <AiPanel documentId={documentId} />
       {refusals.map((refusal) => (
         <p key={refusal.id} role="alert" className="refusal">

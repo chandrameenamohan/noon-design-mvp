@@ -1,4 +1,4 @@
-import { Document, Org, Preview, Run, SessionResponse, Workspace } from "@noon/contracts";
+import { Document, DocumentConflict, Org, Preview, Run, SessionResponse, Workspace } from "@noon/contracts";
 import type { z } from "zod";
 
 // Until epic 8 the api takes the caller's identity from a header, in development only (SPEC §2.16).
@@ -79,4 +79,16 @@ export async function readPreview(documentId: string): Promise<Preview> {
   const res = await fetch(`/api/documents/${documentId}/preview`, { headers: { "x-dev-user": devUser } });
   if (!res.ok) throw new Error(`GET preview answered ${String(res.status)}`);
   return Preview.parse(await res.json());
+}
+
+// --- Conflicts (F16b) ------------------------------------------------------------------------------
+/**
+ * The newest push to the document's branch that changed nothing, or null. Parsed with the contract: commit and
+ * file are an engineer's text. "gone": not found or not yours (404), and asking again will not change it.
+ */
+export async function readConflict(documentId: string): Promise<DocumentConflict["conflict"] | "gone"> {
+  const res = await fetch(`/api/documents/${documentId}/conflict`, { headers: { "x-dev-user": devUser } });
+  if (res.status === 404) return "gone";
+  if (!res.ok) throw new Error(`GET conflict answered ${String(res.status)}`);
+  return DocumentConflict.parse(await res.json()).conflict;
 }

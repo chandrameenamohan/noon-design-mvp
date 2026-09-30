@@ -1,6 +1,6 @@
 import { parse } from "@noon/codegen";
-import type { Manifest } from "@noon/contracts";
-import type { GitEvent } from "@noon/db";
+import type { ConflictReason, Manifest } from "@noon/contracts";
+import type { GitEvent, GitStore } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import type { ChangedPage, PageBase } from "./git.ts";
@@ -15,11 +15,11 @@ import { pushOps } from "./push-ops.ts";
  * it: the same file on main or on a feature branch would otherwise land twice, once per branch.
  *
  * Out of shape, another page's root, an id the page held before: a conflict, and NOTHING is sent (E5.4
- * shows it). Whatever the room then refuses op by op (a remove on the canvas won the race) is counted.
+ * shows it: keepConflict). Whatever the room then refuses op by op (a remove on the canvas won the race) is counted.
  */
 export type PushOutcome =
   | { kind: "skipped"; why: "other_branch" | "no_document" }
-  | { kind: "conflict"; reason: string; detail: string }
+  | { kind: "conflict"; reason: ConflictReason; detail: string }
   | { kind: "applied"; ops: number; refused: number };
 
 export function createPushApplier({ sessions, manifest, documentOrg, connectTimeoutMs = 10_000, settleTimeoutMs = 30_000, WebSocketImpl }: {
@@ -75,6 +75,18 @@ export function createPushApplier({ sessions, manifest, documentOrg, connectTime
       peer.close(); // an op still unanswered is settled `connection_closed`
     }
   };
+}
+
+/**
+ * E5.4 (F16b): what the canvas's banner shows. A refused page is recorded with its commit and file, and it
+ * replaces the conflict the document had; an applied one clears it, as the document's branch is back in
+ * shape. A skipped page (another branch, no document) says nothing about the document, so it changes nothing.
+ * ponytail: only the NEWEST conflict is kept; ceiling: two refused pushes in a row show only the second;
+ * upgrade: a row per event, if engineers ever need the list.
+ */
+export async function keepConflict(store: Pick<GitStore, "recordConflict" | "clearConflict">, event: GitEvent, page: ChangedPage, outcome: PushOutcome): Promise<void> {
+  if (outcome.kind === "conflict") await store.recordConflict(page.documentId, { commit: event.after, file: page.path, reason: outcome.reason, detail: outcome.detail });
+  else if (outcome.kind === "applied") await store.clearConflict(page.documentId);
 }
 
 async function within<T>(ms: number, reason: string, work: Promise<T>): Promise<T> {

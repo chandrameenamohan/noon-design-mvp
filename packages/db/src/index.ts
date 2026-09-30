@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -87,10 +87,19 @@ export type GitStore = {
    * the repo is the stack's one: the page's path names the document and nothing else. Undefined: none.
    */
   documentOrg(documentId: string): Promise<string | undefined>;
+  /**
+   * E5.4 (F16b): a push to the document's branch was refused and changed nothing; the canvas shows it. It
+   * replaces the conflict the document had. A document that no longer exists: nothing is written.
+   */
+  recordConflict(documentId: string, conflict: Omit<Conflict, "at">): Promise<void>;
+  /** A later push to the document's branch was applied: the conflict no longer stands. */
+  clearConflict(documentId: string): Promise<void>;
 };
 // The same rules the table's checks hold, parsed BEFORE the write: a bad value is a caller's bug, named here.
 const GitSha = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
 const GitEventInput = z.object({ ref: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,200}$/), before: GitSha, after: GitSha, deliveryId: z.string().regex(/^[\x21-\x7e]{1,100}$/).optional() });
+// `detail` is parse's words about a file an engineer wrote: capped here, not refused (the conflict must still be shown).
+const ConflictInput = Conflict.omit({ at: true, detail: true }).extend({ detail: z.string().transform((d) => d.slice(0, 300)) });
 const GitEventRow = z.object({ id: z.string(), ref: z.string(), before_sha: z.string(), after_sha: z.string() })
   .transform((r): GitEvent => ({ id: r.id, ref: r.ref, before: r.before_sha, after: r.after_sha }));
 
@@ -117,6 +126,8 @@ type OrgScope = {
   openPreview(input: { documentId: string; createdBy: string | undefined }): Promise<{ preview: Preview; created: JobKey | undefined } | "busy" | undefined>;
   /** The document's preview as it now is. Undefined when the document does not exist in THIS org. */
   getPreview(documentId: string): Promise<Preview | undefined>;
+  /** The newest push to the document's branch that changed nothing (F16b); null: none stands. Undefined: no such document in THIS org. */
+  getConflict(documentId: string): Promise<Conflict | null | undefined>;
   /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
   cancelRun(documentId: string, id: string): Promise<Run | undefined>;
   /** Everything this org has consumed: totals over all of it, and one page of the records. Undefined = a bad cursor. */
@@ -134,6 +145,9 @@ const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id:
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
 
+// A left join from the document: no conflict row = every column null.
+const ConflictRow = z.object({ commit_sha: z.string().nullable(), file: z.string().nullable(), reason: z.string().nullable(), detail: z.string().nullable(), created_at: z.date().nullable() })
+  .transform((r): Conflict | null => (r.commit_sha === null ? null : Conflict.parse({ commit: r.commit_sha, file: r.file, reason: r.reason, detail: r.detail, at: r.created_at?.toISOString() })));
 const nullableTimestamp = z.date().nullable().transform((d) => d?.toISOString() ?? null);
 const RunRow = z
   .object({ id: z.string(), org_id: z.string(), document_id: z.string(), status: z.string(), input: z.object({ instruction: z.string() }), error: z.string().nullable(), created_at: timestamp, started_at: nullableTimestamp, finished_at: nullableTimestamp })
@@ -424,6 +438,19 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       takeReconcileRequest: async () => (await pool.query("update git_reconcile set requested = false where requested")).rowCount === 1,
       documentOrg: async (documentId) =>
         isId(documentId) ? (await one(z.object({ org_id: z.string() }), "select org_id from documents where id = $1", [documentId]))?.org_id : undefined,
+      async recordConflict(documentId, input) {
+        if (!isId(documentId)) return;
+        const c = ConflictInput.parse(input);
+        // Selected from documents: a document deleted meanwhile inserts nothing instead of failing on the foreign key.
+        await pool.query(
+          "insert into document_conflicts (document_id, commit_sha, file, reason, detail) select id, $2, $3, $4, $5 from documents where id = $1 " +
+            "on conflict (document_id) do update set commit_sha = excluded.commit_sha, file = excluded.file, reason = excluded.reason, detail = excluded.detail, created_at = now()",
+          [documentId, c.commit, c.file, c.reason, c.detail],
+        );
+      },
+      async clearConflict(documentId) {
+        if (isId(documentId)) await pool.query("delete from document_conflicts where document_id = $1", [documentId]);
+      },
     }),
 
     getDocumentForMember: async (documentId, userId) =>
@@ -545,6 +572,12 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           return { preview, created };
         },
         getPreview: async (documentId) => (orgExists && isId(documentId) ? readPreview(documentId) : undefined),
+        async getConflict(documentId) {
+          if (!orgExists || !isId(documentId)) return undefined;
+          // The document's org decides whether there is an answer at all; the conflict row, whether it is null.
+          const found = await rows(ConflictRow, "select c.* from documents d left join document_conflicts c on c.document_id = d.id where d.org_id = $1 and d.id = $2", [orgId, documentId]);
+          return found.length === 0 ? undefined : found[0] ?? null;
+        },
         getRun: async (documentId, id) =>
           orgExists && isId(documentId) && isId(id)
             ? one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and id = $3 and queue = 'ai'", [orgId, documentId, id])

@@ -86,6 +86,41 @@ export const Preview = z.strictObject({
 });
 export type Preview = z.infer<typeof Preview>;
 
+// --- Conflicts (F16b) ------------------------------------------------------------------------------
+/**
+ * Why a pushed generated page was not applied: codegen's parse reasons, push-ops' history checks, and the
+ * git peer's own refusals of the file. The worker assigns its reasons to this type, so a reason added there
+ * and not here stops compiling (and the canvas's Record of sentences stops compiling in turn).
+ */
+export const ConflictReason = z.enum([
+  // codegen (generate's rules, applied to the parsed tree)
+  "unknown_prop", "wrong_prop_type", "missing_required_prop", "malformed_doc", "unknown_component", "reserved_component", "parent_takes_no_children",
+  // parse (the fixed shape)
+  "too_large", "too_deep", "syntax_error", "extra_statement", "hook", "second_export", "not_page_component", "bad_import", "spread", "conditional", "map",
+  "non_literal_prop", "text_child", "expression_child", "not_an_element", "missing_node_id", "bad_node_id", "duplicate_node_id", "duplicate_prop",
+  // push-ops (the document's history)
+  "root_mismatch", "reused_node_id", "component_changed",
+  // the git peer (the file itself)
+  "deleted", "not_a_file",
+]);
+export type ConflictReason = z.infer<typeof ConflictReason>;
+/**
+ * A push to the document's branch that changed nothing, as the canvas shows it (F16b). `commit` and `file`
+ * come from an engineer's push: the canvas renders them as TEXT, never as markup. `detail` is parse's own
+ * words (a line number, what it met), capped.
+ */
+export const Conflict = z.strictObject({
+  commit: z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/u),
+  file: z.string().min(1).max(300),
+  reason: ConflictReason,
+  detail: z.string().max(300),
+  at: z.iso.datetime(),
+});
+export type Conflict = z.infer<typeof Conflict>;
+/** GET /documents/:id/conflict. null: the newest push to the document's branch was applied, or there was none. */
+export const DocumentConflict = z.strictObject({ conflict: Conflict.nullable() });
+export type DocumentConflict = z.infer<typeof DocumentConflict>;
+
 // --- Usage (F12) -----------------------------------------------------------------------------------
 // The upper bound is not taste: it is what the system BEHIND this schema can hold. Cost is a
 // numeric(12,6) column, whose largest value is 999999.999999 and whose scale is a millionth of a dollar

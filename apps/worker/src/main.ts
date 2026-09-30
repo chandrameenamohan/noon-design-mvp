@@ -7,7 +7,7 @@ import { createAiHandler } from "./ai.ts";
 import { loadConfig } from "./config.ts";
 import { createGitPeer } from "./git.ts";
 import { createPreviewHandler } from "./preview.ts";
-import { createPushApplier } from "./push.ts";
+import { createPushApplier, keepConflict } from "./push.ts";
 import { reapSandboxes } from "./sandbox.ts";
 import { probeTools, sdkRunner } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
@@ -61,9 +61,10 @@ function startGitPeer(): Promise<{ stop(): Promise<void> }> {
   const toOps = createPushApplier({ sessions: config.sessions, manifest, documentOrg: (documentId) => store.documentOrg(documentId) });
   const peer = createGitPeer({
     seed: config.sandbox.seed, dir: config.gitDir, store, log,
-    // E5.3b: each page becomes ops through peer-client. A conflict is only logged until E5.4 shows it on the document.
+    // E5.3b: each page becomes ops through peer-client. E5.4: a refused one becomes the document's conflict banner.
     apply: async (event, page, base) => {
       const outcome = await toOps(event, page, base);
+      await keepConflict(store, event, page, outcome);
       process.stdout.write(`${JSON.stringify({ level: "info", source: "git", ref: event.ref, commit: event.after, document: page.documentId, ...outcome })}\n`);
     },
   });
