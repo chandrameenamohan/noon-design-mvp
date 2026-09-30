@@ -7,6 +7,7 @@ import { expect, test } from "./fixtures.ts";
 // its own pool (playwright.config.ts), against real Docker.
 const user = `e2e-${String(Date.now())}-preview@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const preview = (page: Page) => page.frameLocator("iframe[title='Preview of this page']");
 const docker = (...args: string[]): string =>
   execFileSync("docker", args, { encoding: "utf8", env: { ...process.env, PATH: `${process.env["PATH"] ?? ""}:/Applications/Docker.app/Contents/Resources/bin` } });
@@ -30,7 +31,7 @@ test.setTimeout(120_000);
 test("the preview follows an edit within 3 s, without reloading the page", async ({ page, baseURL }) => {
   const documentId = await newDocument(page);
   await button(page, "Add Button").click();
-  await button(page, "Select Button 1").click();
+  await layer(page, "Button 1").click();
   await labelButton(page, "First");
   await expect(preview(page).getByRole("button", { name: "First" })).toBeVisible({ timeout: 90_000 });
   // An opaque origin: scripts run, but never as 127.0.0.1 (no allow-same-origin: storage a preview left
@@ -58,7 +59,7 @@ test.describe("when the container dies", () => {
   test("the preview says it is rebuilding, and comes back with the document on its own", async ({ page }) => {
     const documentId = await newDocument(page);
     await button(page, "Add Button").click();
-    await button(page, "Select Button 1").click();
+    await layer(page, "Button 1").click();
     // Something a FRESH container would not show (it starts from an empty page): if the preview
     // below shows it, the new container really was given the document, not merely started.
     await labelButton(page, "Survives");

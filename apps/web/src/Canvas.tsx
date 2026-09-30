@@ -6,6 +6,8 @@ import { colourOf } from "./colour.ts";
 import { AiPanel } from "./AiPanel.tsx";
 import { ConflictBanner } from "./ConflictBanner.tsx";
 import { Inspector } from "./Inspector.tsx";
+import { LayersPanel } from "./LayersPanel.tsx";
+import type { Row } from "./layer-moves.ts";
 import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
@@ -30,8 +32,8 @@ function requiredProps(component: Component): Extract<Op, { type: "add_node" }>[
  * being the second Stack in that order, and how deep it sits. Iterative: a tree walk that recurses is
  * one deep document away from a crash.
  */
-function layersOf(doc: Doc): { id: string; label: string; depth: number }[] {
-  const rows = [{ id: doc.rootId, label: "Page", depth: 0 }];
+function layersOf(doc: Doc): Row[] {
+  const rows: Row[] = [{ id: doc.rootId, label: "Page", depth: 0 }];
   const seen = new Set([doc.rootId]);
   const counts = new Map<string, number>();
   const stack = [...(doc.nodes[doc.rootId]?.children ?? [])].reverse().map((id) => ({ id, depth: 1 }));
@@ -120,18 +122,9 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       left={
         <>
-          {/* Every node as a button, indented by depth: the keyboard's and the screen reader's way to any node until E10.3's tree. */}
+          {/* The document as a tree (E10.3): the same selection as the canvas, and drag or Alt+arrows move a node as ONE move_node through submit. */}
           <Panel title="Layers">
-            <ul className="layers">
-              {layers.map((row) => (
-                <li key={row.id} style={{ "--depth": row.depth } as CSSProperties}>
-                  <button type="button" className="layer" aria-pressed={row.id === node.id} onClick={() => { setSelected(row.id); }}>
-                    <span className="visually-hidden">Select </span>
-                    {row.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <LayersPanel doc={doc} rows={layers} selected={node.id} isContainer={(id) => { const each = doc.nodes[id]; return each !== undefined && holdsChildren(each); }} onSelect={setSelected} submit={submit} />
           </Panel>
           <Panel title="Library">
             <div role="toolbar" aria-label="Add a component">

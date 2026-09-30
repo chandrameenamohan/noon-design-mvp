@@ -72,10 +72,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .zoom-level { min-width: 3.5rem; text-align: center; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 [role="toolbar"] { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
-/* --- the layers (left pane): every node as a button, indented by depth, until E10.3's tree ----------- */
-.layers { list-style: none; margin: 0; padding: 0; }
-.layer { display: block; width: 100%; text-align: start; border: 0; padding: var(--space-1) var(--space-2); padding-inline-start: calc(var(--space-2) + var(--depth) * var(--space-4)); background: transparent; }
-.layer[aria-pressed="true"] { background: var(--accent-soft); }
+/* --- the layers (left pane, E10.3): one flat ARIA tree, rows indented by depth ------------------------ */
+.tree { list-style: none; margin: 0; padding: 0; touch-action: none; }
+.tree[data-dragging] { cursor: grabbing; }
+.tree-row { position: relative; display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); --indent: calc(var(--space-2) + var(--depth) * var(--space-4)); padding-inline-start: var(--indent); border-radius: var(--radius-sm); user-select: none; -webkit-user-select: none; }
+.tree-row:hover { background: var(--surface-2); }
+.tree-row[aria-selected="true"] { background: var(--accent-soft); }
+/* The ring sits inside the row: the pane clips anything outside it. */
+.tree-row:focus-visible { outline-offset: -3px; }
+.tree-row[data-dragging] { opacity: 0.5; }
+.tree-row[data-drop="none"] { cursor: not-allowed; }
+.tree-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.twisty { flex: 0 0 1rem; text-align: center; color: var(--fg-muted); font-size: var(--text-xs); }
+/* Drop indicators: a line before or after the row (from its indent, so it reads as a sibling), a box for "into". */
+.tree-row[data-drop="before"]::after, .tree-row[data-drop="after"]::after { content: ""; position: absolute; left: var(--indent); right: var(--space-2); height: 2px; background: var(--accent); pointer-events: none; }
+.tree-row[data-drop="before"]::after { top: -1px; }
+.tree-row[data-drop="after"]::after { bottom: -1px; }
+.tree-row[data-drop="into"] { box-shadow: inset 0 0 0 2px var(--accent); }
 
 /* --- presence: names in the bar, cursors and selection tags on the canvas ---------------------------- */
 /* The person's colour is a DOT beside the name, not the name's colour: the palette reads on white, not on a dark surface. */

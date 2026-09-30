@@ -4,6 +4,7 @@ import { expect, test } from "./fixtures.ts";
 // F5 + F6: every kind of edit from the UI, what a refusal looks like, and what a lost race looks like.
 const user = `e2e-${String(Date.now())}-edit@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const treeOf = (page: Page): Promise<string> =>
   page.evaluate(() => {
     // A node's children are the wrappers whose nearest wrapper ancestor it is: the real component sits in between (E10.2).
@@ -45,7 +46,7 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
   await button(page, "Add Button").click();
 
   // A prop, typed: the form comes from the manifest (Text.value is a string, Text.size an enum).
-  await button(page, "Select Text 1").click();
+  await layer(page, "Text 1").click();
   await page.getByLabel("value", { exact: true }).fill("Hello");
   await page.getByLabel("value", { exact: true }).blur();
   await page.getByLabel("size", { exact: true }).selectOption("lg");
@@ -57,19 +58,19 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
   await expect(other.locator("[data-component=Card] [data-component=Text]")).toHaveCount(1);
 
   // Reorder among siblings: the page holds [Card, Button]; Button moves up.
-  await button(page, "Select Button 1").click();
+  await layer(page, "Button 1").click();
   await button(page, "Move up").click();
   await expect(other.locator("[data-node-id=root] [data-node-id]").first()).toHaveAttribute("data-component", "Button");
   await button(page, "Move down").click();
   await expect(other.locator("[data-node-id=root] [data-node-id]").first()).toHaveAttribute("data-component", "Card");
 
   // Clearing an optional prop removes it (set_prop with null).
-  await button(page, "Select Text 1").click();
+  await layer(page, "Text 1").click();
   await page.getByLabel("size", { exact: true }).selectOption("");
   await expect(other.locator("[data-component=Text] > .node-props")).toHaveText("value=Hello");
 
   // Remove, from the OTHER browser: the subtree goes with it.
-  await button(other, "Select Card 1").click();
+  await layer(other, "Card 1").click();
   await button(other, "Remove").click();
   await expect(page.locator("[data-component=Card], [data-component=Text]")).toHaveCount(0);
   await expect(page.getByText("saved", { exact: true })).toBeVisible();
@@ -79,9 +80,9 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
 test("an edit the document's rules forbid never leaves the page, and says why", async ({ page }) => {
   await newDocument(page);
   await button(page, "Add Card").click();
-  await button(page, "Select Card 1").click();
+  await layer(page, "Card 1").click();
   await button(page, "Add Stack").click(); // inside the card
-  await button(page, "Select Card 1").click();
+  await layer(page, "Card 1").click();
   await page.getByLabel("Move into", { exact: true }).selectOption({ label: "Stack 1" }); // into its own child
   await button(page, "Move").click();
   await expect(page.getByRole("alert")).toHaveText(/cannot be moved inside itself/);
@@ -96,12 +97,12 @@ test("an edit the SERVER refuses is rolled back and its reason is shown; the oth
 
   // Both are valid alone; together they are a cycle. The server takes whichever arrives first.
   late.hold();
-  await button(late.page, "Select Card 1").click();
+  await layer(late.page, "Card 1").click();
   await late.page.getByLabel("Move into", { exact: true }).selectOption({ label: "Stack 1" });
   await button(late.page, "Move").click();
   await expect(late.page.locator("[data-component=Stack] [data-component=Card]")).toHaveCount(1); // optimistic
 
-  await button(page, "Select Stack 1").click();
+  await layer(page, "Stack 1").click();
   await page.getByLabel("Move into", { exact: true }).selectOption({ label: "Card 1" });
   await button(page, "Move").click();
   await expect(page.getByText("saved", { exact: true })).toBeVisible();
@@ -122,12 +123,12 @@ test("an edit to a node someone else just removed simply disappears: no error, n
   const late = await openHeld(browser, url);
 
   late.hold();
-  await button(late.page, "Select Text 1").click();
+  await layer(late.page, "Text 1").click();
   await late.page.getByLabel("value", { exact: true }).fill("too late");
   await late.page.getByLabel("value", { exact: true }).blur();
   await expect(late.page.locator("[data-component=Text] > .node-props")).toHaveText("value=too late");
 
-  await button(page, "Select Text 1").click();
+  await layer(page, "Text 1").click();
   await button(page, "Remove").click();
   await expect(late.page.locator("[data-component=Text]")).toHaveCount(0); // the remove arrives; the node goes
 
@@ -141,7 +142,7 @@ test("an edit to a node someone else just removed simply disappears: no error, n
 test("a number the browser cannot read (1e999) changes nothing; it must not be taken for 'clear this prop'", async ({ page }) => {
   await newDocument(page);
   await button(page, "Add Card").click();
-  await button(page, "Select Card 1").click();
+  await layer(page, "Card 1").click();
   const padding = page.getByLabel("padding", { exact: true });
   await padding.fill("8");
   await padding.press("Enter");

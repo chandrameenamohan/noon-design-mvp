@@ -6,6 +6,7 @@ import { expect, test } from "./fixtures.ts";
 // click and keyboard selection with an outline and a label; the frame is inert; axe-clean in both themes.
 const user = `e2e-${String(Date.now())}-zoom@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const canvasOf = (page: Page) => page.getByRole("region", { name: "Canvas" });
 const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading");
 const zoomOf = async (page: Page): Promise<number> => Number(await page.locator(".world").getAttribute("data-zoom"));
@@ -31,7 +32,7 @@ async function pageWithCardButtonText(page: Page): Promise<void> {
   await button(page, "New document").click();
   await expect(page.getByRole("status")).toHaveText("live");
   await button(page, "Add Card").click();
-  await button(page, "Select Card 1").click();
+  await layer(page, "Card 1").click();
   await button(page, "Add Button").click(); // into the card
   await button(page, "Add Text").click(); // into the card, after the button
   await expect(page.locator("[data-node-id][data-component=Card] [data-node-id]")).toHaveCount(2);
@@ -54,7 +55,7 @@ test("the REAL components render, inert, in a page frame; click selects the node
   await page.mouse.click(at.x, at.y);
   await expect(heading(page)).toHaveText("Button 1");
   await expect(page.locator("[data-outline=selected]")).toHaveText("Button 1");
-  await expect(button(page, "Select Button 1")).toHaveAttribute("aria-pressed", "true");
+  await expect(layer(page, "Button 1")).toHaveAttribute("aria-selected", "true");
   await expect(canvasOf(page)).toBeFocused();
   expect(await page.evaluate(() => document.body.dataset["dsClicked"] ?? "no")).toBe("no");
   // The outline sits on the button's own box.
@@ -154,9 +155,9 @@ test("pan: wheel, Space+drag and middle-drag move the sheet; a drag is not a cli
   expect((await box(page, ".page-frame")).y).toBeCloseTo(before.y - 30, 0);
 
   // Space held: the cursor says so, and the left button drags the sheet instead of selecting.
-  await button(page, "Select Button 1").click();
+  await layer(page, "Button 1").click();
   await page.mouse.click(empty.x, empty.y); // focus the canvas again (this click selects the page)
-  await button(page, "Select Button 1").click();
+  await layer(page, "Button 1").click();
   await canvas.focus();
   before = await box(page, ".page-frame");
   const at = await centreOf(page, "Button");
@@ -206,7 +207,7 @@ test("keyboard selection: arrows walk siblings, Enter goes in, Shift+Enter out; 
   await page.keyboard.press("Shift+Enter");
   await expect(heading(page)).toHaveText("Card 1");
   await expect(page.locator("[data-outline=selected]")).toHaveText("Card 1");
-  await expect(button(page, "Select Card 1")).toHaveAttribute("aria-pressed", "true");
+  await expect(layer(page, "Card 1")).toHaveAttribute("aria-selected", "true");
   // Said, not only shown.
   await expect(page.locator("[aria-live=polite]", { hasText: "Card 1 selected" })).toHaveCount(1);
   // The focused canvas wears the accent ring.
@@ -214,7 +215,7 @@ test("keyboard selection: arrows walk siblings, Enter goes in, Shift+Enter out; 
   expect(await canvas.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
 
   // The Layers list is the other keyboard path to a node, and the selection is one.
-  await button(page, "Select Text 1").focus();
+  await layer(page, "Text 1").focus();
   await page.keyboard.press("Space");
   await expect(heading(page)).toHaveText("Text 1");
   await expect(page.locator("[data-outline=selected]")).toHaveText("Text 1");

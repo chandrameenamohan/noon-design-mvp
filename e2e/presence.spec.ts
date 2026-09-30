@@ -18,7 +18,7 @@ test("each browser sees the other's name, pointer and selection, and forgets a c
 
   // The other browser selects the card, then rests its pointer in the middle of its canvas
   // (in that order: the click itself moves the pointer to the button).
-  await other.getByRole("button", { name: "Select Card 1", exact: true }).click();
+  await other.getByRole("treeitem", { name: "Card 1", exact: true }).click();
   const box = await other.getByRole("region", { name: "Canvas" }).boundingBox();
   if (!box) throw new Error("no canvas");
   await other.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
