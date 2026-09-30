@@ -338,6 +338,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     const member = await c.var.scope.setMember({ ...(await body(c, SetMemberBody)), by: c.var.user.id });
     if (member === "no_user") return notFound(c);
     if (member === "last_owner") return fail(c, 409, "last_owner");
+    if (member === "forbidden") return fail(c, 403, "forbidden"); // demoted while this request waited for the lock
     await announce(c, { orgId: c.var.org.id, userId: member.userId });
     return c.json(member);
   });

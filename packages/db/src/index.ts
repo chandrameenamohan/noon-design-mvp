@@ -205,9 +205,10 @@ type PageInput = { limit?: number; cursor?: string | undefined };
 type OrgScope = {
   /**
    * E8.2 (F24): makes the user with this email a member at `role`, or changes their role. "no_user": nobody has
-   * that email. "last_owner": it would leave the org without an owner. One change at a time per org.
+   * that email. "last_owner": it would leave the org without an owner. "forbidden": `by` is no longer an owner here
+   * (demoted after the route checked). One change at a time per org.
    */
-  setMember(input: { email: string; role: Role; by: string | undefined }): Promise<Member | "no_user" | "last_owner">;
+  setMember(input: { email: string; role: Role; by: string | undefined }): Promise<Member | "no_user" | "last_owner" | "forbidden">;
   /** E10.8: one page of this org's members with their roles, oldest first (the founding owner leads). Undefined = a bad cursor. */
   listMembers(page?: PageInput): Promise<Page<Member> | undefined>;
   /** E10.8: one page of the shares of this org's document, oldest first. Undefined = a bad cursor; a document not this org's has none. */
@@ -935,14 +936,17 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           if (!orgExists || (by !== undefined && !isId(by))) throw new Error("cannot set a member: invalid org or actor id");
           const input = { email: User.shape.email.parse(email), role: Role.parse(role) };
           // One change at a time per org: two owners demoting each other at once must not both see the other
-          // still an owner (under read committed, each statement would) and leave the org with none.
+          // still an owner (under read committed, each statement would) and leave the org with none. The actor's own role
+          // is read again under the lock: the route's check ran before it, and an owner demoted since must not act.
           return inTurn(`noon:members:${orgId}`, async (client) => {
-            const found = z.object({ id: z.string(), role: Role.nullable(), owners: count }).optional().parse((await client.query<QueryResultRow>(
-              "select u.id, m.role, (select count(*) from memberships where org_id = $1 and role = 'owner') as owners " +
+            const found = z.object({ id: z.string(), role: Role.nullable(), owners: count, actor: Role.nullable() }).optional().parse((await client.query<QueryResultRow>(
+              "select u.id, m.role, (select count(*) from memberships where org_id = $1 and role = 'owner') as owners, " +
+                "(select role from memberships where org_id = $1 and user_id = $3) as actor " +
                 "from users u left join memberships m on m.user_id = u.id and m.org_id = $1 where u.email = lower($2)",
-              [orgId, input.email],
+              [orgId, input.email, by ?? null],
             )).rows[0]);
             if (!found) return "no_user";
+            if (by !== undefined && found.actor !== "owner") return "forbidden";
             if (found.role === "owner" && input.role !== "owner" && found.owners <= 1) return "last_owner";
             const member = MemberRow.parse((await client.query<QueryResultRow>(
               "with m as (insert into memberships (org_id, user_id, role) values ($1, $2, $3) on conflict (org_id, user_id) do update set role = excluded.role returning user_id, role) " +

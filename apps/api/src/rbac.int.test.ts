@@ -125,7 +125,18 @@ test("two owners demoting each other at the same moment: exactly one wins, and t
   const { org } = await world();
   expect((await setRole("owner", org.id, who.editor, "owner")).status).toBe(200);
   const [a, b] = await Promise.all([setRole("owner", org.id, who.editor, "viewer"), setRole("editor", org.id, who.owner, "viewer")]);
-  expect([a.status, b.status].sort()).toEqual([200, 409]);
+  // The loser is no longer an owner when its change comes up (the caller's role is read again under the org's lock),
+  // so it is refused as a non-owner, whichever request reached the lock first; a stale "owner" from before never acts.
+  expect([a.status, b.status].sort()).toEqual([200, 403]);
+  const [winner, loser] = a.status === 200 ? (["owner", "editor"] as const) : (["editor", "owner"] as const);
+  const members = (await call(winner, "GET", `/orgs/${org.id}/members`)).json as { items: unknown[] };
+  expect(members.items.map((m) => Member.parse(m)).filter((m) => m.role === "owner").map((m) => m.email)).toEqual([who[winner]]);
+  // Deterministically, the request that lost the race: it passed the route's owner check before the other committed,
+  // and reaches the lock as a viewer. It changes nothing.
+  const loserId = Me.parse((await call(loser, "GET", "/auth/me")).json).user?.id;
+  expect(await ctx.db.db.forOrg(org.id).setMember({ email: who.viewer, role: "editor", by: loserId })).toBe("forbidden");
+  expect((await call(loser, "GET", `/orgs/${org.id}`)).status).toBe(200); // still a member, only not an owner
+  expect(Member.parse((await setRole(winner, org.id, who.viewer, "viewer")).json).role).toBe("viewer"); // the viewer was never promoted
 });
 
 test("a member of org A who owns org B cannot change roles in A through B's standing", async () => {
