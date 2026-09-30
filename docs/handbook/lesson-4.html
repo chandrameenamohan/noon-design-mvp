@@ -98,14 +98,14 @@ h2 { scroll-margin-top: 24px; }
   <p class="lede">The win: you can explain, to an interviewer or to yourself, how a tree of nodes becomes one file whose bytes never surprise anyone, how one container per document is started exactly once even when ten callers ask at the same moment, why a child process needs an end from outside and what Node 24 does when you ask for one, how a page framed under an opaque origin is served and healed, and why a reaper must look before it asks; and you can point at the line of code for every claim.</p>
 
   <div class="aside">
-    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">ab92728</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4, 6 and 8 are the ones an architect interview will dig into.</p>
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">94222ab</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4, 6 and 8 are the ones an architect interview will dig into.</p>
     <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + Redis + api + sync + worker + worker-sandbox; builds noon-sandbox:dev<br>docker compose logs -f worker-sandbox&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "worker draining queues: sandbox", then each preview job<br>pnpm exec vitest run apps/worker/src/sandbox.int.test.ts&nbsp;&nbsp;&nbsp;&nbsp;# real Docker: starts, races, deadlines, the reaper<br>pnpm exec playwright test e2e/preview.spec.ts&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the canvas, the real sandbox worker, a container killed under it</p>
     <p>Try it: open a document, press <em>Show the running page</em>, add a Button and type a label; it appears in the frame within a moment and the frame is not reloaded. Then <span class="mono">docker rm --force noon-sandbox-&lt;document id&gt;</span> and watch "Rebuilding the preview…" turn back into your page, on its own. Never run two Docker-using suites at once: each one's cleanup removes the other's containers.</p>
   </div>
 
   <ol class="toc"><li><a href="#map">The map: a document becomes code, and code becomes a running page</a></li><li><a href="#codegen">1 · One document, one file, the same bytes</a></li><li><a href="#container">2 · A container per document, ready in a second</a></li><li><a href="#ownership">3 · Uniqueness is not ownership</a></li><li><a href="#process">4 · A child process needs an end from outside</a></li><li><a href="#queue">5 · The sandbox queue: a job is the right to a container</a></li><li><a href="#pools">6 · One queue per process, one pool per stack, a reaper with an owner</a></li><li><a href="#canvas">7 · The canvas frames the page</a></li><li><a href="#origin">8 · The opaque origin</a></li><li><a href="#testing">9 · Testing a program that runs containers</a></li><li><a href="#limits">10 · What the type system could not see, epic 4 edition</a></li><li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
 
-  <section id="map"><h2>The map: a document becomes code, and code becomes a running page</h2><p>Epic 4 closes half of keystone 8: <strong>one document is one generated TSX file of a fixed shape, and the same document is always the same bytes.</strong> The other half, reading a file back into ops, is epic 5. What this epic adds around that one pure function is a running page: a container per document that serves the file with the customer's own dev server, a job that keeps the file in step with the document, and a frame on the canvas that shows it. Nothing in the room changed. The preview is one more peer, and it never writes.</p><div class="scroll"><table><tr><th>Step</th><th>Where</th><th>What happens</th></tr><tr><td>1</td><td><span class='mono'>packages/codegen/src/index.ts</span></td><td><code>generate(doc, manifest)</code>: total, deterministic, one file whose only export is <code>Page</code></td></tr><tr><td>2</td><td><span class='mono'>apps/api/src/app.ts</span></td><td><code>POST /documents/:id/preview</code>: one <code>INSERT</code> under a per-org cap; the job row IS the preview; 201 even when Redis is away</td></tr><tr><td>3</td><td><span class='mono'>apps/worker/src/main.ts</span></td><td><code>WORKER_QUEUE=sandbox</code>: the only process holding the Docker socket drains this queue, four... eight at a time</td></tr><tr><td>4</td><td><span class='mono'>apps/worker/src/preview.ts</span></td><td>the handler joins the room as a silent peer, projects from <code>peer.confirmed</code>, and loops: alive? moved? anyone here?</td></tr><tr><td>5</td><td><span class='mono'>apps/worker/src/sandbox.ts</span></td><td><code>startSandbox</code>: one container per document, single-flight, port chosen once, ready probed from inside</td></tr><tr><td>6</td><td><span class='mono'>apps/worker/sandbox/Dockerfile</span></td><td>baked <code>node_modules</code>, the container's own clone on <code>noon/&lt;id&gt;</code>, a preview entry of ours wrapped around the customer's Vite</td></tr><tr><td>7</td><td><span class='mono'>apps/worker/src/sandbox.ts</span></td><td><code>pushPage</code>: <code>docker exec cat &gt; "$PAGE"</code>, ~20 ms; Vite hot-updates, React keeps its state</td></tr><tr><td>8</td><td><span class='mono'>apps/web/src/Preview.tsx</span></td><td>asks <code>GET .../preview</code> once a second, never caches the URL; an iframe with an opaque origin, keyed on the URL</td></tr><tr><td>9</td><td><span class='mono'>apps/worker/src/sandbox.ts</span></td><td><code>reapSandboxes</code>: every 30 s, its own pool only, list Docker first and ask Postgres second</td></tr></table></div><p>Four ideas carry the epic. <strong>Choose the literal from the value, never from what a schema claims</strong> (section 1). <strong>Uniqueness is not ownership</strong> (section 3). <strong>A child process, like a promise, needs an end from outside</strong> (section 4). And <strong>every resource needs an owner label before it gets a reaper</strong> (section 6). Sections 7 and 8 are about a browser security boundary that broke the design twice before it held.</p><div class="scroll"><table><tr><th>This repo</th><th>Java world</th><th>Python world</th></tr><tr><td>a pure function from a tree to one source file</td><td>JavaPoet, or a template engine with a sorted walk</td><td><code>ast.unparse</code>, or Jinja2 with the same discipline</td></tr><tr><td>a dev server in a container per document, driven over the docker CLI</td><td>Testcontainers' <code>GenericContainer</code>; <code>docker-java</code></td><td><code>testcontainers-python</code>; the <code>docker</code> SDK</td></tr><tr><td>a file pushed with <code>docker exec</code> on stdin</td><td><code>ProcessBuilder</code> and its <code>OutputStream</code></td><td><code>subprocess.run(input=...)</code></td></tr><tr><td>a reaper on a timer, scoped by a label</td><td>a <code>@Scheduled</code> cleanup; Testcontainers' ryuk with a session label</td><td>a beat task; the same label idea</td></tr></table></div></section><section id="codegen"><h2>1 · One document, one file, the same bytes</h2><p>The first decision is what <em>deterministic</em> has to mean here. Not "the same on my machine today": epic 5 opens a pull request whose file must equal a fresh generation, and a sandbox pushes the file into a container on every confirmed op. A generator that sorted differently on two machines would show a diff that nobody made.</p><p class="label">From <span class="mono">packages/codegen/src/index.ts</span></p><div class="scroll"><pre><code>/**
+  <section id="map"><h2>The map: a document becomes code, and code becomes a running page</h2><p>Epic 4 closes half of keystone 8: <strong>one document is one generated TSX file of a fixed shape, and the same document is always the same bytes.</strong> The other half, reading a file back into ops, is epic 5. What this epic adds around that one pure function is a running page: a container per document that serves the file with the customer's own dev server, a job that keeps the file in step with the document, and a frame on the canvas that shows it. Nothing in the room changed. The preview is one more peer, and it never writes.</p><div class="scroll"><table><tr><th>Step</th><th>Where</th><th>What happens</th></tr><tr><td>1</td><td><span class='mono'>packages/codegen/src/index.ts</span></td><td><code>generate(doc, manifest)</code>: total, deterministic, one file whose only export is <code>Page</code></td></tr><tr><td>2</td><td><span class='mono'>apps/api/src/app.ts</span></td><td><code>POST /documents/:id/preview</code>: one <code>INSERT</code> under a per-org cap; the job row IS the preview; 201 even when Redis is away</td></tr><tr><td>3</td><td><span class='mono'>apps/worker/src/main.ts</span></td><td><code>WORKER_QUEUE=sandbox</code>: the only process holding the Docker socket drains this queue, four... eight at a time</td></tr><tr><td>4</td><td><span class='mono'>apps/worker/src/preview.ts</span></td><td>the handler joins the room as a silent peer, projects from <code>peer.confirmed</code>, and loops: alive? moved? anyone here?</td></tr><tr><td>5</td><td><span class='mono'>apps/worker/src/sandbox.ts</span></td><td><code>startSandbox</code>: one container per document, single-flight, one origin for every preview, ready probed from inside</td></tr><tr><td>6</td><td><span class='mono'>apps/worker/sandbox/Dockerfile</span></td><td>baked <code>node_modules</code>, the container's own clone on <code>noon/&lt;id&gt;</code>, a preview entry of ours wrapped around the customer's Vite</td></tr><tr><td>7</td><td><span class='mono'>apps/worker/src/sandbox.ts</span></td><td><code>pushPage</code>: <code>docker exec cat &gt; "$PAGE"</code>, ~20 ms; Vite hot-updates, React keeps its state</td></tr><tr><td>8</td><td><span class='mono'>apps/web/src/Preview.tsx</span></td><td>asks <code>GET .../preview</code> once a second, never caches the URL; an iframe with an opaque origin, keyed on the URL</td></tr><tr><td>9</td><td><span class='mono'>apps/worker/src/sandbox.ts</span></td><td><code>reapSandboxes</code>: every 30 s, its own pool only, list Docker first and ask Postgres second</td></tr></table></div><p>Four ideas carry the epic. <strong>Choose the literal from the value, never from what a schema claims</strong> (section 1). <strong>Uniqueness is not ownership</strong> (section 3). <strong>A child process, like a promise, needs an end from outside</strong> (section 4). And <strong>every resource needs an owner label before it gets a reaper</strong> (section 6). Sections 7 and 8 are about a browser security boundary that broke the design twice before it held.</p><div class="scroll"><table><tr><th>This repo</th><th>Java world</th><th>Python world</th></tr><tr><td>a pure function from a tree to one source file</td><td>JavaPoet, or a template engine with a sorted walk</td><td><code>ast.unparse</code>, or Jinja2 with the same discipline</td></tr><tr><td>a dev server in a container per document, driven over the docker CLI</td><td>Testcontainers' <code>GenericContainer</code>; <code>docker-java</code></td><td><code>testcontainers-python</code>; the <code>docker</code> SDK</td></tr><tr><td>a file pushed with <code>docker exec</code> on stdin</td><td><code>ProcessBuilder</code> and its <code>OutputStream</code></td><td><code>subprocess.run(input=...)</code></td></tr><tr><td>a reaper on a timer, scoped by a label</td><td>a <code>@Scheduled</code> cleanup; Testcontainers' ryuk with a session label</td><td>a beat task; the same label idea</td></tr></table></div></section><section id="codegen"><h2>1 · One document, one file, the same bytes</h2><p>The first decision is what <em>deterministic</em> has to mean here. Not "the same on my machine today": epic 5 opens a pull request whose file must equal a fresh generation, and a sandbox pushes the file into a container on every confirmed op. A generator that sorted differently on two machines would show a diff that nobody made.</p><p class="label">From <span class="mono">packages/codegen/src/index.ts</span></p><div class="scroll"><pre><code>/**
  * Keystone 8: one document becomes ONE generated TSX file of a fixed shape, and the same document
  * always generates the same bytes. Determinism is not tidiness here: epic 5 opens a pull request
  * whose file must equal a fresh generation, and epic 4&#x27;s sandbox pushes this file into a running
@@ -138,8 +138,8 @@ h2 { scroll-margin-top: 24px; }
   // export (a BUILD_ID, say) turns every edit into a full page reload (learning-tests/sandbox).
   const exports = tsx(doc).match(/^export\b.*$/gmu) ?? [];
   expect(exports).toEqual([&quot;export function Page() {&quot;]);
-});</code></pre></div><p><strong>Refusing is the point.</strong> A document can outlive its design system: a component dropped, a prop renamed, a type changed. Generating <em>without</em> the prop would compile, and epic 5 would read the file back as a document with that prop deleted. So every drift has a name, and the function is total: it never throws, because its caller is a queue handler, and an exception there is a job that fails as <code>internal</code> while a reason is something a person can be shown.</p><p class="label">From <span class="mono">packages/codegen/src/index.ts</span></p><div class="scroll"><pre><code>// ponytail: not exported until a caller needs to switch on it; Generated carries it either way.
-type CodegenReason = PropProblem | &quot;malformed_doc&quot; | &quot;unknown_component&quot; | &quot;reserved_component&quot; | &quot;parent_takes_no_children&quot;;
+});</code></pre></div><p><strong>Refusing is the point.</strong> A document can outlive its design system: a component dropped, a prop renamed, a type changed. Generating <em>without</em> the prop would compile, and epic 5 would read the file back as a document with that prop deleted. So every drift has a name, and the function is total: it never throws, because its caller is a queue handler, and an exception there is a job that fails as <code>internal</code> while a reason is something a person can be shown.</p><p class="label">From <span class="mono">packages/codegen/src/index.ts</span></p><div class="scroll"><pre><code>/** Why a document has no file. `parse` refuses with these too: it hands every tree it reads back to `generate`. */
+export type CodegenReason = PropProblem | &quot;malformed_doc&quot; | &quot;unknown_component&quot; | &quot;reserved_component&quot; | &quot;parent_takes_no_children&quot;;
 /**
  * Either the file or the reason there is none. Refusing is the point: a document whose design
  * system has changed under it (a prop that no longer exists, a component that was dropped) must not
@@ -270,16 +270,24 @@ test(&quot;a prop keyed by a Symbol is refused, not dropped&quot;, () =&gt; {
 # installed at container start (learning-tests/sandbox FINDINGS 6). It is also installed INSIDE
 # Linux, which matters: Vite&#x27;s bundler ships a native binary per platform, so a host&#x27;s
 # node_modules copied in would not run.
-FROM node:24-slim
+#
+# The base is pinned by digest (noon-9gz): a tag moves, and this image runs code nobody here wrote.
+# Moving it is a deliberate edit: `docker pull node:24-slim`, then its RepoDigest here.
+FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends git &amp;&amp; rm -rf /var/lib/apt/lists/*
-RUN npm install -g pnpm@9.15.4 &amp;&amp; mkdir /app &amp;&amp; chown node:node /app
+RUN npm install -g pnpm@9.15.4 &amp;&amp; mkdir /app /home/node/deps &amp;&amp; chown node:node /app /home/node/deps
 USER node
-WORKDIR /app
+# node_modules lives OUTSIDE the working tree (noon-9gz). The container runs --read-only, with the
+# working tree /app a sized tmpfs (the disk quota), so node_modules must come from a path of the image:
+# the start links /app/node_modules to it, read-only. Two things Vite writes into node_modules are sent
+# elsewhere: its dependency cache (our config&#x27;s cacheDir) and its bundled-config temp file, which goes
+# to node_modules/.vite-temp whatever the config says (Vite 8&#x27;s source): that is a link into /tmp.
+WORKDIR /home/node/deps
 COPY --chown=node:node package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --ignore-workspace</code></pre></div><p>Each container makes its <em>own clone</em> of the seed, on the document's working branch <code>noon/&lt;id&gt;</code>, checked out over the baked <code>node_modules</code>. Only on the first start: a restarted container keeps its working tree, which is the whole point of restarting rather than recreating. "Cloned" means HEAD resolves, not ".git exists", because a clone killed halfway leaves a <code>.git</code> behind.</p><p class="label">From <span class="mono">apps/worker/sandbox/Dockerfile</span></p><div class="scroll"><pre><code># The container&#x27;s OWN clone, on the document&#x27;s working branch, checked out over the baked
-# node_modules (git refuses to clone into a non-empty directory; init + fetch + checkout does not
-# mind, and node_modules is in the seed&#x27;s .gitignore). Only on the FIRST start: a restarted container
-# keeps its working tree, which is the whole point of restarting rather than recreating it.
+RUN pnpm install --frozen-lockfile --ignore-workspace &amp;&amp; ln -s /tmp/vite-temp node_modules/.vite-temp
+WORKDIR /app</code></pre></div><p>Each container makes its <em>own clone</em> of the seed, on the document's working branch <code>noon/&lt;id&gt;</code>, checked out over the baked <code>node_modules</code>. Only on the first start: a restarted container keeps its working tree, which is the whole point of restarting rather than recreating. "Cloned" means HEAD resolves, not ".git exists", because a clone killed halfway leaves a <code>.git</code> behind.</p><p class="label">From <span class="mono">apps/worker/sandbox/Dockerfile</span></p><div class="scroll"><pre><code># The container&#x27;s OWN clone (of the worker&#x27;s bundle), on the document&#x27;s working branch, then node_modules linked in. The
+# working tree is a tmpfs (noon-9gz&#x27;s disk quota), empty on every start, so in practice this clones
+# every time; the preview job pushes the document&#x27;s page again after any start (preview.ts).
 #
 # One command per line, NOT an `a &amp;&amp; b &amp;&amp; c` chain: `set -e` ignores a failure anywhere in such a
 # chain except its last command, so a clone that failed went on to start a dev server with no
@@ -294,7 +302,15 @@ RUN pnpm install --frozen-lockfile --ignore-workspace</code></pre></div><p>Each 
 # page that renders nothing, so the entry never imports a file that is not there.</code></pre></div><p class="label">From <span class="mono">apps/worker/sandbox/Dockerfile</span></p><div class="scroll"><pre><code>COPY --chmod=755 &lt;&lt;&#x27;EOF&#x27; /home/node/start.sh
 #!/bin/sh
 set -eu
+mkdir -p /tmp/vite-temp
 if ! git rev-parse --quiet --verify HEAD &gt;/dev/null 2&gt;&amp;1; then
+  # The worker&#x27;s delivery, written whole then renamed. A minute, then give up: the worker has failed.
+  waited=0
+  while [ ! -f /tmp/seed.bundle ]; do
+    waited=$((waited + 1))
+    [ &quot;$waited&quot; -le 600 ] || { echo &quot;no seed from the worker in 60 s&quot; &gt;&amp;2; exit 1; }
+    sleep 0.1
+  done
   rm -rf .git
   git init --quiet --initial-branch=main
   git remote add origin &quot;$SEED_REPO&quot;
@@ -305,8 +321,13 @@ mkdir -p noon-preview
 cp /home/node/preview/index.html /home/node/preview/vite.config.mjs noon-preview/
 sed -e &quot;s|@PAGE@|../$PAGE|&quot; -e &quot;s|@DOC@|${BRANCH#noon/}|&quot; /home/node/preview/main.tsx &gt; noon-preview/main.tsx
 [ -f &quot;$PAGE&quot; ] || cp /home/node/preview/placeholder.tsx &quot;$PAGE&quot;
-grep -qx &#x27;noon-preview/&#x27; .git/info/exclude || echo &#x27;noon-preview/&#x27; &gt;&gt; .git/info/exclude
-exec pnpm exec vite --config noon-preview/vite.config.mjs
+ln -sfn /home/node/deps/node_modules node_modules
+# A link is not the directory the seed&#x27;s `node_modules/` ignores: excluded by name, like the preview.
+for excluded in noon-preview/ node_modules; do
+  grep -qx &quot;$excluded&quot; .git/info/exclude || echo &quot;$excluded&quot; &gt;&gt; .git/info/exclude
+done
+# Vite itself, not `pnpm exec`: pnpm wants to write under $HOME, and nothing outside the tmpfs is writable.
+exec node node_modules/vite/bin/vite.js --config noon-preview/vite.config.mjs
 EOF
 CMD [&quot;/home/node/start.sh&quot;]</code></pre></div><p>On the worker's side, <code>sandbox.ts</code> starts one and says where it answers. Docker itself is the registry: the container's name is the document's, and there is no table that can fall out of step with what is running.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
  * The sandbox: one container per document working branch, running the sample app&#x27;s own dev server
@@ -319,51 +340,50 @@ CMD [&quot;/home/node/start.sh&quot;]</code></pre></div><p>On the worker's side,
  * processes, only the one holding the document&#x27;s unfinished `sandbox` job starts it (E4.2b&#x27;s unique
  * index, the same rule as one AI run per document). Name uniqueness alone was NOT enough: ten
  * racing callers removed each other&#x27;s containers (the E4.2a verifier&#x27;s trace, and a test now).
- */</code></pre></div><p><strong>The port is chosen once.</strong> Docker's own choice (<code>-p 127.0.0.1::5173</code>) is re-rolled on every <code>docker start</code> (measured: 49755, then 49767). Vite's client heals a lost connection by polling the server it was loaded from and reloading when it answers, on the <em>same origin</em> only. So the worker picks the host port, from the document id so two documents rarely want the same one, and writes it into the container's configuration, where a restart finds it.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
+ */</code></pre></div><p><strong>The origin never changes.</strong> Docker's own port choice (<code>-p 127.0.0.1::5173</code>) is re-rolled on every <code>docker start</code> (measured: 49755, then 49767). Vite's client heals a lost connection by polling the server it was loaded from and reloading when it answers, on the <em>same origin</em> only. The first version had the worker pick a host port per document; since noon-9gz no sandbox publishes a port at all: every preview answers through the pool's one proxy port, under a path that names the document and carries a token minted for that container.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
  * Starts the document&#x27;s sandbox, or finds the one already running, and resolves once its dev
  * server answers. Safe to call again at any time: a running sandbox is returned as it is, a stopped
- * one is started again WITH ITS WORKING TREE and ON ITS OLD PORT.
+ * one is started again on its old URL but with a FRESH CLONE (the working tree is a sized tmpfs, the
+ * disk quota: it does not outlive the container&#x27;s run; the preview job pushes the page again).
  *
- * The port never changes while the container exists, and that is a requirement, not tidiness:
- * after a restart Vite&#x27;s client reloads the page by itself, but only if the new server answers on
- * the SAME origin (SPEC §2a). Docker&#x27;s own port choice (`-p 127.0.0.1::5173`) is re-rolled on every
- * `docker start` (measured: 49755, then 49767), so the port is chosen here, once, and written into
- * the container&#x27;s own configuration. (A STOPPED container does not hold its port, though: if
- * something takes it meanwhile, the sandbox comes back fresh on another one. Callers must read the
- * URL from the result every time, never keep the first one.)
- */</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/** Makes sure the container exists and is running: started again if stopped, created if missing. */
-async function create(run: Run, name: string, documentId: string, image: string, ports: readonly [number, number], pool: string): Promise&lt;void&gt; {
-  // Candidates step through the range from a start taken from the document id: spread, so two
-  // documents rarely want the same port, and stepping, so a taken port is never tried twice.
-  const size = ports[1] - ports[0] + 1;
-  const offset = Number.parseInt(documentId.slice(0, 8), 16) % size;
-  for (let attempt = 0; attempt &lt; 5; attempt++) {
-    if (await restarted(run, name)) return;
-    const candidate = ports[0] + ((offset + attempt) % size);
-    try {
-      await run(&quot;run&quot;, &quot;--detach&quot;, &quot;--name&quot;, name,
-        &quot;--label&quot;, `${LABEL}=${pool}`, &quot;--label&quot;, `noon.document=${documentId}`,
-        &quot;--env&quot;, `BRANCH=noon/${documentId}`, &quot;--env&quot;, `PAGE=${pagePath(documentId)}`,
-        // Loopback only: a laptop on a shared network must not serve its previews to the room.
-        &quot;--publish&quot;, `127.0.0.1:${String(candidate)}:${String(CONTAINER_PORT)}`,
-        &quot;--network&quot;, NETWORK,
-        // It runs code nobody here wrote (the customer&#x27;s repo) and code generated from user input.
-        // ponytail: egress (and host.docker.internal) is open, and the working tree&#x27;s disk is not
-        // capped. Both close behind the sandbox proxy (bead noon-9gz), before E5 runs a customer repo.
-        &quot;--cap-drop&quot;, &quot;ALL&quot;, &quot;--security-opt&quot;, &quot;no-new-privileges&quot;, &quot;--pids-limit&quot;, &quot;256&quot;,
-        &quot;--memory&quot;, &quot;1g&quot;, &quot;--memory-swap&quot;, &quot;1g&quot;, &quot;--cpus&quot;, &quot;1&quot;, &quot;--tmpfs&quot;, &quot;/tmp:size=64m&quot;,
-        image);
-      return;
-    } catch (err) {
-      // `docker run` CREATES the container before it binds the port, so a port that turns out to be
-      // taken leaves a container behind under the document&#x27;s name. The next turn&#x27;s `restarted()`
-      // finds it, fails to start it for the same reason, and removes it; then the next port is tried.
-      // A name conflict means another process created it: the next turn finds that one.
-      if (!PORT_TAKEN.test(String(err)) &amp;&amp; !String(err).includes(&quot;is already in use by container&quot;)) throw err;
-    }
+ * The origin never changes: every preview answers on the pool proxy&#x27;s one port (SPEC §2a&#x27;s self-heal
+ * wants the same origin). A container made anew (reaped, a new image, a new key) gets a new token, so
+ * callers must read the URL from the result every time, never keep the first one.
+ */</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
+ * Makes sure the container exists, is running, and is of the current image and key: started again if
+ * stopped, made anew otherwise. True when it was started here (its empty tmpfs needs the seed).
+ */
+async function create(run: Run, name: string, documentId: string, options: SandboxOptions): Promise&lt;boolean&gt; {
+  // Asked once per start: `make sandbox-image` retags the image, and a container of the old one must
+  // not be started again as if nothing had changed (E4.2a spec note 3).
+  const image = (await run(&quot;image&quot;, &quot;inspect&quot;, &quot;--format&quot;, &quot;{{.Id}}&quot;, options.image)).trim();
+  const key = fingerprint(options.previewKey);
+  const found = await restarted(run, name, image, key);
+  if (found) return found === &quot;started&quot;;
+  try {
+    await run(&quot;run&quot;, &quot;--detach&quot;, &quot;--name&quot;, name,
+      &quot;--label&quot;, `${LABEL}=${options.pool}`, &quot;--label&quot;, `noon.document=${documentId}`, &quot;--label&quot;, `noon.key=${key}`,
+      &quot;--env&quot;, `BRANCH=noon/${documentId}`, &quot;--env&quot;, `PAGE=${pagePath(documentId)}`,
+      // Fixed for the container&#x27;s life: a restarted container keeps it, a recreated one gets a new token.
+      &quot;--env&quot;, `PREVIEW_BASE=${previewBase(documentId, options.previewKey)}`,
+      // Its own --internal network (ensureNetwork): no egress, no host, no other sandbox, no published port.
+      &quot;--network&quot;, name,
+      // It runs code nobody here wrote (the customer&#x27;s repo) and code generated from user input.
+      &quot;--cap-drop&quot;, &quot;ALL&quot;, &quot;--security-opt&quot;, &quot;no-new-privileges&quot;, &quot;--pids-limit&quot;, &quot;256&quot;,
+      &quot;--memory&quot;, &quot;1g&quot;, &quot;--memory-swap&quot;, &quot;1g&quot;, &quot;--cpus&quot;, &quot;1&quot;,
+      // The disk quota: nothing on the image&#x27;s filesystem is writable. The working tree is a sized tmpfs
+      // (node_modules is a link into the image, read-only), and so is /tmp. Both count against --memory,
+      // so filling them costs this sandbox its own memory, never the host&#x27;s disk.
+      &quot;--read-only&quot;, &quot;--tmpfs&quot;, &quot;/app:size=256m,uid=1000,gid=1000,mode=0755&quot;, &quot;--tmpfs&quot;, &quot;/tmp:size=64m&quot;,
+      options.image);
+    return true;
+  } catch (err) {
+    // A name conflict means another process created it: find that one.
+    const found = String(err).includes(&quot;is already in use by container&quot;) &amp;&amp; await restarted(run, name, image, key);
+    if (!found) throw err;
+    return found === &quot;started&quot;;
   }
-  throw new Error(`${name}: no free port after 5 tries`);
-}</code></pre></div><p>Read the last sentence of the first comment again: <em>a stopped container does not hold its port</em>. If something takes it meanwhile, <code>docker start</code> fails and the sandbox comes back fresh on another one. The port is a preference the system keeps when it can, and the URL is read after ready, from the container that answered, every time. Section 7 is where the canvas learns to live with that.</p><p><strong>Ready is asked from inside.</strong> The worker runs in compose, where <code>localhost</code> is not the host, and the port is published on the host's loopback only. A probe run with <code>docker exec</code> inside the container works wherever the caller is. Only the probe's own "not yet" (exit code 3) is polled; any other failure is an answer.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
+}</code></pre></div><p>A stopped container is started again with its old path, so its URL does not change. One of another image, or with a token signed by another key, is removed and made anew, with a new token. So the URL is read after ready, from the container that answered, every time. Section 7 is where the canvas learns to live with that.</p><p><strong>Ready is asked from inside.</strong> The worker runs in compose, where <code>localhost</code> is not the host, and the sandbox publishes no port at all (the pool's proxy reaches it on its own network). A probe run with <code>docker exec</code> inside the container works wherever the caller is. Only the probe's own "not yet" (exit code 3) is polled; any other failure is an answer.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
  * Polls the dev server from INSIDE the container. The worker runs in compose, where `localhost` is
  * not the host, and the sandbox&#x27;s port is published on the host&#x27;s loopback only: asking from inside
  * works wherever the caller is. node:24-slim has no curl; Node&#x27;s own fetch does the job.
@@ -373,7 +393,9 @@ async function create(run: Run, name: string, documentId: string, image: string,
  * would only hide it.
  */
 async function ready(run: Run, name: string, deadline: AbortSignal): Promise&lt;void&gt; {
-  const probe = `fetch(&#x27;http://127.0.0.1:${String(CONTAINER_PORT)}/&#x27;).then(r =&gt; process.exit(r.ok ? 0 : 3), () =&gt; process.exit(3))`;
+  // Under the container&#x27;s own PREVIEW_BASE (docker exec runs with the container&#x27;s environment): the
+  // dev server refuses every other path.
+  const probe = `fetch(&#x27;http://127.0.0.1:${String(CONTAINER_PORT)}&#x27; + process.env.PREVIEW_BASE).then(r =&gt; process.exit(r.ok ? 0 : 3), () =&gt; process.exit(3))`;
   for (;;) {
     try {
       await run(&quot;exec&quot;, name, &quot;node&quot;, &quot;-e&quot;, probe);
@@ -395,16 +417,18 @@ async function ready(run: Run, name: string, deadline: AbortSignal): Promise&lt;
       throw err;
     }
   }
-}</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a stopped sandbox comes back on the SAME url with its working tree, because Vite&#x27;s client only self-heals on the same origin&quot;, async () =&gt; {
+}</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a stopped sandbox comes back on the SAME url, with a fresh clone: the working tree is a tmpfs, the disk quota&quot;, async () =&gt; {
   const id = newDocument();
   const before = await startSandbox(id, options);
-  await docker(&quot;exec&quot;, sandboxName(id), &quot;sh&quot;, &quot;-c&quot;, &quot;echo kept &gt; kept.txt&quot;);
+  await docker(&quot;exec&quot;, sandboxName(id), &quot;sh&quot;, &quot;-c&quot;, &quot;echo gone &gt; gone.txt&quot;);
   await docker(&quot;kill&quot;, sandboxName(id));
   const after = await startSandbox(id, options);
   expect(after.url).toBe(before.url);
   expect((await fetch(after.url)).status).toBe(200);
-  expect(await docker(&quot;exec&quot;, sandboxName(id), &quot;cat&quot;, &quot;kept.txt&quot;)).toBe(&quot;kept&quot;);
-}, 60_000);</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>set -e</code> in a start script; one command per line</td><td>a <code>Dockerfile</code> <code>RUN</code> chain has the same trap; Gradle's exec tasks fail per task</td><td><code>subprocess.run(check=True)</code> per call, never one shell string</td></tr><tr><td>the host port chosen from the document id, stepping on collision</td><td>the same with any container client; Testcontainers picks random ones on purpose (tests, not previews)</td><td>the same</td></tr><tr><td>a probe with <code>docker exec node -e fetch(...)</code></td><td>Testcontainers' <code>Wait.forHttp</code>, from the host</td><td><code>wait_for_logs</code>, or a host-side HTTP wait</td></tr><tr><td>an exit code chosen so nothing else produces it</td><td>an exit code per outcome, the same idea</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A clone that failed went on to serve an empty app.</strong></p><p>The first start script had <code>git init &amp;&amp; git remote add &amp;&amp; git fetch &amp;&amp; git checkout</code> on one line under <code>set -e</code>. The fetch failed (the test points <code>SEED_REPO</code> at a path that does not exist), and the script carried on to start Vite over nothing. <code>set -e</code> exits on a failing <em>statement</em>; inside an <code>&amp;&amp;</code> chain, only the last command's status is the statement's, so a failure anywhere before it is ignored by design. One command per line, and now a failed clone is a container that exits with git's words in its logs, which the start reports at once instead of polling out the deadline:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a sandbox whose dev server can never start says so at once, with its logs, instead of waiting out the deadline&quot;, async () =&gt; {
+  // Gone with the run: the preview job pushes the document&#x27;s page again after every start (preview.ts).
+  await expect(docker(&quot;exec&quot;, sandboxName(id), &quot;test&quot;, &quot;-e&quot;, &quot;gone.txt&quot;)).rejects.toThrow();
+  expect(await docker(&quot;exec&quot;, sandboxName(id), &quot;git&quot;, &quot;rev-parse&quot;, &quot;--abbrev-ref&quot;, &quot;HEAD&quot;)).toBe(`noon/${id}`);
+}, 60_000);</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>set -e</code> in a start script; one command per line</td><td>a <code>Dockerfile</code> <code>RUN</code> chain has the same trap; Gradle's exec tasks fail per task</td><td><code>subprocess.run(check=True)</code> per call, never one shell string</td></tr><tr><td>one published port for every preview (the pool's proxy), a path per container</td><td>the same with any container client; Testcontainers picks random ones on purpose (tests, not previews)</td><td>the same</td></tr><tr><td>a probe with <code>docker exec node -e fetch(...)</code></td><td>Testcontainers' <code>Wait.forHttp</code>, from the host</td><td><code>wait_for_logs</code>, or a host-side HTTP wait</td></tr><tr><td>an exit code chosen so nothing else produces it</td><td>an exit code per outcome, the same idea</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A clone that failed went on to serve an empty app.</strong></p><p>The first start script had <code>git init &amp;&amp; git remote add &amp;&amp; git fetch &amp;&amp; git checkout</code> on one line under <code>set -e</code>. The fetch failed (the test points <code>SEED_REPO</code> at a path that does not exist), and the script carried on to start Vite over nothing. <code>set -e</code> exits on a failing <em>statement</em>; inside an <code>&amp;&amp;</code> chain, only the last command's status is the statement's, so a failure anywhere before it is ignored by design. One command per line, and now a failed clone is a container that exits with git's words in its logs, which the start reports at once instead of polling out the deadline:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a sandbox whose dev server can never start says so at once, with its logs, instead of waiting out the deadline&quot;, async () =&gt; {
   const id = newDocument();
   const started = Date.now();
   // Its last words are git&#x27;s, on STDERR: &quot;fatal: &#x27;/nowhere.git&#x27; does not appear to be a git repository&quot;.
@@ -422,6 +446,7 @@ async function ready(run: Run, name: string, deadline: AbortSignal): Promise&lt;
   // branch called `--upload-pack=...` is still an argument. Only a plain uuid gets past here.
   if (!UUID.test(documentId)) return Promise.reject(new Error(`not a document id: ${JSON.stringify(documentId)}`));
   if (!POOL.test(options.pool)) return Promise.reject(new Error(`not a sandbox pool name: ${JSON.stringify(options.pool)}`));
+  if (options.previewKey.length &lt; 32) return Promise.reject(new Error(&quot;the preview key must be at least 32 characters&quot;));
   // ponytail: a caller that joins an attempt in flight gets THAT attempt&#x27;s deadline and signal. Fine
   // while the only caller per document is its one sandbox job (E4.2b).
   let attempt = starting.get(documentId);
@@ -436,39 +461,44 @@ async function ready(run: Run, name: string, deadline: AbortSignal): Promise&lt;
 create unique index jobs_one_unfinished_sandbox_per_document on jobs (document_id) where queue = &#x27;sandbox&#x27; and status in (&#x27;queued&#x27;, &#x27;running&#x27;);
 -- What a running job has to tell the rest of the system before it ends: for a sandbox job, the
 -- address its preview answers on (the canvas puts it in an iframe). Validated by the writer.
-alter table jobs add column output jsonb;</code></pre></div><p>The single-flight map is the whole in-process answer: a <code>Map</code> from document to the promise of its attempt, deleted in <code>finally</code>. Ten callers get the same promise, so nine of them never touch Docker. Across processes, the same partial unique index pattern as lesson 3's one AI run per document: the row is the right to start, and Postgres decides who holds it. With those two in place, the "taken by something else while stopped" branch becomes safe, and its comment says exactly under what condition:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/** True when the container exists and is now running; false when there is none (any leftover removed). */
-async function restarted(run: Run, name: string): Promise&lt;boolean&gt; {
-  let running: string;
+alter table jobs add column output jsonb;</code></pre></div><p>The single-flight map is the whole in-process answer: a <code>Map</code> from document to the promise of its attempt, deleted in <code>finally</code>. Ten callers get the same promise, so nine of them never touch Docker. Across processes, the same partial unique index pattern as lesson 3's one AI run per document: the row is the right to start, and Postgres decides who holds it. With those two in place, the branch that removes a container it found (one of another image or key) is safe, because nobody else is starting this document:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
+ * &quot;running&quot; or &quot;started&quot; (it was stopped) when the container exists and is now running; false when there
+ * is none. One of another image, or with a token signed by another key (the proxy would refuse every
+ * request), is removed: false.
+ */
+async function restarted(run: Run, name: string, image: string, key: string): Promise&lt;&quot;running&quot; | &quot;started&quot; | false&gt; {
+  let state: string;
   try {
-    running = (await run(&quot;container&quot;, &quot;inspect&quot;, &quot;--format&quot;, &quot;{{.State.Running}}&quot;, name)).trim();
+    state = (await run(&quot;container&quot;, &quot;inspect&quot;, &quot;--format&quot;, `{{.State.Running}} {{.Image}} {{index .Config.Labels &quot;noon.key&quot;}}`, name)).trim();
   } catch (err) {
     if (String(err).includes(&quot;No such container&quot;)) return false;
     throw err;
   }
-  if (running === &quot;true&quot;) return true;
-  try {
-    await run(&quot;start&quot;, name);
-    return true;
-  } catch (err) {
-    // Its port was taken while it was stopped. The working tree goes with it: a fresh clone on a new
-    // port beats a sandbox that can never start. Safe only because no one else is starting this
-    // document right now (see the top of the file): otherwise &quot;taken&quot; may mean taken by ITSELF.
-    if (!PORT_TAKEN.test(String(err))) throw err;
+  const [running, was, signed] = state.split(&quot; &quot;);
+  if (was !== image || signed !== key) {
     await run(&quot;rm&quot;, &quot;--force&quot;, name);
     return false;
   }
+  if (running === &quot;true&quot;) return &quot;running&quot;;
+  await run(&quot;start&quot;, name);
+  return &quot;started&quot;;
 }</code></pre></div><p>And the URL is read <em>after</em> ready, from the container that answered, never remembered from before an await that somebody else may have finished differently:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>async function start(documentId: string, options: SandboxOptions): Promise&lt;Sandbox&gt; {
-  const { image, docker = &quot;docker&quot;, ports = [20000, 20999], readyTimeoutMs = 60_000 } = options;
+  const { docker = &quot;docker&quot;, proxyPort = 20000, readyTimeoutMs = 60_000 } = options;
   const deadline = AbortSignal.any([AbortSignal.timeout(readyTimeoutMs), ...(options.signal ? [options.signal] : [])]);
   const run: Run = (...args) =&gt; dockerCli(docker, args, deadline);
   const name = sandboxName(documentId);
   try {
-    await ensureNetwork(run);
-    await create(run, name, documentId, image, ports, options.pool);
+    await ensureProxy(run, options.pool, options.image, options.previewKey, proxyPort);
+    await ensureNetwork(run, name, documentId, options.pool);
+    // A container that was already running has its clone; one that was just (re)started waits for the seed.
+    if (await create(run, name, documentId, options)) await deliverSeed(docker, name, options.seed, deadline);
+    // Every start, not only the first: a proxy made anew since (a new key, a new program) is on no
+    // sandbox&#x27;s network until it is joined again.
+    await join(run, name, proxyName(options.pool));
     await ready(run, name, deadline);
-    // The port is read AFTER the dev server answered, from the container that answered: never a
-    // number remembered from before a restart that somebody else may have finished differently.
-    return { container: name, url: `http://127.0.0.1:${String(await portOf(run, name))}/` };
+    // The base is read AFTER the dev server answered, from the container that answered: never one
+    // remembered from before a restart that somebody else may have finished differently.
+    return { container: name, url: `http://127.0.0.1:${String(proxyPort)}${await baseOf(run, name)}` };
   } catch (err) {
     // A deadline or a cancel ends every docker call with the same anonymous AbortError; say which.
     if (options.signal?.aborted) throw new Error(`${name}: start cancelled`, { cause: err });
@@ -484,14 +514,12 @@ async function restarted(run: Run, name: string): Promise&lt;boolean&gt; {
   expect(await startSandbox(id, options)).toEqual(results[0]);
 }, 90_000);
 
-test(&quot;ten concurrent starts of a KILLED sandbox bring it back once, with its working tree&quot;, async () =&gt; {
+test(&quot;ten concurrent starts of a KILLED sandbox bring it back once&quot;, async () =&gt; {
   const id = newDocument();
   await startSandbox(id, options);
-  await docker(&quot;exec&quot;, sandboxName(id), &quot;sh&quot;, &quot;-c&quot;, &quot;echo kept &gt; kept.txt&quot;);
   await docker(&quot;kill&quot;, sandboxName(id));
   const results = await Promise.all(Array.from({ length: 10 }, () =&gt; startSandbox(id, options)));
   await expectOneSandbox(id, results);
-  expect(await docker(&quot;exec&quot;, sandboxName(id), &quot;cat&quot;, &quot;kept.txt&quot;)).toBe(&quot;kept&quot;);
 }, 90_000);</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a <code>Map&lt;id, Promise&gt;</code> for single-flight, deleted in <code>finally</code></td><td><code>ConcurrentHashMap.computeIfAbsent(id, k -&gt; CompletableFuture...)</code>; Guava's <code>LoadingCache</code> does it for you</td><td>a <code>dict[str, asyncio.Task]</code>; or an <code>asyncio.Lock</code> per key</td></tr><tr><td>the JavaScript event loop makes get-then-set atomic with no lock</td><td>two threads can both miss the map: <code>computeIfAbsent</code> or a lock</td><td>the same as JS under asyncio; a real lock under threads</td></tr><tr><td>a partial unique index as the cross-process rule</td><td>the same SQL through Flyway; JPA cannot express it</td><td>the same; Django <code>UniqueConstraint(condition=...)</code></td></tr><tr><td>a number read after the await, not before</td><td>the same rule: a value read before a blocking call is stale after it</td><td>the same</td></tr></table></div><p class="note"><strong>The rule, in one line:</strong> uniqueness is not ownership. A unique name, a unique key, a unique port can tell you that two things cannot coexist. None of them tells a loser that what it found belongs to the winner. One starter per resource, at every scope that can start one.</p></section><section id="process"><h2>4 · A child process needs an end from outside</h2><p>Lesson 3's theme was that anything a program awaits needs an end from outside. A child process is the sharpest case, because it lives outside the event loop: a promise that never settles is a leak, but a <code>docker</code> CLI that never exits is a leak <em>and</em> a process holding the parent alive. Every docker call here ends at the start's deadline, and the abort is handled by hand.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
  * One docker CLI call, resolving with what it printed. Every one has an end from outside, the
  * start&#x27;s deadline: a wedged Docker daemon makes the CLI wait for ever. The abort is handled HERE,
@@ -499,25 +527,31 @@ test(&quot;ten concurrent starts of a KILLED sandbox bring it back once, with it
  * whatever `killSignal` says, and a CLI that ignores SIGTERM then outlives the call and keeps this
  * process&#x27;s event loop alive.
  */
-function dockerCli(docker: string, args: string[], deadline: AbortSignal, input?: string): Promise&lt;string&gt; {
+async function dockerCli(docker: string, args: string[], deadline: AbortSignal, input?: string | Buffer): Promise&lt;string&gt; {
+  const { stdout, stderr } = await cli(docker, args, deadline, { name: `docker ${args[0] ?? &quot;&quot;}`, ...(input === undefined ? {} : { input }) });
+  // `docker logs` replays the container&#x27;s stderr on its own: there, both streams are the answer.
+  return args[0] === &quot;logs&quot; ? stdout.toString(&quot;utf8&quot;) + stderr : stdout.toString(&quot;utf8&quot;);
+}
+
+/** One CLI call under the deadline, as dockerCli says. `name` starts its errors. */
+export function cli(file: string, args: string[], deadline: AbortSignal, options: { name: string; input?: string | Buffer; env?: NodeJS.ProcessEnv }): Promise&lt;{ stdout: Buffer; stderr: string }&gt; {
   return new Promise((resolve, reject) =&gt; {
     if (deadline.aborted) {
       reject(deadline.reason as Error);
       return;
     }
     const kill = (): void =&gt; { child.kill(&quot;SIGKILL&quot;); };
-    const child = execFile(docker, args, { encoding: &quot;utf8&quot; }, (err, stdout, stderr) =&gt; {
+    const child = execFile(file, args, { encoding: &quot;buffer&quot;, maxBuffer: MAX_BUNDLE, ...(options.env ? { env: options.env } : {}) }, (err, stdout, stderr) =&gt; {
       deadline.removeEventListener(&quot;abort&quot;, kill);
-      if (deadline.aborted) reject(new Error(`docker ${args[0] ?? &quot;&quot;}: abandoned at the deadline`, { cause: deadline.reason }));
-      else if (err) reject(new Error(`docker ${args[0] ?? &quot;&quot;}: ${stderr.trim() || err.message}`, { cause: err }));
-      // `docker logs` replays the container&#x27;s stderr on its own: there, both streams are the answer.
-      else resolve(args[0] === &quot;logs&quot; ? stdout + stderr : stdout);
+      if (deadline.aborted) reject(new Error(`${options.name}: abandoned at the deadline`, { cause: deadline.reason }));
+      else if (err) reject(new Error(`${options.name}: ${stderr.toString(&quot;utf8&quot;).trim() || err.message}`, { cause: err }));
+      else resolve({ stdout, stderr: stderr.toString(&quot;utf8&quot;) });
     });
     deadline.addEventListener(&quot;abort&quot;, kill, { once: true });
     // A CLI that exits (or is killed) before reading all of `input` makes the write fail with EPIPE.
     // Unheard, that is an uncaught exception and the whole worker dies; the exit code already says it.
     child.stdin?.on(&quot;error&quot;, () =&gt; undefined);
-    child.stdin?.end(input);
+    child.stdin?.end(options.input);
   });
 }</code></pre></div><p>Three things in twenty lines. <strong>The abort listener is removed in the callback</strong>, or every finished call would leave a listener on a long-lived signal. <strong>The error names the subcommand and quotes stderr</strong>, because "exit 1" tells nobody anything, and <code>docker logs</code> replays the container's stderr on the CLI's stderr, so for that one subcommand both streams are the answer. <strong>stdin has an error listener</strong>, for a reason that is a case study below.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
  * Puts the generated file into the running sandbox: `docker exec`, measured the fastest and the most
@@ -637,10 +671,20 @@ export async function pushPage(documentId: string, tsx: string, options: Sandbox
       // Vite cannot reconnect by itself (its client&#x27;s SharedWorker is refused to origin &quot;null&quot;), so the
       // canvas must load the page afresh, and it does exactly when the address changes.
       announce = `${previewUrl(url, job.documentId)}&amp;started=${String(Date.now())}`;
-    };</code></pre></div><p>What a running job has to say before it ends goes through <code>report()</code>, validated with the contract the reader will use, and only while the job is running. And what is in use, for the reaper, is a question the database answers across every org:</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async report({ jobId, orgId }, output) {
-        const valid = PreviewOutput.nullable().parse(output); // the contract the reader will use, BEFORE the write
+    };</code></pre></div><p>What a running job has to say before it ends goes through <code>report()</code>, validated with the contract the reader will use, and only while the job is running. And what is in use, for the reaper, is a question the database answers across every org:</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async report({ queue, jobId, orgId, attempt }, output) {
+        const valid = (queue === &quot;ship&quot; ? ShipOutput : queue === &quot;ai&quot; ? RunProgress : PreviewOutput).nullable().parse(output); // the contract the reader will use, BEFORE the write
         if (!isId(jobId) || !isId(orgId)) return;
-        await pool.query(&quot;update jobs set output = $3 where org_id = $1 and id = $2 and status = &#x27;running&#x27;&quot;, [orgId, jobId, JSON.stringify(valid)]);
+        const commit = valid !== null &amp;&amp; &quot;commit&quot; in valid ? valid.commit : null;
+        // noon-91u, a ship&#x27;s commit is never lost: (1) it goes into ship_commits whatever the job&#x27;s state (a slow attempt&#x27;s
+        // push may still be on its way, and the git peer must know it is Ship&#x27;s); (2) a retried ship that found nothing
+        // new to commit (null) keeps the commit its earlier attempt showed, instead of wiping it.
+        await pool.query(
+          `with c as (insert into ship_commits (commit_sha, job_id) select $5, id from jobs where org_id = $1 and id = $2 and queue = &#x27;ship&#x27; and $5::text is not null on conflict do nothing)
+           update jobs set output = case when queue = &#x27;ship&#x27; and jsonb_typeof($3::jsonb) = &#x27;object&#x27; and $3::jsonb -&gt; &#x27;commit&#x27; = &#x27;null&#x27; and output -&gt;&gt; &#x27;commit&#x27; is not null
+             then jsonb_set($3::jsonb, &#x27;{commit}&#x27;, output -&gt; &#x27;commit&#x27;) else $3::jsonb end
+           where org_id = $1 and id = $2 and status = &#x27;running&#x27; and ($4::int is null or attempts = $4)`,
+          [orgId, jobId, JSON.stringify(valid), attempt ?? null, commit],
+        );
       },
       sandboxesInUse: (graceMs) =&gt;
         rows(
@@ -649,9 +693,13 @@ export async function pushPage(documentId: string, tsx: string, options: Sandbox
           [graceMs],
         ),</code></pre></div><p>The worker gained two lines for this epic and both are about a partial map. A process drains only the queues it has handlers for, and it checks the handler <em>before</em> it claims:</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>/** One function per queue. It gets the job as Postgres has it, never what the queue message claims. */
 /** `cancelled` is aborted when the user asks for the job to stop (F10): end quickly, keep what was done. */
-/** A handler may return what the job CONSUMED (F12); the worker records it against the job&#x27;s org. */
+/**
+ * What the job CONSUMED (F12), recorded against its org: the handler&#x27;s return value, or else the last amount it
+ * passed to `spent` (a running total, so a run that fails or is cancelled half way still says what it spent).
+ */
 /** A process drains ONLY the queues it has a handler for: the AI worker never holds the Docker socket the sandbox needs. */
-export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: AbortSignal) =&gt; Promise&lt;UsageAmount | undefined&gt;&gt;&gt;;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>  async function run(data: unknown): Promise&lt;void&gt; {
+/** `job.attempt`: the claim this run holds (F28); whatever the handler reports under it lands only while it is the latest. */
+export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job &amp; { attempt: number }, cancelled: AbortSignal, spent: (sofar: UsageAmount) =&gt; void) =&gt; Promise&lt;UsageAmount | undefined&gt;&gt;&gt;;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>  async function run(data: unknown): Promise&lt;void&gt; {
     const ref = JobRef.parse(data);
     // A ref for a queue this process does not handle (misrouted, or forged by someone with the Redis
     // password) is left for its own worker: claiming it first would fail someone else&#x27;s job as `internal`.
@@ -671,9 +719,9 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
   const ended = handle(run, never);
 
   await eventually(() =&gt; Promise.resolve(urls.length &gt; 0), 30_000);
-  // The document is named IN the URL: a stale iframe that reconnects to a port another document took
-  // meanwhile asks that document&#x27;s entry for the wrong page, and is refused (sandbox.int.test.ts).
-  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:\\d+/${PREVIEW_PATH}\\?doc=${run.documentId}&amp;started=\\d+$`, &quot;u&quot;));
+  // Through the pool&#x27;s proxy, with the container&#x27;s token (noon-9gz), and the document named in the query
+  // too: the sandbox&#x27;s entry renders nothing for another one (sandbox.int.test.ts).
+  expect(urls[0]).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:24000/preview/${run.documentId}/[0-9a-f]{16}\\.[0-9a-f]{32}/${PREVIEW_PATH}\\?doc=${run.documentId}&amp;started=\\d+$`, &quot;u&quot;));
   expect((await fetch(urls[0] ?? &quot;&quot;)).status).toBe(200);
 
   human.send(add(&quot;s&quot;, &quot;root&quot;, &quot;Stack&quot;));
@@ -689,9 +737,11 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
   await expect(Promise.race([ended, new Promise((_, reject) =&gt; setTimeout(() =&gt; { reject(new Error(&quot;still running&quot;)); }, 12_000))])).resolves.toBeUndefined();
 }, 60_000);</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a loop with one tick; every question has a clock</td><td>a <code>@Scheduled(fixedDelay)</code> method per question, and four clocks</td><td>an <code>asyncio</code> loop with one <code>sleep</code>, the same</td></tr><tr><td>project from <code>peer.confirmed</code>, never the optimistic tree</td><td>read committed, not your own uncommitted write</td><td>the same</td></tr><tr><td><code>JobFailure("sync_unreachable")</code>: a name for the row</td><td>a checked exception per reason, mapped to a status</td><td>an exception class per reason</td></tr><tr><td>a handler map that is <code>Partial&lt;Record&lt;QueueName, ...&gt;&gt;</code></td><td><code>EnumMap</code> with absent keys; a <code>@Profile</code> per listener</td><td><code>celery -Q sandbox</code>: the process names its queues</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A container that died between the liveness check and the push failed the job instead of restarting it.</strong></p><p>The loop asks "alive?" once a second and "moved?" every tick. A container killed in between (OOM, say) made the push throw, and the throw ended the job as <code>internal</code>, with the document open and nobody left to bring the sandbox back. Now a failed push asks whether the container is running: if it is, the failure is real; if not, the liveness check is forced on the next tick, which restarts it and pushes the page after. The test's docker is a script that removes the container the first time it is asked to exec a push.</p><p class="label">From <span class="mono">apps/worker/src/preview.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a container that dies DURING a push is started again and given the page, not failed&quot;, async () =&gt; {
   // A docker whose first push finds the container gone: the death lands between the liveness check and the push.
+  // Only the PAGE push (pushPage&#x27;s `cat &gt; &quot;$PAGE&quot;`): the start&#x27;s seed delivery is an `exec --interactive` too,
+  // and a death there is a failed start, which this test is not about.
   const dir = mkdtempSync(join(tmpdir(), &quot;dying-docker-&quot;));
   const dying = join(dir, &quot;docker&quot;);
-  writeFileSync(dying, `#!/bin/sh\nif [ &quot;$1&quot; = exec ] &amp;&amp; [ &quot;$2&quot; = --interactive ] &amp;&amp; [ ! -f ${dir}/died ]; then touch ${dir}/died; &quot;${DOCKER}&quot; rm --force &quot;$3&quot; &gt;/dev/null; fi\nexec &quot;${DOCKER}&quot; &quot;$@&quot;\n`, { mode: 0o755 });
+  writeFileSync(dying, `#!/bin/sh\nif [ &quot;$1&quot; = exec ] &amp;&amp; [ &quot;$2&quot; = --interactive ] &amp;&amp; [ &quot;$6&quot; = &#x27;cat &gt; &quot;$PAGE&quot;&#x27; ] &amp;&amp; [ ! -f ${dir}/died ]; then touch ${dir}/died; &quot;${DOCKER}&quot; rm --force &quot;$3&quot; &gt;/dev/null; fi\nexec &quot;${DOCKER}&quot; &quot;$@&quot;\n`, { mode: 0o755 });
   const run = job();
   const human = await person(run.documentId);
   const { handle } = handler({ sandbox: { ...sandbox, docker: dying }, aliveEveryMs: 200 });
@@ -701,10 +751,10 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
   ended.catch((err: unknown) =&gt; { failed = err; });
   try {
     human.send(add(&quot;t&quot;, &quot;root&quot;, &quot;Text&quot;, { value: &quot;after the death&quot; }));
-    await eventually(async () =&gt; {
-      if (failed !== undefined) throw new Error(&quot;the job failed&quot;);
-      return (await pageIn(run.documentId)).includes(&quot;after the death&quot;);
-    }, 30_000);
+    // A failed job ends the wait at once, and says why (a throw in here would be read as &quot;not yet&quot;).
+    await eventually(async () =&gt; failed !== undefined || (await pageIn(run.documentId)).includes(&quot;after the death&quot;), 30_000);
+    expect(failed).toBeUndefined();
+    expect(existsSync(join(dir, &quot;died&quot;))).toBe(true); // it DID die mid-push: the page is from the restart
   } finally {
     stop.abort();
     human.stop();
@@ -721,7 +771,9 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
   await new Promise((r) =&gt; setTimeout(r, 300));
   expect(await count(&quot;select count(*)::int as n from jobs where id = $1 and status = &#x27;queued&#x27; and started_at is null&quot;, [job])).toBe(1);</code></pre></div></div></section><section id="pools"><h2>6 · One queue per process, one pool per stack, a reaper with an owner</h2><p>Two decisions about <em>who runs what</em>, both made by a security review before the code was written. First: a worker process drains exactly one queue. The sandbox queue needs the Docker daemon, whose socket is root on the host. The AI queue runs a model's subprocess under a capability ceiling. They never share a process, because one escape from the subprocess would otherwise be a hand on the socket.</p><p class="label">From <span class="mono">apps/worker/src/config.ts</span></p><div class="scroll"><pre><code>  // ONE queue per process. The sandbox queue needs the Docker daemon, which is root on the host; the
   // AI queue runs a model&#x27;s subprocess. They never share a process (E4.2a security review).
-  WORKER_QUEUE: z.enum([&quot;ai&quot;, &quot;sandbox&quot;], { error: &quot;WORKER_QUEUE must be ai or sandbox&quot; }).default(&quot;ai&quot;),
+  // `git` is the git peer (E5.3a): no queue message drives it, it polls its inbox in Postgres.
+  // `ship` (E5.5) pushes to Gitea and opens pull requests: it holds the Gitea token, and no model nor Docker socket.
+  WORKER_QUEUE: z.enum([&quot;ai&quot;, &quot;sandbox&quot;, &quot;git&quot;, &quot;ship&quot;], { error: &quot;WORKER_QUEUE must be ai, sandbox, git or ship&quot; }).default(&quot;ai&quot;),
   SANDBOX_IMAGE: z.string().min(1).default(&quot;noon-sandbox:dev&quot;),
   DOCKER: z.string().min(1).default(&quot;docker&quot;),
   // This stack&#x27;s sandboxes: the only ones its reaper may remove (the daemon is shared with tests).
@@ -735,16 +787,25 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
       REDIS_URL: &quot;redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379&quot;
       # It follows each document as a silent peer: its own session, signed with the sync server&#x27;s secret.
       SESSION_TOKEN_SECRET: &quot;${SESSION_TOKEN_SECRET:?run ./init.sh}&quot;
-      SYNC_URL: &quot;ws://sync:3001&quot;
+      SYNC_URL: &quot;sync=ws://sync:3001,sync-2=ws://sync-2:3001&quot;
       SANDBOX_IMAGE: noon-sandbox:dev # built on the host by ./init.sh (or `make sandbox-image`)
       # This stack&#x27;s sandboxes, and the only ones its reaper removes: `make clean-clone` and the test
       # suites run their own sandboxes on the same Docker daemon.
       SANDBOX_POOL: &quot;${COMPOSE_PROJECT_NAME:-noon-design-mvp}&quot;
+      # The pool&#x27;s sandbox proxy, on the host&#x27;s 127.0.0.1: every preview of this stack answers there, and
+      # the canvas&#x27;s dev server forwards /preview/ to it (noon-9gz). One per stack: e2e and clean-clone move theirs.
+      SANDBOX_PROXY_PORT: &quot;${SANDBOX_PROXY_PORT:-20000}&quot;
+      # Every sandbox&#x27;s clone (E5.1): fetched by THIS service, handed to the sandbox as a bundle.
+      SEED_REPO: http://gitea:3000/noon/sample-app.git
+      # Not `:?`: compose reads the whole file for every command, and init.sh starts Postgres before the token exists.
+      GITEA_TOKEN: &quot;${GITEA_TOKEN:-}&quot;
     volumes: [&quot;/var/run/docker.sock:/var/run/docker.sock&quot;]
     depends_on:
+      gitea: { condition: service_healthy }
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
-      sync: { condition: service_healthy }</code></pre></div><p class="label">From <span class="mono">apps/worker/src/run.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a worker drains only the queues it has handlers for: the AI worker never claims a sandbox job&quot;, async () =&gt; {
+      sync: { condition: service_healthy }
+      sync-2: { condition: service_healthy }</code></pre></div><p class="label">From <span class="mono">apps/worker/src/run.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a worker drains only the queues it has handlers for: the AI worker never claims a sandbox job&quot;, async () =&gt; {
   await worker?.close();
   worker = undefined;
   ai = record;
@@ -758,8 +819,14 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
    * the same pool may remove. The compose stack, `make clean-clone` and each test file share one
    * Docker daemon; without this, one stack&#x27;s reaper removed another&#x27;s sandboxes (it happened).
    */
-  pool: string;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/main.ts</span></p><div class="scroll"><pre><code>function sandboxHandlers(): Handlers {
-  const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool };
+  pool: string;
+  /**
+   * Signs every preview token (sandbox-proxy.ts). Only this process and the pool&#x27;s proxy hold it; a
+   * sandbox never does. At least 32 characters.
+   */
+  previewKey: string;
+  seed: SeedRepo;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/main.ts</span></p><div class="scroll"><pre><code>function sandboxHandlers(): Handlers {
+  const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool, proxyPort: config.sandbox.proxyPort, previewKey: config.sandbox.previewKey, seed: config.sandbox.seed };
   // The reaper: every sandbox whose document has no sandbox job in flight, and none finished in the
   // last five minutes, is removed. Postgres says what is in use; the containers are only a cache of it.
   // ponytail: one timer, one sweep at a time; a lease if two sandbox workers ever run (E7).
@@ -773,39 +840,51 @@ export type Handlers = Partial&lt;Record&lt;QueueName, (job: Job, cancelled: Abo
   }, 30_000);
   return {
     sandbox: createPreviewHandler({
-      sessions: config.sessions, manifest, sandbox, stopping: stopping.signal, stillMember,
+      sessions: sync.sessions, manifest, sandbox, stopping: stopping.signal, stillMember,
       reportUrl: (job, url) =&gt; db.jobStore().report({ queue: &quot;sandbox&quot;, jobId: job.id, orgId: job.orgId }, url === null ? null : { url }),
     }),
   };
-}</code></pre></div><p>The reaper itself is a dozen lines, and the order of its two questions is the case study below:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
- * The reaper: removes every sandbox whose document is not in use, running or not, and returns those
- * documents. Only its own pool&#x27;s. `inUse` asks Postgres: the truth is there, and a container is only a
- * cache of it. Removed, never merely stopped: a stopped container gives up its port, and a sandbox
- * restarted on a different port breaks the open iframe&#x27;s self-healing.
+}</code></pre></div><p>The reaper itself is short, and the order of its two questions is the case study below:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
+ * The reaper: removes every sandbox whose document is not in use, running or not, and its network, and
+ * returns those documents. Only its own pool&#x27;s. `inUse` asks Postgres: the truth is there, and a
+ * container is only a cache of it. Removed, never merely stopped: a stopped container still holds its
+ * network, and one of the daemon&#x27;s few address pools with it.
  *
- * The containers are listed FIRST, then Postgres is asked. The other order races a start: &quot;not in
- * use&quot; is read, a job starts the document&#x27;s sandbox, the list then includes it, and it is removed
- * mid-start. This way a listed container was there before the answer, which covers any job that made it.
+ * The containers and networks are listed FIRST, then Postgres is asked. The other order races a start:
+ * &quot;not in use&quot; is read, a job starts the document&#x27;s sandbox, the list then includes it, and it is
+ * removed mid-start. This way a listed one was there before the answer, which covers any job that made it.
  */
 export async function reapSandboxes(inUse: () =&gt; Promise&lt;ReadonlySet&lt;string&gt;&gt;, options: SandboxOptions): Promise&lt;string[]&gt; {
   checkPool(options.pool);
   const deadline = AbortSignal.any([AbortSignal.timeout(options.readyTimeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
-  const docker = options.docker ?? &quot;docker&quot;;
-  const listed = await dockerCli(docker, [&quot;ps&quot;, &quot;--all&quot;, &quot;--filter&quot;, `label=${LABEL}=${options.pool}`, &quot;--format&quot;, `{{.Label &quot;noon.document&quot;}}`], deadline);
+  const run: Run = (...args) =&gt; dockerCli(options.docker ?? &quot;docker&quot;, args, deadline);
+  const format = [&quot;--filter&quot;, `label=${LABEL}=${options.pool}`, &quot;--format&quot;, `{{.Label &quot;noon.document&quot;}}`];
+  const containers = (await run(&quot;ps&quot;, &quot;--all&quot;, ...format)).split(&quot;\n&quot;);
+  // A network outlives its container when a start failed between the two: swept all the same.
+  const networks = (await run(&quot;network&quot;, &quot;ls&quot;, ...format)).split(&quot;\n&quot;);
   const used = await inUse();
   // Only names this code made: a label that is not a uuid is left alone, never interpolated.
-  const idle = listed.split(&quot;\n&quot;).filter((id) =&gt; UUID.test(id) &amp;&amp; !used.has(id));
-  if (idle.length &gt; 0) await dockerCli(docker, [&quot;rm&quot;, &quot;--force&quot;, ...idle.map(sandboxName)], deadline);
-  return idle;
+  const idle = (ids: string[]): string[] =&gt; ids.filter((id) =&gt; UUID.test(id) &amp;&amp; !used.has(id));
+  const idleContainers = idle(containers);
+  const idleNetworks = idle(networks);
+  if (idleContainers.length &gt; 0) await run(&quot;rm&quot;, &quot;--force&quot;, ...idleContainers.map(sandboxName));
+  for (const id of idleNetworks) {
+    // The proxy is the network&#x27;s other member, and a network with a member cannot be removed.
+    await run(&quot;network&quot;, &quot;disconnect&quot;, &quot;--force&quot;, sandboxName(id), proxyName(options.pool)).catch(() =&gt; undefined);
+    await run(&quot;network&quot;, &quot;rm&quot;, sandboxName(id)).catch((err: unknown) =&gt; {
+      if (!String(err).includes(&quot;not found&quot;)) throw err;
+    });
+  }
+  return [...new Set([...idleContainers, ...idleNetworks])];
 }</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;the reaper sweeps only its own pool: another stack&#x27;s sandbox, not in use HERE, is left alone&quot;, async () =&gt; {
   // The compose stack&#x27;s reaper once removed the test suite&#x27;s sandboxes: same daemon, same label.
   const theirs = newDocument();
-  await startSandbox(theirs, { ...options, pool: testPool() });
+  await startSandbox(theirs, otherPool());
   expect(await reapSandboxes(() =&gt; Promise.resolve(new Set()), options)).not.toContain(theirs);
   expect(await isRunning(theirs, options)).toBe(true);
 }, 60_000);</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>one process per queue, chosen by <code>WORKER_QUEUE</code></td><td>one deployable per role; Spring profiles per listener</td><td><code>celery worker -Q ai</code> and <code>-Q sandbox</code> as two services</td></tr><tr><td>a <code>noon.sandbox=&lt;pool&gt;</code> label as the owner</td><td>Testcontainers labels every container with a session id, and ryuk reaps by it</td><td>the same, in <code>testcontainers-python</code></td></tr><tr><td>the reaper takes a function, so the order of its questions is its own</td><td>a <code>Supplier&lt;Set&lt;String&gt;&gt;</code> for the same reason</td><td>a callable</td></tr><tr><td>one reaper, one sweep at a time, on one timer</td><td><code>@Scheduled</code> with a lease (ShedLock) once there are two instances</td><td>celery beat with a lock; E7 for us</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>The reaper asked Postgres, then listed the containers: a job starting in between lost its container.</strong></p><p>Found by the E4.2b re-verify. The first reaper took a <code>Set</code>: <code>main.ts</code> asked Postgres what was in use, then called it with the answer, and the reaper listed the containers. Between the answer and the list, a sandbox job started a document's container. The list had it; the answer did not; it was removed mid-start, and the job that owned it found a URL nothing listened on. Reverse the order and the race is gone: a container that is in the list existed before Postgres was asked, so whatever job made it had its row by then and is in the answer. Making the reaper take a <em>function</em> puts the order where it cannot be got wrong by a caller. (That bug is planted in drill 2.)</p><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;the reaper lists the containers BEFORE it asks what is in use: a sandbox started in between is never removed&quot;, async () =&gt; {
   // The race: Postgres answers &quot;not in use&quot;, a job starts the document&#x27;s sandbox, THEN docker ps lists it.
-  const own = { ...options, pool: testPool() };
+  const own = otherPool();
   const late = newDocument();
   const removed = await reapSandboxes(async () =&gt; {
     await startSandbox(late, own); // started after the list, so it is not in it
@@ -813,12 +892,11 @@ export async function reapSandboxes(inUse: () =&gt; Promise&lt;ReadonlySet&lt;st
   }, own);
   expect(removed).not.toContain(late);
   expect(await isRunning(late, own)).toBe(true);
-}, 60_000);</code></pre></div></div><p class="note"><strong>Two rules from this section</strong>, each learned by losing something: every resource needs an owner label before it gets a reaper, or one environment's cleanup eats another's; and when a cleanup reads two systems that change under it, read the one it will act on first, and the one that grants exemptions second.</p></section><section id="canvas"><h2>7 · The canvas frames the page</h2><p>E4.3 is the api and the frame. The canvas <code>POST</code>s to make sure a preview is on its way, and <code>GET</code>s, once a second, where it answers. Membership only, like runs. The job row is the preview; the queue only tells a worker to look.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // F15: the document&#x27;s running page. The canvas POSTs to make sure a preview is on its way and GETs,
+}, 60_000);</code></pre></div></div><p class="note"><strong>Two rules from this section</strong>, each learned by losing something: every resource needs an owner label before it gets a reaper, or one environment's cleanup eats another's; and when a cleanup reads two systems that change under it, read the one it will act on first, and the one that grants exemptions second.</p></section><section id="canvas"><h2>7 · The canvas frames the page</h2><p>E4.3 is the api and the frame. The canvas <code>POST</code>s to make sure a preview is on its way, and <code>GET</code>s, once a second, where it answers. Any member may open it (<code>need("viewer")</code>): it shows the document and changes nothing in it. The job row is the preview; the queue only tells a worker to look.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // F15: the document&#x27;s running page. The canvas POSTs to make sure a preview is on its way and GETs,
   // once a second, where it answers: the address can change when a sandbox restarts, so it is never kept.
-  // MEMBERSHIP ONLY, like runs. The job row IS the preview; the queue only tells a worker to look.
-  app.post(&quot;/documents/:id/preview&quot;, async (c) =&gt; {
-    const doc = await db.getDocumentForMember(c.req.param(&quot;id&quot;), c.var.user.id);
-    const opened = doc &amp;&amp; (await db.forOrg(doc.orgId).openPreview({ documentId: doc.id, createdBy: c.var.user.id }));
+  // A viewer may open it: it shows the document, and changes nothing in it. The job row IS the preview.
+  document.post(&quot;/preview&quot;, need(&quot;viewer&quot;), async (c) =&gt; {
+    const opened = await db.forOrg(c.var.doc.orgId).openPreview({ documentId: c.var.doc.id, createdBy: c.var.user.id });
     if (!opened) return notFound(c);
     if (opened === &quot;busy&quot;) return fail(c, 409, &quot;preview_limit&quot;);
     if (opened.created) {
@@ -827,20 +905,19 @@ export async function reapSandboxes(inUse: () =&gt; Promise&lt;ReadonlySet&lt;st
         process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
       });
     }
-    return c.json(opened.preview satisfies Preview, opened.created ? 201 : 200);
+    return c.json(publicPreview(opened.preview, previewOrigin), opened.created ? 201 : 200);
   });
-  app.get(&quot;/documents/:id/preview&quot;, async (c) =&gt; {
-    const doc = await db.getDocumentForMember(c.req.param(&quot;id&quot;), c.var.user.id);
-    const preview = doc &amp;&amp; (await db.forOrg(doc.orgId).getPreview(doc.id));
-    return preview ? c.json(preview satisfies Preview) : notFound(c);
+  document.get(&quot;/preview&quot;, need(&quot;viewer&quot;), async (c) =&gt; {
+    const preview = await db.forOrg(c.var.doc.orgId).getPreview(c.var.doc.id);
+    return preview ? c.json(publicPreview(preview, previewOrigin)) : notFound(c);
   });</code></pre></div><p>Under the route, one <code>INSERT ... SELECT</code> does three things: takes the org and document from the documents table (tenancy from the row, never from the caller), counts this org's other unfinished sandbox jobs against a cap, and lets the partial unique index answer "already one" with <code>on conflict do nothing</code>. Then a <em>second statement</em> reads the preview as it now is, because a CTE would share the write's snapshot (lesson 3's cancel bug, remembered).</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        openPreview: async ({ documentId, createdBy }) =&gt; {
           if (!orgExists || !isId(documentId) || (createdBy !== undefined &amp;&amp; !isId(createdBy))) return undefined;
           // `on conflict do nothing`: the document&#x27;s unfinished job, if any, is the answer as it is.
-          // ponytail: the per-org cap is a count inside the insert, so two opens at the same instant
-          // can pass it together (a sandbox or two over, never unbounded). An advisory lock per org
-          // makes it exact, if fairness ever has to be.
-          const inserted = await rows(
-            z.object({ id: z.string() }),
+          // The per-org cap is a count inside the insert, and two counts read at the same instant both
+          // pass it: opens of one org take turns on an advisory lock, and each insert, a statement of its
+          // own after the lock, reads what the one before it committed (read committed).
+          const inserted = await inOrgTurn(
+            orgId,
             &quot;insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, &#x27;sandbox&#x27;, &#x27;{}&#x27;, $3 from documents d &quot; +
               &quot;where d.org_id = $1 and d.id = $2 and (select count(*) from jobs where org_id = $1 and queue = &#x27;sandbox&#x27; and status in (&#x27;queued&#x27;, &#x27;running&#x27;) and document_id &lt;&gt; $2) &lt; $4 &quot; +
               // Not again straight after a failure: the canvas asks once a second, and a sandbox that cannot
@@ -870,9 +947,9 @@ export async function reapSandboxes(inUse: () =&gt; Promise&lt;ReadonlySet&lt;st
         if (job) return job;
         return (await one(z.object({ id: z.string() }), &quot;select id from documents where org_id = $1 and id = $2&quot;, [orgId, documentId])) ? { status: &quot;none&quot;, url: null } : undefined;
       };</code></pre></div><p>The URL only counts while the job runs: a finished job's last address may belong to another document by now. And it is parsed on the way <em>out</em> with the same contract the canvas parses it with on the way <em>in</em>: loopback, http(s), or nothing. A row that says otherwise reads as "no URL", never as a 500 and never as a frame of another site.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// The URL only counts while the job runs: a finished job&#x27;s last address may belong to someone else by now.
-// Parsed with the canvas&#x27;s own contract; a row it refuses (not loopback, say) reads as &quot;no URL&quot;, never a 500.
+// Parsed as a sandbox&#x27;s address (loopback only); a row that is not one reads as &quot;no URL&quot;, never a 500.
 const PreviewRow = z.object({ status: z.string(), output: z.unknown() }).transform((r): Preview =&gt; {
-  const url = r.status === &quot;running&quot; ? Preview.shape.url.safeParse((r.output as { url?: unknown } | null)?.url) : undefined;
+  const url = r.status === &quot;running&quot; ? SandboxUrl.safeParse((r.output as { url?: unknown } | null)?.url) : undefined;
   return Preview.parse({ status: r.status, url: url?.success ? url.data : null });
 });
 /**
@@ -888,17 +965,27 @@ const MAX_PREVIEWS_PER_ORG = 4;</code></pre></div><p class="label">From <span cl
  */
 export const PreviewOutput = z.strictObject({ url: z.url({ protocol: /^https?$/u }) });
 export type PreviewOutput = z.infer&lt;typeof PreviewOutput&gt;;
+// `URL.canParse` first: Zod runs a refine even when the format check before it failed, and a
+// `new URL()` that throws inside a refine makes safeParse THROW. A stored row must never be a 500.
+const onLoopback = (url: string): boolean =&gt; URL.canParse(url) &amp;&amp; new URL(url).hostname === &quot;127.0.0.1&quot;;
+/**
+ * Where a sandbox answers, as the worker stores it: this machine&#x27;s loopback, nowhere else. Every preview
+ * is http://127.0.0.1:&lt;the stack&#x27;s sandbox proxy&gt;/preview/&lt;document&gt;/&lt;token&gt;/ (noon-9gz), and a row that
+ * said otherwise must never frame another site.
+ */
+export const SandboxUrl = PreviewOutput.shape.url.refine(onLoopback, &quot;a preview answers on 127.0.0.1&quot;);
 /**
  * A document&#x27;s preview as the canvas reads it (F15): its newest sandbox job. `none` = never opened.
  * `url` is set only while the job runs and the sandbox answers; null while it (re)starts = &quot;rebuilding&quot;.
- * Loopback only, on the way in to the canvas too: until the per-document proxy (noon-9gz) every
- * preview is http://127.0.0.1:&lt;port&gt;, and a row that said otherwise must never frame another site.
+ * The stored loopback address, or, when the app is reached through one public URL (noon-l96), the same
+ * path on the canvas&#x27;s own origin, which carries it as /preview/&lt;document&gt;/&lt;token&gt;/. That host is the
+ * api&#x27;s configuration, not the row&#x27;s; the canvas frames only its own origin or the loopback.
  */
 export const Preview = z.strictObject({
   status: z.enum([&quot;none&quot;, ...RunStatus.options]),
-  // `URL.canParse` first: Zod runs a refine even when the format check before it failed, and a
-  // `new URL()` that throws inside a refine makes safeParse THROW. A stored row must never be a 500.
-  url: PreviewOutput.shape.url.refine((url) =&gt; URL.canParse(url) &amp;&amp; new URL(url).hostname === &quot;127.0.0.1&quot;, &quot;a preview answers on 127.0.0.1&quot;).nullable(),
+  url: PreviewOutput.shape.url
+    .refine((url) =&gt; onLoopback(url) || (URL.canParse(url) &amp;&amp; /^\/preview\/[0-9a-f-]{36}\/[0-9a-f]{16}\.[0-9a-f]{32}\//u.test(new URL(url).pathname)), &quot;a preview answers on 127.0.0.1, or under /preview/&quot;)
+    .nullable(),
 });
 export type Preview = z.infer&lt;typeof Preview&gt;;</code></pre></div><p class="label">From <span class="mono">apps/api/src/preview.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;the URL is read from the RUNNING job, as it is now; a finished job&#x27;s old URL is never handed out&quot;, async () =&gt; {
   const doc = await aDocumentIn(&quot;ann@example.com&quot;, await anOrg(&quot;ann@example.com&quot;));
@@ -920,27 +1007,33 @@ export type Preview = z.infer&lt;typeof Preview&gt;;</code></pre></div><p class=
   expect((await open(&quot;ann@example.com&quot;, doc)).status).toBe(201);
   expect((await jobsOf(doc)).map((j) =&gt; j.status)).toEqual([&quot;succeeded&quot;, &quot;queued&quot;]);
 });</code></pre></div><p>The frame. Opened on request, because a preview holds a container (1 CPU, 1 GiB) for as long as the document is open and most visits only edit. The URL is asked for once a second and never kept. No URL while the job is live means the worker is restarting the container: "rebuilding". A preview that ended is simply opened again. And the iframe is <em>keyed</em> on the URL: a new address is a new page, and an iframe whose <code>src</code> changes keeps nothing worth keeping.</p><p class="label">From <span class="mono">apps/web/src/Preview.tsx</span></p><div class="scroll"><pre><code>/**
- * The running page (F15): the document&#x27;s own sandbox, in an iframe.
+ * The running page (F15): the document&#x27;s own sandbox, in an iframe, inside a device frame (E10.7): phone,
+ * tablet or desktop, each the device&#x27;s CSS px wide so the page&#x27;s own media queries answer to it, scaled to
+ * fit the pane (preview-split.ts) and no larger than life.
  *
- * The URL is ASKED FOR once a second, never kept: a sandbox that comes back after its container died
- * may answer on another port, and Vite&#x27;s own self-heal only reloads the SAME origin. No URL while the
+ * The URL is ASKED FOR once a second, never kept: a sandbox made anew (reaped, a new image) answers
+ * under a new token (noon-9gz), and Vite&#x27;s own self-heal cannot know that. No URL while the
  * job is live = the worker is (re)starting the container: &quot;rebuilding&quot;. A preview that ended (nobody
  * was here for a minute, the worker restarted) is simply opened again.
  *
- * Opened on request, not with every canvas: a preview holds a container (1 CPU, 1 GiB) for as long as
- * the document is open, and most visits to a document only edit it.
+ * Opened on request (the top bar&#x27;s Preview, or P), not with every canvas: a preview holds a container
+ * (1 CPU, 1 GiB) for as long as it is open, and most visits to a document only edit it.
  *
- * `sandbox=&quot;allow-scripts&quot;` and NOT allow-same-origin: every preview is http://127.0.0.1:&lt;port&gt;, so
- * without an opaque origin one document&#x27;s page could read storage another left on a reused port.
+ * `sandbox=&quot;allow-scripts&quot;` and NOT allow-same-origin: every preview of the stack shares ONE origin (the
+ * sandbox proxy&#x27;s http://127.0.0.1:&lt;port&gt;, noon-9gz), so without an opaque origin one document&#x27;s page
+ * could read what another&#x27;s left in storage, and fetch the other&#x27;s source. Behind one public URL it is
+ * this canvas&#x27;s own origin (/preview/...), and there the opaque origin also keeps the page away from the canvas.
  * ponytail: polling. A pushed &quot;the URL changed&quot; (SSE) is the upgrade if a second of lag ever matters.
  */
-export function Preview({ documentId }: { documentId: string }) {
-  const [shown, setShown] = useState(false);
+function Preview({ documentId }: { documentId: string }) {
   const [state, setState] = useState&lt;PreviewState | &quot;busy&quot;&gt;();
   const hadUrl = useRef(false);
+  // The device is a session&#x27;s choice; the first is the phone, the frame a page most needs checking in.
+  const [device, setDevice] = useState&lt;Device&gt;(DEVICES[0] ?? { name: &quot;Phone&quot;, width: 390, height: 844 });
+  const [stage, pane] = useMeasured&lt;HTMLDivElement&gt;();
+  const scale = frameScale(pane, device);
 
   useEffect(() =&gt; {
-    if (!shown) return;
     let stopped = false;
     let timer: ReturnType&lt;typeof setTimeout&gt; | undefined;
     const tick = async (): Promise&lt;void&gt; =&gt; {
@@ -952,11 +1045,9 @@ export function Preview({ documentId }: { documentId: string }) {
     };
     void tick();
     return () =&gt; { stopped = true; clearTimeout(timer); };
-  }, [documentId, shown]);
+  }, [documentId]);
 
-  if (!shown) return &lt;section aria-label=&quot;Preview&quot; className=&quot;preview&quot;&gt;&lt;button type=&quot;button&quot; onClick={() =&gt; { setShown(true); }}&gt;Show the running page&lt;/button&gt;&lt;/section&gt;;
-
-  const url = state === &quot;busy&quot; ? null : (state?.url ?? null);
+  const url = state === &quot;busy&quot; || !state?.url || !frameable(state.url) ? null : state.url;
   if (url) hadUrl.current = true;
   const words = url ? &quot;&quot;
     : state === &quot;busy&quot; ? &quot;Your organisation already has as many previews open as it may. Close one, and this one starts.&quot;
@@ -964,8 +1055,23 @@ export function Preview({ documentId }: { documentId: string }) {
     : &quot;The preview could not start. Trying again…&quot;;
   return (
     &lt;section aria-label=&quot;Preview&quot; className=&quot;preview&quot;&gt;
-      {/* keyed on the URL: a new address is a new page, an iframe whose src changes keeps nothing worth keeping */}
-      {url &amp;&amp; &lt;iframe key={url} title=&quot;Preview of this page&quot; src={url} sandbox=&quot;allow-scripts&quot; /&gt;}
+      &lt;div className=&quot;preview-head&quot;&gt;
+        &lt;div role=&quot;group&quot; aria-label=&quot;Device&quot; className=&quot;device-picker&quot;&gt;
+          {DEVICES.map((each) =&gt; (
+            &lt;button key={each.name} type=&quot;button&quot; aria-pressed={each.name === device.name} onClick={() =&gt; { setDevice(each); }}&gt;{each.name}&lt;/button&gt;
+          ))}
+        &lt;/div&gt;
+        &lt;span className=&quot;zoom-level&quot;&gt;&lt;span className=&quot;visually-hidden&quot;&gt;Shown at &lt;/span&gt;{percent(scale)}&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;div ref={stage} className=&quot;device-stage&quot;&gt;
+        {/* The fit box takes the SCALED size in the layout; the frame inside is the device&#x27;s real size, scaled down by CSS alone. */}
+        &lt;div className=&quot;device-fit&quot; style={{ width: device.width * scale, height: device.height * scale }}&gt;
+          &lt;div className=&quot;device-frame&quot; data-device={device.name.toLowerCase()} data-scale={scale.toFixed(3)} style={{ width: device.width, height: device.height, transform: `scale(${String(scale)})` }}&gt;
+            {/* keyed on the URL: a new address is a new page, an iframe whose src changes keeps nothing worth keeping */}
+            {url &amp;&amp; &lt;iframe key={url} title=&quot;Preview of this page&quot; src={url} sandbox=&quot;allow-scripts&quot; /&gt;}
+          &lt;/div&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
       &lt;p aria-live=&quot;polite&quot; data-preview-status={state === &quot;busy&quot; ? &quot;busy&quot; : (state?.status ?? &quot;&quot;)}&gt;{words}&lt;/p&gt;
     &lt;/section&gt;
   );
@@ -979,12 +1085,12 @@ export async function openPreview(documentId: string): Promise&lt;Preview | &quo
     throw problem;
   }
 }
-/** Where the preview answers NOW. Parsed with the contract: only a loopback http(s) URL ever reaches an iframe. */
+/** Where the preview answers NOW. Parsed with the contract: only an http(s) URL on the loopback or under /preview/ (and Preview.tsx: of THIS origin) reaches an iframe. */
 export async function readPreview(documentId: string): Promise&lt;Preview&gt; {
-  const res = await fetch(`/api/documents/${documentId}/preview`, { headers: { &quot;x-dev-user&quot;: devUser } });
+  const res = await fetch(`/api/documents/${documentId}/preview`, { headers: devHeaders });
   if (!res.ok) throw new Error(`GET preview answered ${String(res.status)}`);
   return Preview.parse(await res.json());
-}</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a cap as a count inside the <code>INSERT</code>; a bounded overshoot, named</td><td><code>SELECT ... FOR UPDATE</code> on the org row makes it exact and serial</td><td><code>pg_advisory_xact_lock(org)</code>; the same trade</td></tr><tr><td>a contract applied on the way out of the store and on the way into the UI</td><td>a DTO validated twice: at the repository and at the controller</td><td>a pydantic model at both edges</td></tr><tr><td>polling once a second from a <code>useEffect</code>, cleaned up on unmount</td><td>the same from any client; SSE is the upgrade</td><td>the same</td></tr><tr><td><code>&lt;iframe key={url}&gt;</code>: a new element, not a mutated one</td><td>n/a</td><td>n/a</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>Two opens in the same instant can both pass the per-org cap.</strong></p><p>Not a bug found; a bug <em>declined</em>, and named. The count inside the <code>INSERT</code> is one statement, but two statements in the same instant each count three and each insert a fourth: an org can hold five for a moment, never unbounded. Compare the per-document rule in the same query, which is exact, because it is a unique index and Postgres decides who was first. The comment says what the ceiling is and what the upgrade is (an advisory lock per org). Drill 3's third question is about why the two rules are built differently.</p><p class="label">From <span class="mono">apps/api/src/preview.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;one org holds at most 4 previews at once: the fifth document is refused by name until one ends&quot;, async () =&gt; {
+}</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a cap as a count inside the <code>INSERT</code>, opens of one org taking turns on an advisory lock</td><td><code>SELECT ... FOR UPDATE</code> on the org row makes it exact and serial</td><td><code>pg_advisory_xact_lock(org)</code>; the same trade</td></tr><tr><td>a contract applied on the way out of the store and on the way into the UI</td><td>a DTO validated twice: at the repository and at the controller</td><td>a pydantic model at both edges</td></tr><tr><td>polling once a second from a <code>useEffect</code>, cleaned up on unmount</td><td>the same from any client; SSE is the upgrade</td><td>the same</td></tr><tr><td><code>&lt;iframe key={url}&gt;</code>: a new element, not a mutated one</td><td>n/a</td><td>n/a</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>Two opens in the same instant can both pass the per-org cap.</strong></p><p>Not a bug found; a bug <em>declined</em>, and named. The count inside the <code>INSERT</code> is one statement, but two statements in the same instant each count three and each insert a fourth: an org can hold five for a moment, never unbounded. Compare the per-document rule in the same query, which is exact, because it is a unique index and Postgres decides who was first. The comment says what the ceiling is and what the upgrade is (an advisory lock per org). Drill 3's third question is about why the two rules are built differently. noon-9gz later took that upgrade: opens of one org now take turns on an advisory lock, and the second test below holds ten simultaneous opens to exactly four.</p><p class="label">From <span class="mono">apps/api/src/preview.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;one org holds at most 4 previews at once: the fifth document is refused by name until one ends&quot;, async () =&gt; {
   const org = await anOrg(&quot;bea@example.com&quot;);
   const docs = await Promise.all([1, 2, 3, 4, 5].map(() =&gt; aDocumentIn(&quot;bea@example.com&quot;, org)));
   for (const doc of docs.slice(0, 4)) expect((await open(&quot;bea@example.com&quot;, doc)).status).toBe(201);
@@ -998,6 +1104,17 @@ export async function readPreview(documentId: string): Promise&lt;Preview&gt; {
   const [job] = await jobsOf(docs[0] as Document);
   await ctx.db.rawQuery(&quot;update jobs set status = &#x27;cancelled&#x27;, finished_at = now() where id = $1&quot;, [job?.id]);
   expect((await open(&quot;bea@example.com&quot;, docs[4] as Document)).status).toBe(201);
+});
+
+// noon-9gz (E4.2b note 3): the cap was a count inside the insert, and opens at the same instant passed it together.
+test(&quot;ten documents of one org opened at the same instant: exactly 4 previews, the rest refused by name&quot;, async () =&gt; {
+  const org = await anOrg(&quot;dan@example.com&quot;);
+  const docs = await Promise.all(Array.from({ length: 10 }, () =&gt; aDocumentIn(&quot;dan@example.com&quot;, org)));
+  const answers = await Promise.all(docs.map(async (doc) =&gt; (await open(&quot;dan@example.com&quot;, doc)).status));
+  expect(answers.filter((status) =&gt; status === 201)).toHaveLength(4);
+  expect(answers.filter((status) =&gt; status === 409)).toHaveLength(6);
+  const running = (await ctx.db.rawQuery(&quot;select count(*)::int as n from jobs where org_id = $1 and queue = &#x27;sandbox&#x27; and status in (&#x27;queued&#x27;, &#x27;running&#x27;)&quot;, [org.org.id])) as { rows: { n: number }[] };
+  expect(running.rows[0]?.n).toBe(4);
 });
 
 test(&quot;a stored URL that no parser can read is &#x27;no URL&#x27;, never a 500 (a refine must not throw)&quot;, async () =&gt; {
@@ -1028,12 +1145,13 @@ test(&quot;after a failed preview the canvas cannot pile up jobs: one retry per 
   expect((await open(&quot;ann@example.com&quot;, doc)).status).toBe(201);
   expect(await jobsOf(doc)).toHaveLength(2);
 });</code></pre></div></div></section><section id="origin"><h2>8 · The opaque origin</h2><p>This section is a browser rule that broke the design twice before it held, and neither break was visible from the code. Every preview is <code>http://127.0.0.1:&lt;port&gt;</code>: the same host, only the port differs. Without an opaque origin, one document's page could read storage another left on a reused port, and outlive the container that set it. So the E4.2a security review required <code>sandbox="allow-scripts"</code> with <em>no</em> <code>allow-same-origin</code>. The canvas does that. The consequences took three fixes.</p><p><strong>First break: nothing rendered.</strong> A frame with an opaque origin sends <code>Origin: null</code>, the literal string, on every module request. Vite's default CORS allows any localhost origin and refuses everything else, "null" included. The page loaded, its first import was refused, and the frame stayed blank. Measured, in the browser. The E4.2a note said "lock <code>server.cors</code> to the canvas origin", which could never have worked: no request from inside the frame ever carries the canvas's origin. The fix is a Vite config of our own, wrapped around the customer's (which may say anything), allowing exactly "null" and no real origin. That is also <em>stricter</em> for real sites: another local dev server can no longer read this one's source.</p><p class="label">From <span class="mono">apps/worker/sandbox/Dockerfile</span></p><div class="scroll"><pre><code># The dev server&#x27;s config: OURS, wrapped around the customer&#x27;s (which may say anything). The port and
-# host the worker depends on, and cors. The canvas frames the preview with sandbox=&quot;allow-scripts&quot; and
-# no allow-same-origin, so the page&#x27;s origin is &quot;null&quot; and every module request carries `Origin: null`;
+# host the worker depends on, cors, and hmr: forced to the default, because a customer hmr.port or
+# clientPort would move the HMR socket off the one path the proxy carries (learning-tests/sandbox FINDINGS 1).
+# The canvas frames the preview with sandbox=&quot;allow-scripts&quot; and no allow-same-origin, so the page&#x27;s origin is &quot;null&quot; and every module request carries `Origin: null`;
 # Vite&#x27;s default (any localhost origin) refuses those and the page never renders (measured). Allowing
 # exactly &quot;null&quot;, and no real origin, is also STRICTER for real sites: another local dev server can no
-# longer read this one&#x27;s source. ponytail: any site&#x27;s opaque-origin frame passes too, until the
-# per-document hostname proxy (noon-9gz) puts an unguessable name in front of it.
+# longer read this one&#x27;s source. Any site&#x27;s opaque-origin frame passes the CORS check too, but it must
+# first know the container&#x27;s token: the sandbox proxy (noon-9gz) answers nothing without it.
 # The customer&#x27;s config is wrapped, not trusted: see the plugin below for what that takes.
 COPY &lt;&lt;&#x27;EOF&#x27; /home/node/preview/vite.config.mjs
 import { loadConfigFromFile } from &quot;vite&quot;;
@@ -1065,12 +1183,37 @@ const lockTheOrigin = () =&gt; ({
   },
 });
 
+/**
+ * The worker&#x27;s PREVIEW_BASE, /preview/&lt;document&gt;/&lt;port&gt;/: the canvas&#x27;s dev server can carry this one on its
+ * own origin (noon-l96). Everything outside it is a bare 404, before Vite&#x27;s own answer, which NAMES the base
+ * (&quot;did you mean to visit /preview/&lt;document&gt;/...&quot;) and would hand the document id to anyone trying ports.
+ */
+const BASE = process.env.PREVIEW_BASE ?? &quot;/&quot;;
+const onlyUnderTheBase = () =&gt; ({
+  name: &quot;noon-preview-base&quot;,
+  enforce: &quot;pre&quot;,
+  configureServer(server) {
+    server.middlewares.use((req, res, next) =&gt; {
+      if ((req.url ?? &quot;&quot;).startsWith(BASE)) return next();
+      res.statusCode = 404;
+      res.end();
+    });
+  },
+});
+
 export default async (env) =&gt; {
   const own = (await loadConfigFromFile(env, undefined, process.cwd()))?.config ?? {};
   return {
     ...own,
-    plugins: [lockTheOrigin(), ...(own.plugins ?? [])],
-    server: { ...own.server, host: true, port: 5173, strictPort: true, cors: { origin: ALLOWED } },
+    base: BASE,
+    // Inside the working tree (a tmpfs): node_modules, where Vite puts it by default, is read-only.
+    cacheDir: `${process.cwd()}/noon-preview/.vite`,
+    plugins: [onlyUnderTheBase(), lockTheOrigin(), ...(own.plugins ?? [])],
+    server: {
+      ...own.server, host: true, port: 5173, strictPort: true, cors: { origin: ALLOWED }, hmr: true,
+      // node_modules is a link to /home/node/deps, outside the root: Vite serves only what this allows.
+      fs: { ...own.server?.fs, allow: [process.cwd(), &quot;/home/node/deps&quot;] },
+    },
   };
 };
 EOF</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;the preview renders inside the canvas&#x27;s sandboxed iframe (an opaque origin), and no other site may read the dev server&quot;, async () =&gt; {
@@ -1080,7 +1223,7 @@ EOF</code></pre></div><p class="label">From <span class="mono">apps/worker/src/s
   const url = previewUrl(sandbox.url, id);
   // Vite answers module requests only to origins its cors allows. The frame&#x27;s origin is &quot;null&quot;
   // (sandbox without allow-same-origin): allowed. A real site&#x27;s origin: not echoed, so its reads fail.
-  const allowed = async (origin: string): Promise&lt;string | null&gt; =&gt; (await fetch(new URL(&quot;/noon-preview/main.tsx&quot;, sandbox.url), { headers: { origin } })).headers.get(&quot;access-control-allow-origin&quot;);
+  const allowed = async (origin: string): Promise&lt;string | null&gt; =&gt; (await fetch(new URL(&quot;noon-preview/main.tsx&quot;, sandbox.url), { headers: { origin } })).headers.get(&quot;access-control-allow-origin&quot;);
   expect(await allowed(&quot;null&quot;)).toBe(&quot;null&quot;);
   expect(await allowed(&quot;http://evil.example&quot;)).not.toBe(&quot;http://evil.example&quot;);
   expect(await allowed(&quot;http://localhost:5173&quot;)).not.toBe(&quot;http://localhost:5173&quot;); // Vite&#x27;s default allowed any localhost
@@ -1115,13 +1258,17 @@ test.each(Object.entries(HOSTILE_CONFIGS))(&quot;a customer vite.config cannot o
   const id = newDocument();
   const sandbox = await startSandbox(id, options);
   await pushPage(id, page(&quot;guarded&quot;), options);
-  const onHost = join(mkdtempSync(join(tmpdir(), &quot;hostile-config-&quot;)), &quot;vite.config.ts&quot;);
-  writeFileSync(onHost, config);
-  await docker(&quot;cp&quot;, onHost, `${sandboxName(id)}:/app/vite.config.ts`);
-  await docker(&quot;restart&quot;, sandboxName(id));
+  // Not `docker restart`: the working tree is a tmpfs, and a restart would clone the seed&#x27;s config back.
+  // Changing OUR config makes Vite restart in place, loading the customer&#x27;s again (measured).
+  const restarts = async (): Promise&lt;number&gt; =&gt; (await docker(&quot;logs&quot;, sandboxName(id)).catch(() =&gt; &quot;&quot;)).split(&quot;server restarted&quot;).length;
+  const before = await restarts();
+  await write(id, &quot;vite.config.ts&quot;, config);
+  await docker(&quot;exec&quot;, sandboxName(id), &quot;sh&quot;, &quot;-c&quot;, &quot;echo &#x27;// reload&#x27; &gt;&gt; noon-preview/vite.config.mjs&quot;);
+  for (let i = 0; i &lt; 100 &amp;&amp; (await restarts()) === before; i++) await new Promise((r) =&gt; setTimeout(r, 200));
+  expect(await restarts()).toBeGreaterThan(before);
   const answers = async (origin: string): Promise&lt;string | null&gt; =&gt; {
     for (let i = 0; i &lt; 100; i++) {
-      const res = await fetch(new URL(&quot;/noon-preview/main.tsx&quot;, sandbox.url), { headers: { origin } }).catch(() =&gt; undefined);
+      const res = await fetch(new URL(&quot;noon-preview/main.tsx&quot;, sandbox.url), { headers: { origin } }).catch(() =&gt; undefined);
       if (res?.ok) return res.headers.get(&quot;access-control-allow-origin&quot;);
       await new Promise((r) =&gt; setTimeout(r, 200));
     }
@@ -1165,11 +1312,17 @@ test.each(Object.entries(HOSTILE_CONFIGS))(&quot;a customer vite.config cannot o
       announce = `${previewUrl(url, job.documentId)}&amp;started=${String(Date.now())}`;
     };</code></pre></div><p><strong>Third: a page left open on a reused port.</strong> A tab opened on the preview directly (not the canvas) has a real origin, and its Vite client <em>does</em> reload when its port answers again. If another document's sandbox took that port meanwhile, the reload would show that document, possibly another org's. The URL names the document it expects, and the sandbox's entry renders nothing for any other:</p><p class="label">From <span class="mono">apps/worker/src/sandbox.ts</span></p><div class="scroll"><pre><code>/**
  * The address the canvas frames. It NAMES the document, and the sandbox&#x27;s entry renders nothing for
- * another one: a page left open on a port that another document&#x27;s sandbox took meanwhile (a tab opened
- * on the preview directly, whose Vite client reloads when the port answers again) must not show that
- * document, possibly another org&#x27;s. ponytail: until noon-9gz gives each document its own hostname.
+ * another one: a second lock behind the base, which already names the document and its container.
  */
-export const previewUrl = (sandboxUrl: string, documentId: string): string =&gt; new URL(`${PREVIEW_PATH}?doc=${documentId}`, sandboxUrl).href;</code></pre></div><p class="label">From <span class="mono">apps/worker/sandbox/Dockerfile</span></p><div class="scroll"><pre><code>COPY &lt;&lt;&#x27;EOF&#x27; /home/node/preview/main.tsx
+export const previewUrl = (sandboxUrl: string, documentId: string): string =&gt; new URL(`${PREVIEW_PATH}?doc=${documentId}`, sandboxUrl).href;
+/**
+ * The path the sandbox&#x27;s dev server serves under (Vite&#x27;s `base`), and refuses everything outside of
+ * (the Dockerfile&#x27;s config): /preview/&lt;document&gt;/&lt;token&gt;/, the token minted for THIS container (a fresh
+ * nonce each time one is created). The pool&#x27;s proxy checks the token&#x27;s signature; the sandbox checks it
+ * is its own. The canvas&#x27;s dev server carries the same path on its own origin behind one public URL
+ * (noon-l96), so the document id alone opens nothing, there or here (noon-9gz).
+ */
+const previewBase = (documentId: string, key: string): string =&gt; `/preview/${documentId}/${previewToken(key, documentId, randomBytes(8).toString(&quot;hex&quot;))}/`;</code></pre></div><p class="label">From <span class="mono">apps/worker/sandbox/Dockerfile</span></p><div class="scroll"><pre><code>COPY &lt;&lt;&#x27;EOF&#x27; /home/node/preview/main.tsx
 import { StrictMode } from &quot;react&quot;;
 import { createRoot } from &quot;react-dom/client&quot;;
 import &quot;../src/design-system/tokens.css&quot;;
@@ -1193,42 +1346,67 @@ export const dockerEnv = { ...process.env, PATH: `${process.env[&quot;PATH&quot;
 export const IMAGE = &quot;noon-sandbox:dev&quot;;
 /** Each test file&#x27;s own pool: a reaper, the compose stack&#x27;s or another file&#x27;s, never sweeps it. */
 export const testPool = (): string =&gt; `test-${randomUUID().slice(0, 8)}`;
+/** Signs the test pools&#x27; preview tokens (noon-9gz). Any 32 characters: the proxy and the tokens are the test&#x27;s own. */
+export const TEST_PREVIEW_KEY = &quot;test-preview-key-&quot;.padEnd(40, &quot;0&quot;);
 const REPO = new URL(&quot;../../../&quot;, import.meta.url).pathname;
+/**
+ * The test files&#x27; seed repo: a local bare repo holding what init.sh pushes to Gitea (scripts/gitea.ts), so
+ * the sandbox suites need no Gitea. The worker fetches a path as it fetches a URL. Filled by makeTestSeed().
+ */
+export const TEST_SEED: SeedRepo = { url: join(mkdtempSync(join(tmpdir(), &quot;noon-test-seed-&quot;)), &quot;seed.git&quot;) };
+export async function makeTestSeed(): Promise&lt;void&gt; {
+  await promisify(execFile)(&quot;git&quot;, [&quot;init&quot;, &quot;--quiet&quot;, &quot;--bare&quot;, &quot;--initial-branch=main&quot;, TEST_SEED.url]);
+  await pushSeed(TEST_SEED.url);
+}
 
 export const docker = async (...args: string[]): Promise&lt;string&gt; =&gt; (await promisify(execFile)(DOCKER, args, { timeout: 60_000, env: dockerEnv })).stdout.trim();
+
+/** Everything a test pool left behind: its sandboxes, their networks, and the pool&#x27;s proxy. */
+export async function removePool(pool: string): Promise&lt;void&gt; {
+  const ids = async (...args: string[]): Promise&lt;string[]&gt; =&gt; (await docker(...args).catch(() =&gt; &quot;&quot;)).split(&quot;\n&quot;).filter(Boolean);
+  const containers = [...await ids(&quot;ps&quot;, &quot;--all&quot;, &quot;--quiet&quot;, &quot;--filter&quot;, `label=noon.sandbox=${pool}`), ...await ids(&quot;ps&quot;, &quot;--all&quot;, &quot;--quiet&quot;, &quot;--filter&quot;, `label=noon.proxy-pool=${pool}`)];
+  if (containers.length &gt; 0) await docker(&quot;rm&quot;, &quot;--force&quot;, ...containers).catch(() =&gt; undefined);
+  const networks = await ids(&quot;network&quot;, &quot;ls&quot;, &quot;--quiet&quot;, &quot;--filter&quot;, `label=noon.sandbox=${pool}`);
+  if (networks.length &gt; 0) await docker(&quot;network&quot;, &quot;rm&quot;, ...networks).catch(() =&gt; undefined);
+}
 
 /** Cached after the first build, which takes minutes: it installs the sample app&#x27;s dependencies. */
 export async function buildImage(): Promise&lt;void&gt; {
   await promisify(execFile)(DOCKER, [&quot;build&quot;, &quot;--quiet&quot;, &quot;--tag&quot;, IMAGE, &quot;--file&quot;, &quot;apps/worker/sandbox/Dockerfile&quot;, &quot;seed/sample-app&quot;], { cwd: REPO, timeout: 900_000, env: dockerEnv });
 }</code></pre></div><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>beforeAll(async () =&gt; {
-  await buildImage();
+  await Promise.all([buildImage(), makeTestSeed()]);
   // The same image, pointed at a seed repo that does not exist: its clone fails and it exits.
   await variant(BROKEN, &quot;ENV SEED_REPO=/nowhere.git&quot;);
   // The same image, running but with no dev server: it never answers.
   await variant(SILENT, `CMD [&quot;sleep&quot;, &quot;infinity&quot;]`);
+  await variant(NEWER, &quot;LABEL noon.test=newer&quot;);
 }, 900_000);
 
 async function variant(tag: string, line: string): Promise&lt;void&gt; {
   const build = promisify(execFile)(DOCKER, [&quot;build&quot;, &quot;--quiet&quot;, &quot;--tag&quot;, tag, &quot;-&quot;], { timeout: 60_000, env: dockerEnv });
   build.child.stdin?.end(`FROM ${IMAGE}\n${line}\n`);
   await build;
-}</code></pre></div><p><strong>Every file owns its pool and its port range.</strong> The pool, so no reaper (the compose one, another file's) sweeps it. The range, so a test that holds a port on the host cannot collide with another file's sandbox. The e2e layer goes one further: it runs the <em>real</em> sandbox worker from source, in a pool of its own, and stops the compose workers for the duration, because they share the jobs table and would take e2e's jobs into the compose pool.</p><p class="label">From <span class="mono">playwright.config.ts</span></p><div class="scroll"><pre><code>    // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
-    // stack&#x27;s sandboxes, nor theirs its. It prints this line once it is draining its queue.
-    { command: fromEnv(`PATH=&quot;$PATH:${DOCKER_BIN}&quot; WORKER_QUEUE=sandbox SANDBOX_POOL=noon-e2e DOCKER=${DOCKER_BIN}/docker SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },</code></pre></div><p class="label">From <span class="mono">e2e/setup.ts</span></p><div class="scroll"><pre><code>// The e2e layer shares Postgres and Redis with the dev stack, so the dev stack&#x27;s WORKERS would take
+}</code></pre></div><p><strong>Every file owns its pool and its proxy port.</strong> The pool, so no reaper (the compose one, another file's) sweeps it. The port, so one file's proxy cannot collide with another file's. The e2e layer goes one further: it runs the <em>real</em> sandbox worker from source, in a pool of its own, and stops the compose workers for the duration, because they share the jobs table and would take e2e's jobs into the compose pool.</p><p class="label">From <span class="mono">playwright.config.ts</span></p><div class="scroll"><pre><code>    // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
+      // stack&#x27;s sandboxes, nor theirs its. It prints this line once it is draining its queue.
+      { command: fromEnv(`PATH=&quot;$PATH:${DOCKER_BIN}&quot; WORKER_QUEUE=sandbox SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git SANDBOX_POOL=noon-e2e SANDBOX_PROXY_PORT=${String(PORTS.sandboxProxy)} DOCKER=${DOCKER_BIN}/docker SYNC_URL=${syncNodes} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: sandbox/u }, reuseExistingServer: false },</code></pre></div><p class="label">From <span class="mono">e2e/setup.ts</span></p><div class="scroll"><pre><code>// The e2e layer shares Postgres and Redis with the dev stack, so the dev stack&#x27;s WORKERS would take
 // the jobs these tests create (their sweeps read the same `jobs` table): `worker` would hand runs to the
 // real model, and `worker-sandbox` would start e2e&#x27;s previews in the compose pool instead of the e2e
-// worker&#x27;s own. Both are stopped for the duration; teardown.ts starts them again.
-// If Playwright is KILLED (kill -9), teardown never runs: `docker compose start worker worker-sandbox`.
+// worker&#x27;s own; `worker-git` would take e2e&#x27;s pushes and edit through the compose sync; `worker-ship` would ship
+// e2e&#x27;s documents reading the compose sync. All four are stopped for the duration; teardown.ts starts them again.
+// If Playwright is KILLED (kill -9), teardown never runs: `docker compose start worker worker-sandbox worker-git worker-ship`.
 // ponytail: a database and a Redis of its own for e2e is the upgrade.
-/** @public Playwright loads this file by PATH (playwright.config.ts globalSetup), which the dead-code check cannot see. */</code></pre></div><p class="label">From <span class="mono">e2e/preview.spec.ts</span></p><div class="scroll"><pre><code>test(&quot;the preview follows an edit within 3 s, without reloading the page&quot;, async ({ page }) =&gt; {
-  await newDocument(page);
-  await button(page, &quot;Add Button&quot;).click();
-  await button(page, &quot;Select Button 1&quot;).click();
+/** @public Playwright loads this file by PATH (playwright.config.ts globalSetup), which the dead-code check cannot see. */</code></pre></div><p class="label">From <span class="mono">e2e/preview.spec.ts</span></p><div class="scroll"><pre><code>test(&quot;the preview follows an edit within 3 s, without reloading the page&quot;, async ({ page, baseURL }) =&gt; {
+  const documentId = await newDocument(page);
+  await tile(page, &quot;Button&quot;).click();
+  await layer(page, &quot;Button 1&quot;).click();
   await labelButton(page, &quot;First&quot;);
   await expect(preview(page).getByRole(&quot;button&quot;, { name: &quot;First&quot; })).toBeVisible({ timeout: 90_000 });
   // An opaque origin: scripts run, but never as 127.0.0.1 (no allow-same-origin: storage a preview left
   // on a reused port is not another&#x27;s to read).
   await expect(page.locator(&quot;iframe[title=&#x27;Preview of this page&#x27;]&quot;)).toHaveAttribute(&quot;sandbox&quot;, &quot;allow-scripts&quot;);
+  // Through the canvas&#x27;s own origin, as a visitor behind a tunnel gets it (noon-l96): page, modules, and
+  // the HMR socket the edit below arrives on all pass the dev server&#x27;s /preview/ proxy.
+  await expect(page.locator(&quot;iframe[title=&#x27;Preview of this page&#x27;]&quot;)).toHaveAttribute(&quot;src&quot;, new RegExp(`^${baseURL ?? &quot;&quot;}/preview/${documentId}/[0-9a-f]{16}\\.[0-9a-f]{32}/noon-preview/`, &quot;u&quot;));
   // Marks THIS page load. A full reload (or a new iframe) would lose it.
   await preview(page).locator(&quot;body&quot;).evaluate(() =&gt; { (window as unknown as { noonMark: string }).noonMark = &quot;same load&quot;; });
 
@@ -1245,8 +1423,8 @@ async function variant(tag: string, line: string): Promise&lt;void&gt; {
 
   test(&quot;the preview says it is rebuilding, and comes back with the document on its own&quot;, async ({ page }) =&gt; {
     const documentId = await newDocument(page);
-    await button(page, &quot;Add Button&quot;).click();
-    await button(page, &quot;Select Button 1&quot;).click();
+    await tile(page, &quot;Button&quot;).click();
+    await layer(page, &quot;Button 1&quot;).click();
     // Something a FRESH container would not show (it starts from an empty page): if the preview
     // below shows it, the new container really was given the document, not merely started.
     await labelButton(page, &quot;Survives&quot;);
@@ -1257,12 +1435,14 @@ async function variant(tag: string, line: string): Promise&lt;void&gt; {
     await expect(preview(page).getByRole(&quot;button&quot;, { name: &quot;Survives&quot; })).toBeVisible({ timeout: 60_000 });
     await expect(page.getByText(&quot;Rebuilding the preview…&quot;)).toBeHidden();
   });
-});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a fake docker is a shell script on PATH</td><td>Mockito on a <code>DockerClient</code> interface, or a fake binary the same way</td><td><code>unittest.mock</code> on <code>subprocess.run</code>, or a fake binary</td></tr><tr><td>a pool label per test file; a port range per file</td><td>Testcontainers does the label for you; ports are random</td><td>the same</td></tr><tr><td>the real worker from source under Playwright, printing a line when ready</td><td>a Spring context in the test JVM; or the real jar with a health wait</td><td>the real process with <code>wait_for_logs</code></td></tr><tr><td>a structural assertion (<code>node_modules</code> in the image) over a timing one</td><td>assert on the artifact, not on a stopwatch</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A flaky e2e was a bug: the URL was announced before the page was pushed.</strong></p><p>Under load, one run of the self-heal test stayed on the fresh container's empty page for good. The handler had reported the new URL as soon as the container was ready; the canvas framed it; the frame loaded the placeholder; and the push that followed landed while Vite's watcher was still scanning the clone, so the file changed and nobody was told. Now the address is held back until the sandbox <em>holds</em> the document (the peer is live and the pushed seq is the current one), and the test records what the page file contained at the moment each URL was announced. <em>A flaky test is a bug report</em>; this was the fifth one in this project to be a real bug.</p><p class="label">From <span class="mono">apps/worker/src/preview.ts</span></p><div class="scroll"><pre><code>        if (announce !== undefined &amp;&amp; peer.status === &quot;live&quot; &amp;&amp; pushedSeq === peer.seq) {
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a fake docker is a shell script on PATH</td><td>Mockito on a <code>DockerClient</code> interface, or a fake binary the same way</td><td><code>unittest.mock</code> on <code>subprocess.run</code>, or a fake binary</td></tr><tr><td>a pool label per test file; a proxy port per file</td><td>Testcontainers does the label for you; ports are random</td><td>the same</td></tr><tr><td>the real worker from source under Playwright, printing a line when ready</td><td>a Spring context in the test JVM; or the real jar with a health wait</td><td>the real process with <code>wait_for_logs</code></td></tr><tr><td>a structural assertion (<code>node_modules</code> in the image) over a timing one</td><td>assert on the artifact, not on a stopwatch</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A flaky e2e was a bug: the URL was announced before the page was pushed.</strong></p><p>Under load, one run of the self-heal test stayed on the fresh container's empty page for good. The handler had reported the new URL as soon as the container was ready; the canvas framed it; the frame loaded the placeholder; and the push that followed landed while Vite's watcher was still scanning the clone, so the file changed and nobody was told. Now the address is held back until the sandbox <em>holds</em> the document (the peer is live and the pushed seq is the current one), and the test records what the page file contained at the moment each URL was announced. <em>A flaky test is a bug report</em>; this was the fifth one in this project to be a real bug.</p><p class="label">From <span class="mono">apps/worker/src/preview.ts</span></p><div class="scroll"><pre><code>        if (announce !== undefined &amp;&amp; peer.status === &quot;live&quot; &amp;&amp; pushedSeq === peer.seq) {
           await reportUrl(job, announce);
           announce = undefined;
         }</code></pre></div><p class="label">From <span class="mono">apps/worker/src/preview.int.test.ts</span></p><div class="scroll"><pre><code>    await docker(&quot;rm&quot;, &quot;--force&quot;, sandboxName(run.documentId));
     // Back, with the document&#x27;s page (not the placeholder a fresh clone starts with), and a URL again.
-    await eventually(async () =&gt; (await pageIn(run.documentId)).includes(&quot;before the crash&quot;), 15_000);
+    // Both waited for: the handler pushes the page FIRST and announces after (and this test&#x27;s reportUrl
+    // reads the page before it records the URL), so the page alone can be seen before the announcement.
+    await eventually(async () =&gt; urls.length &gt;= reported + 2 &amp;&amp; (await pageIn(run.documentId)).includes(&quot;before the crash&quot;), 15_000);
     // In between, the URL was withdrawn: the canvas says &quot;rebuilding&quot; instead of framing a dead port.
     expect(urls.slice(reported)).toEqual([null, expect.stringMatching(/^http:\/\/127\.0\.0\.1:/u)]);
     // A NEW address even on the same port: Vite cannot reconnect by itself inside the canvas&#x27;s
@@ -1273,7 +1453,7 @@ async function variant(tag: string, line: string): Promise&lt;void&gt; {
     expect(pageWhenAnnounced.at(-1)).toContain(&quot;before the crash&quot;);
     expect((await fetch(urls.at(-1) ?? &quot;&quot;)).status).toBe(200);</code></pre></div></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>An 8 s bound that told "baked" from "installed" failed once under load.</strong></p><p>Baked <code>node_modules</code> was proven by a stopwatch: about 1 s cold against 10.6 s to install, with the bound between them. At load average 117 the cold start took longer than 8 s and the test called the image unbaked. The fact being proven is structural (the directory is in the image before any container starts), so the assertion is structural now, and the stopwatch is a smoke bound only.</p><p class="label">From <span class="mono">apps/worker/src/sandbox.int.test.ts</span></p><div class="scroll"><pre><code>  // Baked: node_modules is IN THE IMAGE, before any container starts (a structural fact, not a
   // timing guess: an 8 s bound between &quot;about 1 s&quot; and &quot;10.6 s to install&quot; failed once under load).
-  await docker(&quot;run&quot;, &quot;--rm&quot;, &quot;--entrypoint&quot;, &quot;test&quot;, IMAGE, &quot;-d&quot;, &quot;/app/node_modules/vite&quot;); // throws when it is not there
+  await docker(&quot;run&quot;, &quot;--rm&quot;, &quot;--entrypoint&quot;, &quot;test&quot;, IMAGE, &quot;-d&quot;, &quot;/home/node/deps/node_modules/vite&quot;); // throws when it is not there
   expect(took).toBeLessThan(30_000); // a smoke bound only
 }, 60_000);</code></pre></div></div><p class="note"><strong>Never run two Docker-using suites at once.</strong> Each one's cleanup removes the other's containers and turns results into noise. It happened this session, and it is why mutation runs of these suites go in the background, one at a time.</p></section><section id="limits"><h2>10 · What the type system could not see, epic 4 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests.</p><div class="scroll"><table><tr><th>What went wrong</th><th>Why</th><th>Fix</th></tr><tr><td>a lying <code>toString</code> put <code>alert(1)</code> in the generated file</td><td>a value converted to a string twice answered twice</td><td><code>typeof</code> before anything becomes code; literals from the value</td></tr><tr><td><code>-0</code> was written as <code>0</code></td><td><code>String(-0)</code> is <code>"0"</code></td><td><code>Object.is(value, -0)</code></td></tr><tr><td><code>NaN</code> would have compiled as a bare identifier</td><td><code>String(NaN)</code> is valid source</td><td>refuse non-finite numbers</td></tr><tr><td>a hidden prop was dropped and the file called complete</td><td><code>Object.keys</code> and <code>Object.hasOwn</code> disagree on enumerability</td><td>compare <code>Reflect.ownKeys</code> length</td></tr><tr><td>a 200 000-child document was called malformed</td><td><code>push(...children)</code> overflowed the stack at ~130k arguments</td><td>a loop</td></tr><tr><td>a prop set to <code>undefined</code> would have compiled without it</td><td>"present" and "has a value" differ</td><td>refuse; epic 5 would read it back as a deletion</td></tr><tr><td>ten concurrent starts removed each other's containers</td><td>name uniqueness is not ownership; "port taken" was the winner</td><td>single-flight in-process; a unique job across processes</td></tr><tr><td>a failed clone served an empty app</td><td><code>set -e</code> ignores a failure inside <code>a &amp;&amp; b &amp;&amp; c</code></td><td>one command per line</td></tr><tr><td>an exec racing the container's death had an empty stderr</td><td>prose was parsed</td><td>ask <code>State.Running</code></td></tr><tr><td>a stubborn docker CLI outlived the deadline</td><td>Node 24's <code>signal</code> sends SIGTERM whatever <code>killSignal</code> says</td><td>kill with SIGKILL from our own listener</td></tr><tr><td>a docker that exited early would have killed the worker (EPIPE)</td><td>an unheard stream error is an uncaught exception</td><td><code>child.stdin.on("error")</code></td></tr><tr><td>the compose reaper deleted the test suite's sandboxes</td><td>same daemon, same label, no owner</td><td>a pool label; reap only your own</td></tr><tr><td>the reaper removed a sandbox that was starting</td><td>asked Postgres first, listed Docker second</td><td>list first, ask second; the reaper takes a function</td></tr><tr><td>a worker failed someone else's job as <code>internal</code></td><td>the handler was looked up after the claim</td><td>check the handler before the claim</td></tr><tr><td>a container dying during a push failed the job</td><td>a throw is a failure, whatever caused it</td><td>ask whether it is running; force the liveness check</td></tr><tr><td>a closed peer held a container for ever</td><td><code>others</code> froze at its last value</td><td>fail as <code>sync_unreachable</code></td></tr><tr><td>nothing rendered in the sandboxed iframe</td><td><code>Origin: null</code>; Vite's default CORS refused it</td><td>an injected config allowing exactly "null"</td></tr><tr><td>"lock cors to the canvas origin" was a review note that could never work</td><td>the frame never sends the canvas's origin</td><td>measure the fix against the thing it names</td></tr><tr><td>a restarted sandbox never came back in the frame</td><td>Vite's reconnect uses a SharedWorker, refused to origin "null"</td><td>a new URL per start; the iframe keyed on it</td></tr><tr><td>a flaky e2e: the frame stayed on the empty page</td><td>the URL was announced before the page was pushed</td><td>announce once the sandbox holds the document</td></tr><tr><td>a stale tab on a reused port could show another document</td><td>the same port, a different container</td><td><code>?doc=</code> checked by the page</td></tr><tr><td>an 8 s bound failed under load</td><td>a structural fact proven with a stopwatch</td><td>assert on the image, not the clock</td></tr><tr><td>two opens in an instant can pass the per-org cap</td><td>a count is not an index</td><td>named as a bounded overshoot; an advisory lock is the upgrade</td></tr></table></div><p class="note"><strong>The pattern, extended again:</strong> lessons 2 and 3 said types prove shapes and say nothing about order, time, repetition, memory, who is speaking, or what a subprocess does. Epic 4 adds three more blind spots. Types cannot see what a value's <code>toString</code> will say the second time. They cannot see who owns a resource, only that it is unique. And they cannot see a browser's security boundary: what <code>Origin</code> a request will carry, what a SharedWorker will refuse. Every one was answered the same way: measure the real thing once, then assert on what it did.</p></section>
 
