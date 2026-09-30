@@ -341,7 +341,8 @@ export const PropValue = z.union([
 export type PropValue = z.infer<typeof PropValue>;
 
 const MAX_PROPS = 50;
-const MAX_PROPS_BYTES = 32 * 1024;
+const utf8 = new TextEncoder();
+export const MAX_PROPS_BYTES = 32 * 1024; // UTF-8 bytes of the bag as JSON: what the socket counts
 /**
  * A bag of props. NOT z.record(): the Agent SDK cannot convert z.record(k, v) and silently drops
  * every tool of the MCP server that uses it (SPEC §2a); this shape parses the same and converts.
@@ -354,8 +355,10 @@ const Props = z
   .pipe(z.object({}).catchall(PropValue))
   .refine((props) => Object.keys(props).length <= MAX_PROPS, `at most ${String(MAX_PROPS)} props`)
   // The sync server caps a frame at 64 KB before parsing it. Without this, an op that is valid here
-  // could be impossible to send: the socket would close, the client would resend, for ever.
-  .refine((props) => JSON.stringify(props).length <= MAX_PROPS_BYTES, `props larger than ${String(MAX_PROPS_BYTES)} bytes`)
+  // could be impossible to send: the socket would close, the client would resend, for ever. Counted in
+  // UTF-8 BYTES, as the socket counts: .length counts UTF-16 units, and a CJK character is 1 unit but 3
+  // bytes (noon-3m1). TextEncoder, not Buffer: the browser imports this file too.
+  .refine((props) => utf8.encode(JSON.stringify(props)).byteLength <= MAX_PROPS_BYTES, `props larger than ${String(MAX_PROPS_BYTES)} bytes`)
   .refine((props) => Object.keys(props).every((key) => PropKey.safeParse(key).success), "invalid prop name");
 
 export const DocNode = z.object({

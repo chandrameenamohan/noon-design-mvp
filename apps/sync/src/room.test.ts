@@ -546,6 +546,18 @@ test("rate limit: odd budgets and an odd clock still give a finite, whole retryA
   expect(room.doc.nodes["n2"]).toBeDefined(); // ...so one token later it works: no debt of a million ms
 });
 
+test("noon-3m1: the room's memory budget counts UTF-8 bytes, not characters", async () => {
+  const withText: Manifest = { version: 1, components: [{ name: "Text", acceptsChildren: false, props: [{ name: "label", type: { kind: "string" }, required: false }] }] };
+  const room = createRoom({ doc: emptyDoc(), manifest: withText, limits: { rememberedBytes: 2500 } });
+  const a = peer("a");
+  room.join(a);
+  // About 1,080 UTF-16 units but 3,080 bytes: it does not fit in 2,500 bytes, so the room cannot keep it.
+  const big = clientOp({ type: "add_node", nodeId: "t", parentId: ROOT_ID, index: 0, component: "Text", props: { label: "\u4e2d".repeat(1000) } });
+  await room.submit(a, big);
+  await room.submit(a, big);
+  expect(a.inbox.at(-1)).toEqual({ type: "rejected", opId: big.opId, reason: "stale" }); // forgotten, and said so: never applied twice
+});
+
 test("a flood of no-ops cannot push real ops out of the room's memory: an honest resend is still recognised", async () => {
   const room = createRoom({ doc: emptyDoc(), manifest, limits: { rememberedOps: 5 }, rate: { perSecond: 1e6, burst: 1e6 } });
   const [honest, flooder] = [peer("honest"), peer("flooder")];

@@ -46,6 +46,17 @@ test("a prop value is a string, a finite number or a boolean, and nothing else",
   }
 });
 
+// noon-3m1: the sync server caps a frame in UTF-8 BYTES, so the props cap must count bytes too. A CJK
+// character is one UTF-16 unit but three bytes: counted in units this bag is 30,027 and passes; on the
+// wire it is 90,027 bytes and the socket closes (1009) instead of answering, so the client resends for ever.
+test("the props cap counts UTF-8 bytes, not characters", () => {
+  const cjk = "\u4e2d".repeat(10_000);
+  const add = (props: Record<string, string>) => ({ opId, baseSeq: 0, op: { type: "add_node", nodeId: "n1", parentId: "root", index: 0, component: "Image", props } });
+  expect(ClientOp.safeParse(add({ alt: cjk })).success).toBe(true); // 30,011 bytes: under the cap
+  expect(ClientOp.safeParse(add({ alt: cjk, src: cjk, k2: cjk })).success).toBe(false);
+  expect(ClientOp.safeParse(add({ alt: cjk, src: "\u4e2d".repeat(920) })).success).toBe(false); // 10,939 units, 32,779 bytes: over in bytes only
+});
+
 // --- presence (E2.6): never sequenced, never stored -----------------------------------------------
 test("presence from a client: a cursor in the canvas's world coordinates (any spot on the sheet, E10.6) and a selection, both optional", () => {
   expect(ClientMessage.safeParse({ type: "presence", cursor: { x: 240.5, y: 100 }, selection: "n1" }).success).toBe(true);

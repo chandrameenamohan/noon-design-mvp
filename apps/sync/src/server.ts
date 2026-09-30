@@ -30,7 +30,7 @@ export type RunningSyncServer = {
 };
 
 const PROTOCOL = "noon.v1";
-const MAX_FRAME_BYTES = 64 * 1024; // an op is small; the contract caps props, this caps the frame BEFORE it is parsed
+export const MAX_FRAME_BYTES = 64 * 1024; // an op is small; the contract caps props, this caps the frame BEFORE it is parsed
 const TOKEN_LEEWAY_SECONDS = 5; // the api signs, this process verifies: two clocks never agree exactly
 const DOCUMENT_PATH = /^\/documents\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 // 4000-4999 are ours to define. They mirror the HTTP status a REST call would have had.

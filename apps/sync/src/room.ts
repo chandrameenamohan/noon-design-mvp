@@ -206,7 +206,7 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
   const entryOf = (peer: Peer): Presence => present.get(peer)?.entry ?? { peerId: "", actor: peer.actor, name: peer.name ?? "", cursor: null, selection: null };
 
   function remember(key: string, op: SequencedOp): void {
-    const bytes = JSON.stringify(op.op).length;
+    const bytes = Buffer.byteLength(JSON.stringify(op.op)); // bytes, as the limit says: .length counts UTF-16 units (noon-3m1)
     remembered.set(key, { op, bytes });
     rememberedBytes += bytes;
     while (remembered.size > limits.rememberedOps || rememberedBytes > limits.rememberedBytes) {
