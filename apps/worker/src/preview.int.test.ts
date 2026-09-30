@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import type { Job } from "@noon/db";
 import { manifest } from "@noon/design-system";
-import { connect, TEST_ORG, TEST_SECRET, useSyncServer, type TestPeer } from "../../sync/src/testing.ts";
+import { connect, NO_JOURNAL, TEST_ORG, TEST_SECRET, useSyncServer, type TestPeer } from "../../sync/src/testing.ts";
 import { createPreviewHandler } from "./preview.ts";
 import { pagePath, PREVIEW_PATH, sandboxName, type SandboxOptions } from "./sandbox.ts";
 import { buildImage, DOCKER, docker, IMAGE, makeTestSeed, removePool, TEST_PREVIEW_KEY, TEST_SEED, testPool } from "./sandbox-testing.ts";
@@ -13,7 +13,7 @@ import { buildImage, DOCKER, docker, IMAGE, makeTestSeed, removePool, TEST_PREVI
 // E4.2b: the `sandbox` queue's handler. The REAL sync server, the REAL peer-client, a REAL container.
 const ctx = useSyncServer();
 // A sync server that knows no document: every peer, the handler's included, is closed for good (4404).
-const nowhere = useSyncServer({ store: { load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
+const nowhere = useSyncServer({ store: { ...NO_JOURNAL, load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
 const sandbox: Omit<SandboxOptions, "signal"> = { image: IMAGE, docker: DOCKER, pool: testPool(), previewKey: TEST_PREVIEW_KEY, proxyPort: 24000, seed: TEST_SEED };
 const made: string[] = [];
 const job = (createdBy: string | undefined = randomUUID()): Job => {

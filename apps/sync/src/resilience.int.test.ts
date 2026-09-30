@@ -6,7 +6,7 @@ import { ROOT_ID } from "@noon/doc-model";
 import { signSessionToken } from "@noon/session-token";
 import WebSocket from "ws";
 import { startSyncServer } from "./server.ts";
-import { connect, TEST_ORG, TEST_SECRET, until } from "./testing.ts";
+import { connect, NO_JOURNAL, TEST_ORG, TEST_SECRET, until } from "./testing.ts";
 
 // Findings from the E2.3 review, reproduced with a store whose behaviour the test controls.
 const add = (nodeId: string): Op => ({ type: "add_node", nodeId, parentId: ROOT_ID, index: 0, component: "Stack", props: {} });
@@ -16,6 +16,7 @@ function fakeStore(over: Partial<DocumentStore> = {}): DocumentStore & { saved: 
   const saved: { seq: number; doc: Doc }[] = [];
   return {
     saved,
+    ...NO_JOURNAL,
     load: () => Promise.resolve({ doc: undefined, seq: 0 }),
     save: (_org, _id, doc, seq) => { saved.push({ seq, doc: structuredClone(doc) }); return Promise.resolve(); },
     ...over,

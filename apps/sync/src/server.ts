@@ -2,10 +2,10 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ClientMessage, type HealthResponse } from "@noon/contracts";
+import { ClientMessage, type HealthResponse, type SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { manifest } from "@noon/design-system";
-import { checkDoc, emptyDoc } from "@noon/doc-model";
+import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
 import { createRoom, type Peer, type RateLimit, type Room, type RoomLimits } from "./room.ts";
@@ -96,7 +96,23 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
     // The contract checked each node's shape. Whether they form a TREE is checkDoc's job, and a room
     // must never open on top of a corrupt document: every later op would build on the damage.
     if (checkDoc(doc).length > 0) return { closeCode: CLOSE.documentCorrupt };
-    return { room: createRoom({ doc, seq: stored.seq, manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
+    // The saved document is written when the last peer leaves; the journal on every op. After a crash
+    // the journal is ahead, and a room that numbered from the saved seq would find every number taken.
+    let seq = stored.seq;
+    try {
+      for (const row of await store.since(orgId, documentId, seq)) {
+        applyOpInto(doc, row.op);
+        seq = row.seq;
+      }
+    } catch {
+      return { closeCode: CLOSE.unavailable };
+    }
+    const journal = {
+      append: (op: SequencedOp) => store.append(orgId, documentId, op),
+      find: (actorId: string, opId: string) => store.find(orgId, documentId, actorId, opId),
+      everAdded: (nodeId: string) => store.everAdded(orgId, documentId, nodeId),
+    };
+    return { room: createRoom({ doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}) }), orgId };
   }
 
   async function serve(ws: WebSocket, documentId: string, claims: { userId: string; orgId: string; expiresAt: number; actor: { kind: "user" | "agent" | "git"; runId?: string }; name?: string }): Promise<void> {
@@ -205,8 +221,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
   /**
    * The last peer left: save, then forget the room. A failed save is RETRIED for as long as the room
    * stays empty, because its memory is then the only copy of those edits.
-   * ponytail (F8's stated limit): there is no periodic save, so a crash (kill -9) loses every edit
-   * since the room opened. Epic 6 replaces this with a journal written before each broadcast.
+   * Since E6.1a a crash loses nothing acknowledged: the journal was written before each broadcast, and
+   * the next room replays what this save never wrote. E6.2 replaces this save with snapshots.
    */
   function closeRoom(documentId: string, orgId: string, room: Room, opening: Promise<Opened>): void {
     const work = (async () => {

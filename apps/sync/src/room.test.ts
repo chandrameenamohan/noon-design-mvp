@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import type { Actor, ClientOp, Manifest, Op, SequencedOp, ServerMessage } from "@noon/contracts";
 import { emptyDoc, ROOT_ID } from "@noon/doc-model";
-import { createRoom, type Peer } from "./room.ts";
+import { createRoom, type Journal, type Peer } from "./room.ts";
 
 // The room is pure logic, so its rules are tested here without sockets. Each test below reproduces a
 // finding from the E2.3 review.
@@ -10,6 +10,7 @@ const manifest: Manifest = { version: 1, components: [{ name: "Stack", acceptsCh
 let nextId = 0;
 const uuid = (): string => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
 const add = (nodeId: string, parentId = ROOT_ID): Op => ({ type: "add_node", nodeId, parentId, index: 99, component: "Stack", props: {} });
+const setGap = (nodeId: string, value: number): Op => ({ type: "set_prop", nodeId, key: "gap", value });
 const clientOp = (op: Op, baseSeq = 0, opId = uuid()): ClientOp => ({ opId, baseSeq, op });
 
 function peer(id: string, kind: Actor["kind"] = "user"): Peer & { inbox: ServerMessage[] } {
@@ -18,6 +19,29 @@ function peer(id: string, kind: Actor["kind"] = "user"): Peer & { inbox: ServerM
 }
 const ops = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<ServerMessage, { type: "op" }> => m.type === "op");
 const rejects = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is Extract<ServerMessage, { type: "rejected" }> => m.type === "rejected");
+/** A journal that only takes ops through `persist` (to delay or fail them) and remembers nothing. */
+const persisting = (persist: (op: SequencedOp) => Promise<void>): Journal => ({
+  append: async (op) => { await persist(op); return undefined; },
+  find: () => Promise.resolve(undefined),
+  everAdded: () => Promise.resolve(false),
+});
+/** A journal in memory with the table's two unique keys, outliving any room built on it: a stand-in for op_journal. */
+function memoryJournal(): Journal & { rows: SequencedOp[] } {
+  const rows: SequencedOp[] = [];
+  const find = (actorId: string, opId: string) => rows.find((r) => r.actor.id === actorId && r.opId === opId);
+  return {
+    rows,
+    append(op) {
+      const original = find(op.actor.id, op.opId);
+      if (original) return Promise.resolve(original);
+      if (rows.some((r) => r.seq === op.seq)) return Promise.reject(new Error("op_journal_seq"));
+      rows.push(op);
+      return Promise.resolve(undefined);
+    },
+    find: (actorId, opId) => Promise.resolve(find(actorId, opId)),
+    everAdded: (nodeId) => Promise.resolve(rows.some((r) => r.op.type === "add_node" && r.op.nodeId === nodeId)),
+  };
+}
 
 test("the welcome carries a COPY of the document: later ops must not change a message already handed out", async () => {
   const room = createRoom({ doc: emptyDoc(), manifest, mintPeerId: () => "p1" });
@@ -80,7 +104,7 @@ test("ops wait their turn: with a slow persist step, order, dedupe and numbering
   const persisted: number[] = [];
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const room = createRoom({ doc: emptyDoc(), manifest, persist: async (op: SequencedOp) => { await gate; persisted.push(op.seq); } });
+  const room = createRoom({ doc: emptyDoc(), manifest, journal: persisting(async (op) => { await gate; persisted.push(op.seq); }) });
   const [a, b] = [peer("a"), peer("b")];
   room.join(a); room.join(b);
   const one = clientOp(add("same-id"));
@@ -95,7 +119,7 @@ test("ops wait their turn: with a slow persist step, order, dedupe and numbering
 
 test("if an op cannot be persisted nobody receives it, the document is untouched, and its number is not used up", async () => {
   let fail = true;
-  const room = createRoom({ doc: emptyDoc(), manifest, persist: () => (fail ? Promise.reject(new Error("journal down")) : Promise.resolve()) });
+  const room = createRoom({ doc: emptyDoc(), manifest, journal: persisting(() => (fail ? Promise.reject(new Error("journal down")) : Promise.resolve())) });
   const [a, b] = [peer("a"), peer("b")];
   room.join(a); room.join(b);
   const op = clientOp(add("n1"));
@@ -108,6 +132,95 @@ test("if an op cannot be persisted nobody receives it, the document is untouched
   expect(ops(b).map((m) => m.seq)).toEqual([1]); // no gap in the numbering
 });
 
+// --- E6.1a: the journal is written before anyone hears of an op, and it outlives the room ----------
+test("journal: every accepted op is journaled BEFORE it is broadcast, in the order it is broadcast, under concurrent submits", async () => {
+  const journal = memoryJournal();
+  const order: string[] = [];
+  const room = createRoom({ doc: emptyDoc(), manifest, journal: { ...journal, append: async (op) => { await Promise.resolve(); order.push(`journal ${String(op.seq)}`); return journal.append(op); } } });
+  const watcher: Peer = { actor: { kind: "user", id: "w" }, session: { userId: "w", orgId: "org", expiresAt: 0 }, send: (m) => { if (m.type === "op") order.push(`broadcast ${String(m.seq)}`); } };
+  const [a, b] = [peer("a"), peer("b")];
+  room.join(a); room.join(b); room.join(watcher);
+  await Promise.all(Array.from({ length: 20 }, (_, i) => room.submit(i % 2 ? a : b, clientOp(add(`n${String(i)}`)))));
+  expect(order).toEqual(Array.from({ length: 20 }, (_, i) => [`journal ${String(i + 1)}`, `broadcast ${String(i + 1)}`]).flat());
+  expect(journal.rows.map((r) => r.seq)).toEqual(ops(a).map((m) => m.seq));
+});
+
+test("journal: a resend after the room restarted gets its ORIGINAL seq, and nothing is applied twice", async () => {
+  const journal = memoryJournal();
+  const first = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  first.join(a);
+  const move = clientOp({ type: "move_node", nodeId: "n2", newParentId: "n1", index: 0 }, 2);
+  for (const op of [clientOp(add("n1")), clientOp(add("n2"), 1), move, clientOp(add("n3"), 3)]) await first.submit(a, op);
+  // The ack of the move was lost. The room is rebuilt from what was saved (here: its final state).
+  const again = createRoom({ doc: structuredClone(first.doc), seq: first.seq, manifest, journal });
+  const back = peer("a");
+  again.join(back);
+  await again.submit(back, move);
+  expect(ops(back)).toEqual([{ type: "op", seq: 3, opId: move.opId, actor: { kind: "user", id: "a" }, op: move.op }]);
+  expect(again.seq).toBe(4);
+  expect(journal.rows).toHaveLength(4);
+});
+
+test("journal: a client that resends its own forgotten op with a FORGED high baseSeq gets the original seq, not a second one (E2.3 known limit)", async () => {
+  const journal = memoryJournal();
+  const room = createRoom({ doc: emptyDoc(), manifest, journal, limits: { rememberedOps: 2 } });
+  const liar = peer("liar");
+  room.join(liar);
+  await room.submit(liar, clientOp(add("n1")));
+  const setOnce = clientOp(setGap("n1", 8), 1);
+  await room.submit(liar, setOnce); // seq 2
+  for (let i = 0; i < 3; i++) await room.submit(liar, clientOp(setGap("n1", 10 + i), 2 + i)); // pushes seq 2 out of the room's memory
+  await room.submit(liar, { ...setOnce, baseSeq: room.seq }); // "I have seen everything": the stale guard is passed
+  expect(ops(liar).at(-1)).toMatchObject({ seq: 2, opId: setOnce.opId });
+  expect(room.doc.nodes["n1"]?.props["gap"]).toBe(12); // the old value was NOT written again
+  expect(journal.rows.filter((r) => r.opId === setOnce.opId)).toHaveLength(1);
+});
+
+test("journal: an op sent against an old seq that never arrived is judged now, not refused as stale", async () => {
+  const journal = memoryJournal();
+  const room = createRoom({ doc: emptyDoc(), seq: 0, manifest, journal });
+  const a = peer("a");
+  room.join(a);
+  await room.submit(a, clientOp(add("n1")));
+  const reloaded = createRoom({ doc: structuredClone(room.doc), seq: room.seq, manifest, journal });
+  const b = peer("b");
+  reloaded.join(b);
+  await reloaded.submit(b, clientOp(add("n2"), 0)); // b wrote this before it saw seq 1
+  expect(ops(b).map((m) => m.seq)).toEqual([2]);
+  expect(rejects(b)).toEqual([]);
+});
+
+test("journal: a node id that was added and removed is never added again, even after a restart (keystone 4)", async () => {
+  const journal = memoryJournal();
+  const first = createRoom({ doc: emptyDoc(), manifest, journal });
+  const a = peer("a");
+  first.join(a);
+  await first.submit(a, clientOp(add("gone")));
+  await first.submit(a, clientOp({ type: "remove_node", nodeId: "gone" }, 1));
+  const again = createRoom({ doc: structuredClone(first.doc), seq: first.seq, manifest, journal });
+  const git = peer("git-peer", "git");
+  again.join(git);
+  const readd = clientOp(add("gone"), 2);
+  await again.submit(git, readd);
+  expect(rejects(git)).toEqual([{ type: "rejected", opId: readd.opId, reason: "duplicate_node" }]);
+  expect(again.doc.nodes["gone"]).toBeUndefined();
+});
+
+test("journal: if the journal cannot be read, the op is refused as unavailable and nobody receives it", async () => {
+  const down = (): Promise<never> => Promise.reject(new Error("db down"));
+  const room = createRoom({ doc: emptyDoc(), seq: 5, manifest, journal: { append: down, find: down, everAdded: down } });
+  const [a, b] = [peer("a"), peer("b")];
+  room.join(a); room.join(b);
+  const old = clientOp(add("n1"), 0); // behind what the room remembers: the journal is asked
+  const fresh = clientOp(add("n2"), 5); // an add: the journal is asked whether the id was used
+  await room.submit(a, old);
+  await room.submit(a, fresh);
+  expect(rejects(a).map((r) => r.reason)).toEqual(["unavailable", "unavailable"]);
+  expect(ops(b)).toEqual([]);
+  expect(room.seq).toBe(5);
+});
+
 test("the room knows who is in it, for presence and for cutting off a revoked user", () => {
   const room = createRoom({ doc: emptyDoc(), manifest });
   const [a, b] = [peer("alice"), peer("bob")];
@@ -118,7 +231,6 @@ test("the room knows who is in it, for presence and for cutting off a revoked us
 });
 
 // --- E2.9: a budget per peer, and ops that change nothing ---------------------------------------
-const setGap = (nodeId: string, value: number): Op => ({ type: "set_prop", nodeId, key: "gap", value });
 /** A room whose clock the test moves by hand. */
 function timedRoom(rate: { perSecond: number; burst: number; maxStrikes?: number }) {
   const clock = { now: 0 };
@@ -219,7 +331,7 @@ test("rate limit: an agent run has its own budget and cannot spend its owner's",
 test("rate limit: the budget is charged ON ARRIVAL, not when a slow journal finally reaches the op", async () => {
   let release = (): void => undefined;
   const slow = new Promise<void>((resolve) => { release = resolve; });
-  const room = createRoom({ doc: emptyDoc(), manifest, rate: { perSecond: 10, burst: 3 }, now: () => 0, persist: () => slow });
+  const room = createRoom({ doc: emptyDoc(), manifest, rate: { perSecond: 10, burst: 3 }, now: () => 0, journal: persisting(() => slow) });
   const a = peer("a");
   room.join(a);
   for (let i = 0; i < 50; i++) void room.submit(a, clientOp(add(`n${String(i)}`)));
@@ -294,7 +406,7 @@ const presenceOf = (p: { inbox: ServerMessage[] }) => p.inbox.filter((m): m is E
 
 test("presence goes to the OTHERS, stamped with who sent it; it takes no seq and never reaches persist", async () => {
   const persisted: SequencedOp[] = [];
-  const room = createRoom({ doc: emptyDoc(), manifest, persist: (op) => { persisted.push(op); return Promise.resolve(); } });
+  const room = createRoom({ doc: emptyDoc(), manifest, journal: persisting((op) => { persisted.push(op); return Promise.resolve(); }) });
   const [a, b] = [{ ...peer("a"), name: "Ada" }, peer("b")];
   room.join(a); room.join(b);
   room.presence(a, { cursor: { x: 0.1, y: 0.2 }, selection: "n1" });

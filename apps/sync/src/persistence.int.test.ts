@@ -61,9 +61,8 @@ test("an op sent the instant the socket opens is never silently lost while the d
   for (let round = 0; round < 15; round++) {
     const peer = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
     const opId = peer.send(add(`early-${String(round)}`)); // sent before "welcome", so it cannot know the room's seq
-    // It must get AN ANSWER. On a fresh document that is the op itself. On one reloaded from storage
-    // the room says "stale": it cannot know whether an op from a peer that has seen nothing was
-    // already applied, so the client must resync. What may never happen is silence.
+    // It must get AN ANSWER: the op itself, since E6.1a even on a reloaded document (the journal says it
+    // was never applied), or "stale" from a room without a journal. What may never happen is silence.
     const answer = await Promise.race([peer.next("op", (m) => m.opId === opId), peer.next("rejected", (m) => m.opId === opId)]);
     expect(answer.type === "op" || answer.reason === "stale", JSON.stringify(answer)).toBe(true);
     if (answer.type === "rejected") {

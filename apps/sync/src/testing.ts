@@ -2,12 +2,21 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll } from "vitest";
 import WebSocket from "ws";
 import { ServerMessage, type ClientMessage, type Op } from "@noon/contracts";
+import type { DocumentStore } from "@noon/db";
 import { signSessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
 
 export const TEST_SECRET = "test-only-session-secret-0123456789abcdef";
 export const TEST_ORG = "22222222-2222-4222-8222-222222222222";
+
+/** The journal half of a fake DocumentStore, for tests that are not about the journal: it keeps nothing. */
+export const NO_JOURNAL: Pick<DocumentStore, "append" | "find" | "everAdded" | "since"> = {
+  append: () => Promise.resolve(undefined),
+  find: () => Promise.resolve(undefined),
+  everAdded: () => Promise.resolve(false),
+  since: () => Promise.resolve([]),
+};
 
 /** A real sync server on a free port for one test file. */
 export function useSyncServer(options: Omit<Parameters<typeof startSyncServer>[0], "port" | "secrets"> = {}): { readonly server: RunningSyncServer } {

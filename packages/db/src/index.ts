@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Name, Org, Preview, PreviewOutput, Run, SandboxUrl, SequencedOp, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -36,6 +36,18 @@ export type Db = {
 export type DocumentStore = {
   load(orgId: string, documentId: string): Promise<{ doc: Doc | undefined; seq: number } | undefined>;
   save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
+  /**
+   * E6.1a: journals an accepted op, BEFORE anyone hears of it. Undefined: written. An op: this sender's
+   * opId was journaled already, and that is what it became (a resend the room had forgotten). Rejects
+   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone.
+   */
+  append(orgId: string, documentId: string, op: SequencedOp): Promise<SequencedOp | undefined>;
+  /** What this sender's opId became, if it was ever journaled. */
+  find(orgId: string, documentId: string, actorId: string, opId: string): Promise<SequencedOp | undefined>;
+  /** Was this node id ever added to the document (keystone 4: a removed id is never added again)? */
+  everAdded(orgId: string, documentId: string, nodeId: string): Promise<boolean>;
+  /** The journaled ops after `seq`, in order: what the saved document does not hold yet. */
+  since(orgId: string, documentId: string, seq: number): Promise<SequencedOp[]>;
 };
 
 const QUEUES = ["ai", "sandbox", "ship"] as const;
@@ -157,6 +169,12 @@ const WorkspaceRow = z.object({ id: z.string(), org_id: z.string(), name: z.stri
 const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id: z.string(), title: z.string(), created_at: timestamp }) // content and seq are read only by documentStore()
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
+
+// seq is a bigint: a string from the driver, a number from here on.
+const JournalRow = z
+  .object({ seq: z.string().regex(/^\d+$/).transform(Number), op_id: z.string(), actor_kind: z.string(), actor_id: z.string(), run_id: z.string().nullable(), op: z.unknown() })
+  .transform((r): SequencedOp => SequencedOp.parse({ seq: r.seq, opId: r.op_id, actor: { kind: r.actor_kind, id: r.actor_id, ...(r.run_id === null ? {} : { runId: r.run_id }) }, op: r.op }));
+const JOURNAL_COLUMNS = "seq, op_id, actor_kind, actor_id, run_id, op";
 
 // A left join from the document: no conflict row = every column null.
 const ConflictRow = z.object({ commit_sha: z.string().nullable(), file: z.string().nullable(), reason: z.string().nullable(), detail: z.string().nullable(), created_at: z.date().nullable() })
@@ -383,6 +401,41 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         // `seq <= $4`: a late save from an older room must never overwrite a newer document.
         await pool.query("update documents set content = $3, seq = $4 where org_id = $1 and id = $2 and seq <= $4", [orgId, documentId, JSON.stringify(doc), seq]);
       },
+      async append(orgId, documentId, { seq, opId, actor, op }) {
+        if (!isId(orgId) || !isId(documentId)) throw new Error("journal: not a document id");
+        try {
+          // From the document's row, so that a document of another org (or one deleted meanwhile) takes no op.
+          const written = await pool.query(
+            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2`,
+            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op)],
+          );
+          if (written.rowCount !== 1) throw new Error("journal: the document is gone");
+          return undefined;
+        } catch (err) {
+          // Two unique keys, told apart by NAME: 23505 alone cannot say whether this is a resend or a rival writer.
+          if (err instanceof Error && "constraint" in err && err.constraint === "op_journal_op") {
+            const original = await one(JournalRow, `select ${JOURNAL_COLUMNS} from op_journal where document_id = $1 and actor_id = $2 and op_id = $3`, [documentId, actor.id, opId]);
+            if (original) return original;
+          }
+          throw err;
+        }
+      },
+      find: async (orgId, documentId, actorId, opId) =>
+        isId(orgId) && isId(documentId) && isId(opId)
+          ? one(JournalRow, `select ${JOURNAL_COLUMNS} from op_journal where org_id = $1 and document_id = $2 and actor_id = $3 and op_id = $4`, [orgId, documentId, actorId, opId])
+          : undefined,
+      async everAdded(orgId, documentId, nodeId) {
+        if (!isId(orgId) || !isId(documentId)) return false;
+        // Spelled as the partial index op_journal_added is, so that it is used.
+        const found = await pool.query("select 1 from op_journal where document_id = $2 and org_id = $1 and op ->> 'type' = 'add_node' and op ->> 'nodeId' = $3 limit 1", [orgId, documentId, nodeId]);
+        return found.rowCount === 1;
+      },
+      // ponytail: every row after the saved seq, in one read. Ceiling: a document that ran long without a
+      // save (a crash) opens slowly. Upgrade: E6.2's snapshots bound how many rows are ever replayed.
+      since: async (orgId, documentId, seq) =>
+        isId(orgId) && isId(documentId)
+          ? rows(JournalRow, `select ${JOURNAL_COLUMNS} from op_journal where org_id = $1 and document_id = $2 and seq > $3 order by seq`, [orgId, documentId, seq])
+          : [],
     }),
 
     jobStore: () => ({

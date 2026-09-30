@@ -6,7 +6,7 @@ import { ROOT_ID } from "@noon/doc-model";
 import { connectPeer, type PeerOptions, type PeerStatus } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { startSyncServer } from "./server.ts";
-import { connect, TEST_ORG, TEST_SECRET, until, useSyncServer } from "./testing.ts";
+import { connect, NO_JOURNAL, TEST_ORG, TEST_SECRET, until, useSyncServer } from "./testing.ts";
 
 // The REAL client against the REAL server: what a browser tab, the AI worker and the git peer all run.
 const ctx = useSyncServer();
@@ -123,7 +123,7 @@ test("a refusal from the server rolls the edit back and reports the reason", asy
 });
 
 test("a close code that means 'do not retry' ends the peer instead of reconnecting for ever", async () => {
-  const gone = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store: { load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
+  const gone = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store: { ...NO_JOURNAL, load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
   const net = sabotage();
   const { peer, statuses } = peerFor(gone.url, randomUUID(), { WebSocketImpl: net.WebSocketImpl });
   await until(() => peer.status === "closed", "peer closed");

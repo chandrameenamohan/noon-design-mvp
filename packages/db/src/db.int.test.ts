@@ -11,9 +11,10 @@ test("migrations create the tables, and every tenant table carries org_id", asyn
   const tables = await t.columnsByTable();
   expect(Object.keys(tables).sort()).toEqual(
     // git_events and git_reconcile are the stack's one repo, not an org's data (E5.3a).
-    ["documents", "git_events", "git_reconcile", "jobs", "memberships", "orgs", "schema_migrations", "usage", "users", "workspaces"].sort(),
+    ["document_conflicts", "documents", "git_events", "git_reconcile", "jobs", "memberships", "op_journal", "orgs", "schema_migrations", "usage", "users", "workspaces"].sort(),
   );
-  for (const tenantTable of ["memberships", "workspaces", "documents", "jobs", "usage"]) {
+  // document_conflicts hangs off its document (one row per document, deleted with it): the document holds the org.
+  for (const tenantTable of ["memberships", "workspaces", "documents", "jobs", "usage", "op_journal"]) {
     expect(tables[tenantTable], tenantTable).toContain("org_id");
   }
 });

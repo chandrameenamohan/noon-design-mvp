@@ -35,6 +35,19 @@ const WORTH_RETURNING_FOR = 8; // tokens
 // peer-client sends at most every 50 ms, so an honest client never loses one.
 const MIN_PRESENCE_INTERVAL_MS = 25;
 
+/**
+ * Where accepted ops are made durable (the op journal, E6.1a). The room's memory of what it applied is
+ * bounded and dies with it; the journal's is neither, so with one the room can answer ANY resend.
+ */
+export type Journal = {
+  /** Resolves once the op is durable: undefined, or the op this sender's opId ALREADY became. Rejects: not durable. */
+  append(op: SequencedOp): Promise<SequencedOp | undefined>;
+  /** What this sender's opId became, if it was ever journaled. */
+  find(actorId: string, opId: string): Promise<SequencedOp | undefined>;
+  /** Was this node id ever added (keystone 4: a removed id is never added again)? */
+  everAdded(nodeId: string): Promise<boolean>;
+};
+
 export type RoomLimits = {
   maxNodes: number;
   /** The root is depth 0; a node may sit at depth `maxDepth`, no deeper. */
@@ -51,10 +64,10 @@ type Options = {
   manifest: Manifest;
   limits?: Partial<RoomLimits>;
   /**
-   * Makes an op durable BEFORE anyone hears of it (the journal, from E6.1a). If it rejects, the op
-   * is not applied, nobody receives it, and its sequence number is not used up.
+   * Makes an op durable BEFORE anyone hears of it. If the append rejects, the op is not applied, nobody
+   * receives it, and its sequence number is not used up. Without one nothing is kept (tests, the simulator).
    */
-  persist?: (op: SequencedOp) => Promise<void>;
+  journal?: Journal;
   rate?: Partial<RateLimit>;
   /** The room has no clock of its own: the caller lends it one, and a test lends it a hand-wound one. */
   now?: () => number;
@@ -68,10 +81,10 @@ type Options = {
  * and the reconcile simulator drives this very code.
  *
  * Ops are handled ONE AT A TIME through a queue. Node never interrupts a function halfway, but
- * `persist` is awaited, and without the queue a second op would be validated against a document
+ * the journal is awaited, and without the queue a second op would be validated against a document
  * the first has not changed yet: two peers could both "successfully" add the same node id.
  */
-export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID() }: Options) {
+export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID() }: Options) {
   const limits: RoomLimits = { ...DEFAULT_LIMITS, ...overrides };
   const rate: RateLimit = { ...DEFAULT_RATE, ...rateOverrides };
   const peers = new Set<Peer>();
@@ -80,13 +93,13 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
   // What the room can still vouch for: "sender:opId" -> what it became. Insertion-ordered, so the
   // oldest is first. Keyed by SENDER too: every broadcast shows every opId to every peer, and a peer
   // that replayed someone else's opId must not get their answer while its own op is thrown away.
-  // ponytail: this memory dies with the room. From E6.1a the journal's unique index is the real one.
+  // With a journal this is only a cache: what fell out of it (or died with the last room) is asked of the journal.
   const remembered = new Map<string, { op: SequencedOp; bytes: number }>();
   // Ops that changed nothing, so that a resend gets the same answer instead of a second look at a
   // document that has moved on. Their OWN small memory: they cost their sender almost nothing, and in
   // the map above a flood of them would push out real ops and turn honest resends into "stale".
   // ponytail: a no-op that falls out of here is judged afresh if it is resent; the worst case is one
-  // old value written late. From E6.1a the journal... cannot help (a no-op has no row): keep this.
+  // old value written late. The journal cannot help (a no-op has no row): keep this.
   const rememberedNoOps = new Set<string>();
   let rememberedBytes = 0;
   // Everything up to this seq may have been applied and forgotten. A room loaded from storage starts
@@ -212,11 +225,25 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
       peer.send({ type: "ack", opId });
       return;
     }
-    // An op written before the oldest thing the room remembers MAY already have been applied, and the
-    // room can no longer tell. Applying it again would move a node twice; so the client must resync.
+    // An op written before the oldest thing the room remembers MAY already have been applied. The
+    // journal can tell: found, it gets its original answer; not found, it never was, and is judged now.
+    // Without a journal the room cannot tell, and applying it twice would move a node twice: resync.
     if (baseSeq < forgottenUpTo) {
-      refuse("stale");
-      return;
+      if (!journal) {
+        refuse("stale");
+        return;
+      }
+      let original;
+      try {
+        original = await journal.find(peer.actor.id, opId);
+      } catch {
+        refuse("unavailable");
+        return;
+      }
+      if (original) {
+        peer.send({ type: "op", ...original });
+        return;
+      }
     }
 
     // 2. The document's rules first (they give the precise reason: a move into its own subtree is a
@@ -229,6 +256,21 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     if (overLimit(op)) {
       refuse("document_limit");
       return;
+    }
+    // Keystone 4: validate() only sees the document as it is; an id that was removed is in the journal.
+    // ponytail: one indexed read per add (adds are rare next to drags); without a journal, unchecked.
+    if (op.type === "add_node" && journal) {
+      let reused;
+      try {
+        reused = await journal.everAdded(op.nodeId);
+      } catch {
+        refuse("unavailable");
+        return;
+      }
+      if (reused) {
+        refuse("duplicate_node");
+        return;
+      }
     }
 
     // An op that changes nothing (the value is already that) is answered and goes no further: no seq,
@@ -243,10 +285,17 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, persist,
     // 3. Durable first, then applied, then announced. The number is only TAKEN once the op is durable,
     //    so a failed write leaves no gap. The ACTOR comes from the verified session (SPEC §2.3).
     const sequenced: SequencedOp = { seq: seq + 1, opId, actor: peer.actor, op };
+    let original;
     try {
-      await persist?.(sequenced);
+      original = await journal?.append(sequenced);
     } catch {
       refuse("unavailable");
+      return;
+    }
+    // A resend the room had forgotten, with a baseSeq that got it past the check above (a buggy or lying
+    // client). The journal's unique key caught it: the original answer, and nothing is applied twice.
+    if (original) {
+      peer.send({ type: "op", ...original });
       return;
     }
     applyOpInto(doc, op);

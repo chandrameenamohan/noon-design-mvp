@@ -4,7 +4,7 @@ import type { Doc } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { ROOT_ID } from "@noon/doc-model";
 import { startSyncServer } from "./server.ts";
-import { connect, TEST_SECRET } from "./testing.ts";
+import { connect, NO_JOURNAL, TEST_SECRET } from "./testing.ts";
 
 // F7 over real sockets: presence is relayed, a closed connection is announced, and NOTHING about it
 // reaches a store or survives a restart.
@@ -12,6 +12,7 @@ test("presence is relayed and a leaver announced; after a restart nobody is here
   const saved: string[] = [];
   let kept: { doc: Doc; seq: number } | undefined;
   const store: DocumentStore = {
+    ...NO_JOURNAL,
     load: () => Promise.resolve({ doc: kept?.doc, seq: kept?.seq ?? 0 }),
     save: (_org, _id, doc, seq) => { saved.push(JSON.stringify([doc, seq])); kept = { doc: structuredClone(doc), seq }; return Promise.resolve(); },
   };
