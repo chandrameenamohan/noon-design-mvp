@@ -158,7 +158,7 @@ test("eight claims racing for one job: exactly one wins, and a late report canno
   worker = undefined;
   const doc = await aDocument("ann@example.com");
   const run = await db.db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction: "race", createdBy: undefined });
-  if (typeof run !== "object") throw new Error("unreachable");
+  if (typeof run !== "object" || !("id" in run)) throw new Error("unreachable");
   const key = { queue: "ai" as const, jobId: run.id, orgId: run.orgId };
   const jobs = db.db.jobStore();
   expect(await jobs.claim({ ...key, orgId: doc.id })).toBeUndefined(); // the wrong org names nothing
@@ -209,7 +209,7 @@ test("a job of another queue neither stops the sweep nor can be started by a mes
   // Older than everything else, so it sorts first in the sweep.
   const git = ((await db.rawQuery("insert into jobs (org_id, document_id, queue, input, created_at) values ($1, $2, 'git', '{}', now() - interval '1 day') returning id", [doc.orgId, doc.id])) as { rows: { id: string }[] }).rows[0]?.id ?? "";
   const lost = await db.db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction: "behind a git job", createdBy: undefined });
-  if (typeof lost !== "object") throw new Error("unreachable");
+  if (typeof lost !== "object" || !("id" in lost)) throw new Error("unreachable");
   await work(50);
   expect((await terminal("ann@example.com", lost)).status).toBe("succeeded");
 

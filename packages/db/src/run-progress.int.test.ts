@@ -11,7 +11,7 @@ afterAll(() => t.drop());
 async function aRun(instruction = "add a card") {
   const doc = await t.createDocument("Progress");
   const run = await t.db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: undefined });
-  if (run === undefined || typeof run === "string") throw new Error(`no run: ${String(run)}`);
+  if (run === undefined || typeof run === "string" || !("id" in run)) throw new Error(`no run: ${JSON.stringify(run)}`);
   return { run, doc, key: { queue: "ai" as const, jobId: run.id, orgId: doc.orgId } };
 }
 const step = (detail: string, ok = true) => ({ tool: "add_node", ok, detail });
@@ -62,5 +62,5 @@ test("the newest run is the document's own, in this org only; null when the AI w
   const { doc: busy } = await aRun("first");
   await t.db.forOrg(busy.orgId).cancelRun(busy.id, ((await t.db.forOrg(busy.orgId).getLatestRun(busy.id)) ?? { id: "" }).id);
   const second = await t.db.forOrg(busy.orgId).createRun({ documentId: busy.id, instruction: "second", createdBy: undefined });
-  expect(await t.db.forOrg(busy.orgId).getLatestRun(busy.id)).toMatchObject({ id: typeof second === "object" ? second.id : "", instruction: "second" });
+  expect(await t.db.forOrg(busy.orgId).getLatestRun(busy.id)).toMatchObject({ id: typeof second === "object" && "id" in second ? second.id : "", instruction: "second" });
 });

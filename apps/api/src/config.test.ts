@@ -71,3 +71,12 @@ test("the sign-in cookie is Secure everywhere except development, and unset NODE
   expect(loadConfig({ ...rest, DATABASE_URL: url, NODE_ENV: "test" }).signIn.secureCookie).toBe(true);
   expect(loadConfig({ ...rest, DATABASE_URL: url, NODE_ENV: "development" }).signIn.secureCookie).toBe(false);
 });
+
+test("F31: AI runs per org per hour, decimal digits only, 60 when unset or empty", () => {
+  expect(loadConfig({ ...rest, DATABASE_URL: url }).aiRunLimit).toEqual({ limit: 60, windowSeconds: 3600 });
+  expect(loadConfig({ ...rest, DATABASE_URL: url, AI_RUNS_PER_HOUR: "" }).aiRunLimit.limit).toBe(60);
+  expect(loadConfig({ ...rest, DATABASE_URL: url, AI_RUNS_PER_HOUR: "5" }).aiRunLimit).toEqual({ limit: 5, windowSeconds: 3600 });
+  for (const bad of ["0", "-1", "1.5", "1e3", "0x10", "ten", "100001"]) {
+    expect(() => loadConfig({ ...rest, DATABASE_URL: url, AI_RUNS_PER_HOUR: bad }), bad).toThrow(/AI_RUNS_PER_HOUR/);
+  }
+});

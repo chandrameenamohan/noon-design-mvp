@@ -3,6 +3,7 @@ import { HealthResponse, type ErrorBody, type Org, type User } from "@noon/contr
 import { createDocument, listOrgs, signIn, signOut, signUp, whoAmI } from "./api.ts";
 import { AuditView } from "./AuditView.tsx";
 import { Canvas } from "./Canvas.tsx";
+import { UsageView } from "./UsageView.tsx";
 
 const selfCheck = HealthResponse.parse({ status: "ok", service: "web" });
 
@@ -15,12 +16,15 @@ const refusals: Partial<Record<ErrorBody["error"], string>> = {
 };
 
 export function App() {
-  // ponytail: the address bar is the router. ?doc=<id> is a document, ?audit=<orgId> an org's audit trail; anything else is home.
+  // ponytail: the address bar is the router. ?doc=<id> is a document, ?audit=<orgId> an org's audit trail, ?usage=<orgId>
+  // what its AI runs cost; anything else is home.
   const params = new URLSearchParams(location.search);
   const documentId = params.get("doc");
   if (documentId) return <Canvas documentId={documentId} />;
   const auditOrg = params.get("audit");
   if (auditOrg) return <AuditView orgId={auditOrg} />;
+  const usageOrg = params.get("usage");
+  if (usageOrg) return <UsageView orgId={usageOrg} />;
   return <Home />;
 }
 
@@ -70,7 +74,7 @@ function Home() {
               <h2 id="orgs-heading">Your organisations</h2>
               <ul>
                 {orgs.map((org) => (
-                  <li key={org.id}><a href={`/?audit=${org.id}`}>Audit trail of {org.name}</a></li>
+                  <li key={org.id}><a href={`/?audit=${org.id}`}>Audit trail of {org.name}</a>{" · "}<a href={`/?usage=${org.id}`}>AI usage of {org.name}</a></li>
                 ))}
               </ul>
             </section>

@@ -46,4 +46,7 @@ input:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
 .audit { border-collapse: collapse; background: #fff; width: 100%; max-width: 72rem; }
 .audit caption { text-align: start; padding-block: 0.5rem; color: #3d4654; }
 .audit th, .audit td { border: 1px solid #c9ced6; padding: 0.4rem 0.6rem; text-align: start; vertical-align: top; overflow-wrap: anywhere; }
+.usage { margin-block-end: 1.5rem; }
+.usage th[scope="row"] { font-weight: normal; }
+.usage .number { text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: normal; }
 a:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }

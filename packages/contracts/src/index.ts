@@ -208,10 +208,23 @@ export const MAX_COST_USD = 999_999.999_999;
 /** What one piece of work consumed. `costUsd` is the provider's ESTIMATE; under a subscription nothing is charged per run. */
 export const UsageAmount = z.object({ model: z.string().min(1).max(100), inputTokens: Tokens, outputTokens: Tokens, cacheReadTokens: Tokens, cacheWriteTokens: Tokens, costUsd: z.number().min(0).max(MAX_COST_USD) });
 export type UsageAmount = z.infer<typeof UsageAmount>;
-/** `runId` and `documentId` are null once the run or the document is gone: what was spent stays on record. */
-const UsageRecord = UsageAmount.extend({ id: Id, orgId: Id, runId: Id.nullable(), documentId: Id.nullable(), kind: z.enum(["ai_run"]), createdAt: Timestamp });
+/** Who ran it: null once that user is deleted. Their email as it is NOW (the usage row keeps only the id). */
+const UsageUser = { userId: Id.nullable(), email: User.shape.email.nullable() };
+/**
+ * `runId` and `documentId` are null once the run or the document is gone: what was spent stays on record.
+ * One record is one run (a run is billed once).
+ */
+const UsageRecord = UsageAmount.extend({ id: Id, orgId: Id, runId: Id.nullable(), documentId: Id.nullable(), ...UsageUser, kind: z.enum(["ai_run"]), createdAt: Timestamp });
+const UsageSum = UsageAmount.omit({ model: true }).extend({ runs: Tokens });
+/**
+ * F31: GET /orgs/:orgId/usage. Totals over everything, the same per user (most expensive first) and per UTC day
+ * (newest first, the latest 31 days that had any), and one page of the runs, newest first. All of it read from one
+ * snapshot, so the parts always add up.
+ */
 export const UsageReport = z.object({
-  totals: UsageAmount.omit({ model: true }).extend({ runs: Tokens }),
+  totals: UsageSum,
+  byUser: z.array(UsageSum.extend(UsageUser)),
+  byDay: z.array(UsageSum.extend({ day: z.iso.date() })),
   items: z.array(UsageRecord),
   nextCursor: z.string().nullable(),
 });
@@ -241,8 +254,10 @@ export type AuditPage = z.infer<typeof AuditPage>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "idempotency_key_reused", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "idempotency_key_reused", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "rate_limited", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
+  /** With 429 rate_limited (F31): the same number as the Retry-After header, for a client that reads only the body. */
+  retryAfterSeconds: z.number().int().min(1).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
 

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { syncNodesField, type SyncNodes } from "@noon/lease";
 import { DatabaseUrl, parseEnv, port } from "@noon/process/env";
+import type { Rule } from "@noon/db";
 import { RedisUrl } from "@noon/queue";
 
 const Env = z.object({
@@ -35,19 +36,28 @@ const Env = z.object({
   // Unset means production: the safe side. Anything that relaxes security must be asked for by name.
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
   PORT: port(3000),
+  // F31: AI runs an org may start per hour, whatever instance it asks. Decimal digits; unset or empty: 60.
+  AI_RUNS_PER_HOUR: z
+    .string()
+    .optional()
+    .transform((value) => (value === undefined || value === "" ? "60" : value))
+    .pipe(z.string().regex(/^\d+$/, "AI_RUNS_PER_HOUR must be decimal digits").transform(Number).pipe(z.number().int().min(1).max(100_000))),
 });
 
 export type SessionConfig = { secret: string; sync: SyncNodes; ttlSeconds: number };
-type Config = { databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; signIn: { ttlSeconds: number; secureCookie: boolean }; previewOrigin: string | undefined; webhookSecret: string | undefined };
+type Config = { aiRunLimit: Rule; databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; signIn: { ttlSeconds: number; secureCookie: boolean }; previewOrigin: string | undefined; webhookSecret: string | undefined };
 
 // Long enough to open a socket, short enough that a leaked token is useless almost at once.
 const SESSION_TTL_SECONDS = 60;
 /** How long a sign-in lasts (E8.1). Fixed at sign-in, never slid: checking a session must stay a pure read. */
 export const SIGN_IN_TTL_SECONDS = 7 * 24 * 60 * 60;
+/** F31: the default AI run limit, per org. ponytail: one limit for every org; upgrade: a column on orgs when plans differ. */
+export const AI_RUN_LIMIT: Rule = { limit: 60, windowSeconds: 3600 };
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const parsed = parseEnv(Env, env);
   return {
+    aiRunLimit: { limit: parsed.AI_RUNS_PER_HOUR, windowSeconds: AI_RUN_LIMIT.windowSeconds },
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     port: parsed.PORT,

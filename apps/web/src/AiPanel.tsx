@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Run } from "@noon/contracts";
 import { cancelRun, readLatestRun, readRun, startRun } from "./api.ts";
 import { stepText } from "./progress.ts";
+import { waitWords } from "./usage.ts";
 
 // Why a run failed, in the user's words. The vocabulary is OPEN (the worker may name a reason this
 // build has never heard of), so an unknown name gets an honest general sentence, never a blank.
@@ -49,7 +50,11 @@ export function AiPanel({ documentId }: { documentId: string }) {
   const start = (): void => {
     setProblem("");
     startRun(documentId, instruction).then(
-      (started) => { if (started === "busy") setProblem("The AI is already working on this document. Wait for it to finish, or cancel it."); else setRun(started); },
+      (started) => {
+        if (started === "busy") setProblem("The AI is already working on this document. Wait for it to finish, or cancel it.");
+        else if ("retryAfterSeconds" in started) setProblem(`This organisation has started as many AI runs as it may for now. Try again in ${waitWords(started.retryAfterSeconds)}.`);
+        else setRun(started);
+      },
       () => { setProblem("The run could not be started. Check the instruction (at most 4,000 characters) and try again."); },
     );
   };

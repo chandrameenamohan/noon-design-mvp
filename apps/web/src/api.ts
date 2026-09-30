@@ -1,4 +1,4 @@
-import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, User, Workspace } from "@noon/contracts";
+import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, UsageReport, User, Workspace } from "@noon/contracts";
 import { z } from "zod";
 
 // The caller is whoever signed in (E8.1): the session is an HttpOnly cookie the browser sends by itself on
@@ -16,6 +16,20 @@ class Refused extends Error {
   }
 }
 
+/** F31: "not now": over a rate limit. Asking again after `retryAfterSeconds` may work; asking sooner will not. */
+class Limited extends Error {
+  readonly retryAfterSeconds: number;
+  constructor(message: string, retryAfterSeconds: number) {
+    super(message);
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+/** Retry-After as whole seconds (at least one); a missing or odd header reads as a minute. */
+const retryAfter = (res: Response): number => {
+  const seconds = Number(res.headers.get("retry-after"));
+  return Number.isInteger(seconds) && seconds >= 1 ? seconds : 60;
+};
+
 /** POSTs and checks the ANSWER against the shared contract: the server is another program, not a type. */
 async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown, headers: Record<string, string> = {}): Promise<z.infer<S>> {
   const res = await fetch(`/api${path}`, {
@@ -23,21 +37,23 @@ async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown
     headers: { ...devHeaders, ...headers, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new Refused(`POST ${path} answered ${String(res.status)}`, res.status);
+  if (res.status === 429) throw new Limited(`POST ${path} answered 429`, retryAfter(res));
+  if (res.status >= 400 && res.status < 500 && res.status !== 408) throw new Refused(`POST ${path} answered ${String(res.status)}`, res.status);
   if (!res.ok) throw new Error(`POST ${path} answered ${String(res.status)}`);
   return schema.parse(await res.json());
 }
 
 /**
  * F27: a POST that makes a job. One press, one Idempotency-Key: when the answer is lost or is a 5xx, the retry sends
- * the same key and the api answers with the job the first attempt made, never a second one. A refusal is not retried.
+ * the same key and the api answers with the job the first attempt made, never a second one. A refusal is not retried,
+ * and neither is a rate limit (F31): the same request a moment later is refused again.
  */
 async function postJob<S extends z.ZodType>(path: string, schema: S, body?: unknown): Promise<z.infer<S>> {
   const key = { "idempotency-key": crypto.randomUUID() };
   try {
     return await post(path, schema, body, key);
   } catch (problem) {
-    if (problem instanceof Refused) throw problem;
+    if (problem instanceof Refused || problem instanceof Limited) throw problem;
     return post(path, schema, body, key);
   }
 }
@@ -85,12 +101,16 @@ export async function openSession(documentId: string): Promise<SessionResponse |
 }
 
 // --- AI runs (F9, F10) -----------------------------------------------------------------------------
-/** "busy": this document already has a run going (409). Anything else that fails is thrown. */
-export async function startRun(documentId: string, instruction: string): Promise<Run | "busy"> {
+/**
+ * "busy": this document already has a run going (409). `{ retryAfterSeconds }`: the org has started as many runs as it
+ * may for now (429, F31). Anything else that fails is thrown.
+ */
+export async function startRun(documentId: string, instruction: string): Promise<Run | "busy" | { retryAfterSeconds: number }> {
   try {
     return await postJob(`/documents/${documentId}/runs`, Run, { instruction });
   } catch (problem) {
     if (problem instanceof Refused && problem.status === 409) return "busy";
+    if (problem instanceof Limited) return { retryAfterSeconds: problem.retryAfterSeconds };
     throw problem;
   }
 }
@@ -171,4 +191,18 @@ export async function readAudit(orgId: string, cursor?: string): Promise<AuditPa
   if (res.status === 404) return "gone";
   if (!res.ok) throw new Error(`GET audit answered ${String(res.status)}`);
   return AuditPage.parse(await res.json());
+}
+
+// --- Usage (F31) -----------------------------------------------------------------------------------
+/**
+ * What the org's AI runs consumed: totals, per person, per day and one page of the runs, parsed with the contract.
+ * "forbidden": a member who is not an owner (403). "gone": not found or not a member (404).
+ */
+export async function readUsage(orgId: string, cursor?: string): Promise<UsageReport | "forbidden" | "gone"> {
+  const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/usage${query}`, { headers: devHeaders });
+  if (res.status === 403) return "forbidden";
+  if (res.status === 404) return "gone";
+  if (!res.ok) throw new Error(`GET usage answered ${String(res.status)}`);
+  return UsageReport.parse(await res.json());
 }

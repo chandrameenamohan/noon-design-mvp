@@ -3,6 +3,9 @@ import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, IdempotencyKey, Member, Name, Org, Preview, PreviewOutput, Role, Run, RunProgress, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
+import { Rule, verdict, type Verdict } from "./limit.ts";
+
+export { Rule } from "./limit.ts";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
 
@@ -42,6 +45,11 @@ export type Db = {
   roleIn(orgId: string, documentId: string, userId: string): Promise<Role | undefined>;
   /** Resolves if the database answers a query, rejects otherwise. */
   ping(): Promise<void>;
+  /**
+   * E9.5 (F31): one hit on `key` under `rule`, counted in Postgres so every api instance shares the count (limit.ts).
+   * Rejects when the database is away: the caller decides whether that fails open or closed. E9.6's seam.
+   */
+  take(key: string, rule: Rule): Promise<Verdict>;
   /** Loading and saving a document's tree, for the sync server. Every call names the org. */
   documentStore(): DocumentStore;
   /** Claiming and finishing jobs, for the worker. Every call names the org. */
@@ -197,8 +205,11 @@ type OrgScope = {
    * Undefined when the document does not exist in THIS org; "busy" when it already has an unfinished run. The run starts as `queued`.
    * F27: with an `idempotencyKey` (and a `createdBy`, its scope), the same key again answers the run it made, as that row
    * now is; "key_reused" when that key asked for something else.
+   * F31: with a `limit`, the run is one hit on the org's AI run limit, in the SAME transaction as the insert: over it,
+   * `{ retryAfterSeconds }` and no run. Only a run that is made is counted (busy, gone, over the limit: rolled back), and
+   * a replayed key is answered with its run without a hit, so a retry is never refused for the run it already made.
    */
-  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined; idempotencyKey?: string | undefined }): Promise<Run | "busy" | "key_reused" | undefined>;
+  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined; idempotencyKey?: string | undefined; limit?: Rule | undefined }): Promise<Run | "busy" | "key_reused" | { retryAfterSeconds: number } | undefined>;
   getRun(documentId: string, id: string): Promise<Run | undefined>;
   /** F30: the document's newest run (what a reloaded page picks up); null when it never had one, undefined when there is no such document in THIS org. */
   getLatestRun(documentId: string): Promise<Run | null | undefined>;
@@ -224,7 +235,7 @@ type OrgScope = {
   getShip(documentId: string): Promise<Ship | null | undefined>;
   /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
   cancelRun(documentId: string, id: string): Promise<Run | undefined>;
-  /** Everything this org has consumed: totals over all of it, and one page of the records. Undefined = a bad cursor. */
+  /** Everything this org has consumed: totals, per user, per UTC day, and one page of the runs, newest first, from one snapshot. Undefined = a bad cursor. */
   usage(page?: PageInput): Promise<UsageReport | undefined>;
   /** E8.4 (F26): one page of this org's audit trail, newest first. Undefined = a bad cursor. Nothing here changes an entry. */
   audit(page?: PageInput): Promise<Page<AuditEntry> | undefined>;
@@ -287,12 +298,22 @@ const RunRow = z
 const count = z.string().regex(/^\d+$/).transform(Number);
 const money = z.string().regex(/^\d+(\.\d+)?$/).transform(Number);
 const UsageRow = z
-  .object({ id: z.string(), org_id: z.string(), job_id: z.string().nullable(), document_id: z.string().nullable(), kind: z.string(), model: z.string(), input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money, created_at: timestamp })
+  .object({ id: z.string(), org_id: z.string(), job_id: z.string().nullable(), document_id: z.string().nullable(), user_id: z.string().nullable(), email: z.string().nullable(), kind: z.string(), model: z.string(), input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money, created_at: timestamp })
   .transform((r): UsageReport["items"][number] =>
-    UsageReport.shape.items.element.parse({ id: r.id, orgId: r.org_id, runId: r.job_id, documentId: r.document_id, kind: r.kind, model: r.model, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd, createdAt: r.created_at }));
-const UsageTotalsRow = z
-  .object({ runs: count, input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money })
-  .transform((r): UsageReport["totals"] => ({ runs: r.runs, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd }));
+    UsageReport.shape.items.element.parse({ id: r.id, orgId: r.org_id, runId: r.job_id, documentId: r.document_id, userId: r.user_id, email: r.email, kind: r.kind, model: r.model, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd, createdAt: r.created_at }));
+/** The sums every part of the usage report shares, as text (bigint and numeric sums arrive as strings anyway). */
+const USAGE_SUMS =
+  "count(*)::text as runs, coalesce(sum(input_tokens), 0)::text as input_tokens, coalesce(sum(output_tokens), 0)::text as output_tokens, " +
+  "coalesce(sum(cache_read_tokens), 0)::text as cache_read_tokens, coalesce(sum(cache_write_tokens), 0)::text as cache_write_tokens, coalesce(sum(cost_usd), 0)::text as cost_usd";
+const UsageSums = z.object({ runs: count, input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money });
+const sumsOf = (r: z.infer<typeof UsageSums>): UsageReport["totals"] => ({ runs: r.runs, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd });
+const UsageTotalsRow = UsageSums.transform(sumsOf);
+const UsageUserRow = UsageSums.extend({ user_id: z.string().nullable(), email: z.string().nullable() })
+  .transform((r): UsageReport["byUser"][number] => UsageReport.shape.byUser.element.parse({ ...sumsOf(r), userId: r.user_id, email: r.email }));
+const UsageDayRow = UsageSums.extend({ day: z.string() }).transform((r): UsageReport["byDay"][number] => UsageReport.shape.byDay.element.parse({ ...sumsOf(r), day: r.day }));
+/** How many users and days the usage report lists. ponytail: a cap, not paging; ceiling: an org with more users than this sees its most expensive 100. */
+const USAGE_USERS = 100;
+const USAGE_DAYS = 31;
 const JobRow = z
   .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.enum(QUEUES), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable(), attempts: z.number().int() })
   .transform((r): Job & { attempt: number } => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined, attempt: r.attempts }));
@@ -364,12 +385,12 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     return result.rows.map((row) => parser.parse(row));
   }
   /** `from` names the paged table as alias `t`; `where` must be ready for " and ..."; the cursor adds two params. */
-  async function page<T>(parser: z.ZodType<T>, from: string, where: string, params: unknown[], input: PageInput = {}, newestFirst = false): Promise<Page<T> | undefined> {
+  async function page<T>(parser: z.ZodType<T>, from: string, where: string, params: unknown[], input: PageInput = {}, newestFirst = false, via: Pool | PoolClient = pool): Promise<Page<T> | undefined> {
     const limit = input.limit ?? 50;
     const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
     if (input.cursor !== undefined && after === undefined) return undefined;
     const n = params.length;
-    const result = await pool.query<QueryResultRow & { cursor_ts: string; id: string }>(
+    const result = await via.query<QueryResultRow & { cursor_ts: string; id: string }>(
       `select t.*, t.created_at::text as cursor_ts from ${from} where ${where}` +
         (after ? ` and (t.created_at, t.id) ${newestFirst ? "<" : ">"} ($${String(n + 1)}::timestamptz, $${String(n + 2)}::uuid)` : "") +
         (newestFirst ? " order by t.created_at desc, t.id desc" : " order by t.created_at, t.id") +
@@ -383,15 +404,14 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       nextCursor: result.rows.length > limit && last ? encodeCursor(last.cursor_ts, last.id) : null,
     };
   }
-  /** `work` in one transaction that holds the advisory lock named `lock`: whatever else takes that lock waits its turn. */
-  async function inTurn<T>(lock: string, work: (client: PoolClient) => Promise<T>): Promise<T> {
+  /** `work` in one transaction, committed only when `keep` says so (rolled back otherwise, as on a throw). */
+  async function inTx<T>(work: (client: PoolClient) => Promise<T>, keep: (result: T) => boolean = () => true, begin = "begin"): Promise<T> {
     const client = await pool.connect();
     let broken: Error | undefined;
     try {
-      await client.query("begin");
-      await client.query("select pg_advisory_xact_lock(hashtext($1))", [lock]);
+      await client.query(begin);
       const result = await work(client);
-      await client.query("commit");
+      await client.query(keep(result) ? "commit" : "rollback");
       return result;
     } catch (err) {
       await client.query("rollback").catch(() => undefined);
@@ -400,6 +420,29 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     } finally {
       client.release(broken); // after a failure the connection's transaction state is unknown: destroyed
     }
+  }
+  /** `work` in one transaction that holds the advisory lock named `lock`: whatever else takes that lock waits its turn. */
+  const inTurn = <T>(lock: string, work: (client: PoolClient) => Promise<T>): Promise<T> =>
+    inTx(async (client) => {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [lock]);
+      return work(client);
+    });
+  /**
+   * One hit on a rate limit (limit.ts). `greatest`: a hit that computed its window just before the boundary but reached
+   * the row after one computed just past it must not move the row back a window (and reset its count).
+   */
+  async function take(key: string, rule: Rule, via: Pool | PoolClient = pool): Promise<Verdict> {
+    const { windowSeconds } = Rule.parse(rule);
+    const hit = await one(
+      z.object({ hits: z.number().int(), win: count, now: z.number() }),
+      "insert into rate_limits as r (key, win, hits) values ($1, floor(extract(epoch from clock_timestamp()) / $2)::bigint, 1) " +
+        "on conflict (key) do update set hits = case when r.win >= excluded.win then r.hits + 1 else 1 end, win = greatest(r.win, excluded.win) " +
+        "returning hits, win::text, extract(epoch from clock_timestamp())::float8 as now",
+      [z.string().min(1).max(200).parse(key), windowSeconds],
+      via,
+    );
+    if (!hit) throw new Error("rate limit: no row");
+    return verdict({ hits: hit.hits, window: hit.win, now: hit.now }, rule);
   }
   /** One statement, returning ids, holding the org's preview lock: one at a time per org. */
   const inOrgTurn = (orgId: string, sql: string, params: unknown[]): Promise<{ id: string }[]> =>
@@ -453,6 +496,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     ping: async () => {
       await pool.query("select 1");
     },
+
+    take: (key, rule) => take(key, rule),
 
     upsertUser: async ({ email, name }) =>
       exactlyOne(
@@ -902,12 +947,19 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             : { items: [], nextCursor: null },
         getDocument: async (id) =>
           orgExists && isId(id) ? one(DocumentRow, "select * from documents where org_id = $1 and id = $2", [orgId, id]) : undefined,
-        createRun: async ({ documentId, instruction, createdBy, idempotencyKey }) => {
+        createRun: async ({ documentId, instruction, createdBy, idempotencyKey, limit }) => {
           const input = CreateRunBody.parse({ instruction }); // the same contract the reader uses, BEFORE the write
           if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
-          if (idempotencyKey === undefined) return insertRun(documentId, input, createdBy, pool);
+          // F31: the hit first, then the run, in one transaction that commits only if the run was made. The hit holds the
+          // org's counter row until then, so an org's run starts take turns (for the length of one insert).
+          const make = async (via: PoolClient): Promise<Run | "busy" | { retryAfterSeconds: number } | undefined> => {
+            const allowed = limit === undefined ? ({ ok: true } as const) : await take(`ai_run:${orgId}`, limit, via);
+            return allowed.ok ? insertRun(documentId, input, createdBy, via) : { retryAfterSeconds: allowed.retryAfterSeconds };
+          };
+          const made = (run: Awaited<ReturnType<typeof make>>): string | undefined => (typeof run === "object" && "id" in run ? run.id : undefined);
+          if (idempotencyKey === undefined) return inTx(make, (run) => made(run) !== undefined);
           if (createdBy === undefined) throw new Error("an idempotency key needs the user it belongs to");
-          const keyed = await withKey(createdBy, idempotencyKey, { queue: "ai", documentId, input }, (via) => insertRun(documentId, input, createdBy, via), (run) => (typeof run === "object" ? run.id : undefined));
+          const keyed = await withKey(createdBy, idempotencyKey, { queue: "ai", documentId, input }, make, made);
           if (keyed === "key_reused") return keyed;
           return "made" in keyed ? keyed.made : one(RunRow, "select * from jobs where org_id = $1 and id = $2 and queue = 'ai'", [orgId, keyed.replay]);
         },
@@ -930,16 +982,29 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         },
         usage: async (input) => {
           const none = { runs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
-          if (!orgExists) return { totals: none, items: [], nextCursor: null };
-          const items = await page(UsageRow, "usage t", "t.org_id = $1", [orgId], input);
-          if (!items) return undefined;
-          const totals = await exactlyOne(
-            UsageTotalsRow,
-            "select count(*)::text as runs, coalesce(sum(input_tokens), 0)::text as input_tokens, coalesce(sum(output_tokens), 0)::text as output_tokens, coalesce(sum(cache_read_tokens), 0)::text as cache_read_tokens, " +
-              "coalesce(sum(cache_write_tokens), 0)::text as cache_write_tokens, coalesce(sum(cost_usd), 0)::text as cost_usd from usage where org_id = $1",
-            [orgId],
-          );
-          return { totals, ...items };
+          if (!orgExists) return { totals: none, byUser: [], byDay: [], items: [], nextCursor: null };
+          // One REPEATABLE READ snapshot for every part (the E3.4 finding): a run recorded between two of these reads
+          // would otherwise show in the totals and not in the items. Read only: nothing here may write.
+          return inTx(async (client) => {
+            // The user's email as it is now; a deleted user's runs keep their cost, and show no one.
+            const items = await page(UsageRow, "(select usage.*, users.email from usage left join users on users.id = usage.user_id) t", "t.org_id = $1", [orgId], input, true, client);
+            if (!items) return undefined;
+            const totals = await one(UsageTotalsRow, `select ${USAGE_SUMS} from usage where org_id = $1`, [orgId], client);
+            const byUser = await rows(
+              UsageUserRow,
+              `select s.*, users.email from (select user_id, ${USAGE_SUMS}, sum(cost_usd) as cost from usage where org_id = $1 group by user_id) s ` +
+                "left join users on users.id = s.user_id order by s.cost desc, users.email nulls last limit $2",
+              [orgId, USAGE_USERS],
+              client,
+            );
+            const byDay = await rows(
+              UsageDayRow,
+              `select to_char(created_at at time zone 'UTC', 'YYYY-MM-DD') as day, ${USAGE_SUMS} from usage where org_id = $1 group by 1 order by 1 desc limit $2`,
+              [orgId, USAGE_DAYS],
+              client,
+            );
+            return { totals: totals ?? none, byUser, byDay, ...items };
+          }, () => true, "begin transaction isolation level repeatable read read only");
         },
         audit: async (input) => (orgExists ? page(AuditRow, "audit_log t", "t.org_id = $1", [orgId], input, true) : { items: [], nextCursor: null }),
         openPreview: async ({ documentId, createdBy }) => {

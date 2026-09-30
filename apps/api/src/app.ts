@@ -28,11 +28,11 @@ import {
   type SessionResponse,
   type User,
 } from "@noon/contracts";
-import type { Db } from "@noon/db";
+import type { Db, Rule } from "@noon/db";
 import { syncRouter, type Holder } from "@noon/lease";
 import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
-import { SIGN_IN_TTL_SECONDS, type SessionConfig } from "./config.ts";
+import { AI_RUN_LIMIT, SIGN_IN_TTL_SECONDS, type SessionConfig } from "./config.ts";
 import { SESSION_COOKIE, type Identify } from "./identity.ts";
 import { dummyHash, hashPassword, hashToken, isSessionToken, newSessionToken, verifyPassword } from "./password.ts";
 import { readPush, signatureMatches } from "./webhook.ts";
@@ -46,6 +46,11 @@ type ErrorCode = ErrorBody["error"];
 const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
+/** F31: over a rate limit. The wait is in the Retry-After header (RFC 9110, whole seconds) and, the same number, in the body. */
+const limited = (c: Context, retryAfterSeconds: number) => {
+  c.header("retry-after", String(retryAfterSeconds));
+  return c.json({ error: "rate_limited", retryAfterSeconds } satisfies ErrorBody, 429);
+};
 
 /** Every guard `need` made, and the role it asks for: how app.test.ts finds a route that declares none. */
 export const GUARDS = new WeakMap<object, Role>();
@@ -132,6 +137,8 @@ export type AppDeps = {
    * E9.6's limiter. ponytail: allows everything until then; ceiling: an online guesser pays only scrypt's cost per try.
    */
   allowAttempt?: (key: string) => Promise<boolean>;
+  /** F31: how many AI runs an org may start per window (AI_RUNS_PER_HOUR). Counted in Postgres: every api instance shares it. */
+  aiRunLimit?: Rule;
   /**
    * E8.2 (F24): tells every sync node that this user's role in this org changed, or a share of one of its documents
    * (E8.3), over Redis pub/sub, so their live sessions keep to it within the 10 s F24 allows. A seam like `enqueue`;
@@ -151,7 +158,7 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true), accessChanged = () => Promise.resolve() }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true), aiRunLimit = AI_RUN_LIMIT, accessChanged = () => Promise.resolve() }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
   const route = syncRouter({ nodes: sessions.sync, owner, alive });
   // ponytail: announced once, best effort; ceiling: with Redis away here (but not at the sync nodes, which re-read
@@ -324,8 +331,8 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     return doc ? c.json(doc) : notFound(c);
   });
 
-  // F12: what this org's AI runs have consumed. Behind the org middleware like everything else about an
-  // org, so another org's usage is the usual 404. ponytail: totals over all time; periods and limits are E9.5.
+  // F12, F31: what this org's AI runs have consumed, in total, per user, per day and per run. Behind the org middleware
+  // like everything else about an org, so another org's usage is the usual 404.
   // Owners only (E8.2): what the org spends is the business of whoever runs it, not of everyone who can look.
   org.get("/usage", need("owner"), async (c) => {
     const report = await c.var.scope.usage(pageQuery(c));
@@ -403,14 +410,18 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // document and costs money: editors and owners. Its ops carry its creator's role into the room (E8.2).
   // F27: a retry with the same Idempotency-Key answers 201 with the run the first request made, read from its row
   // (enqueued again: BullMQ drops an add for a job id it holds, and a claimed job cannot be claimed twice).
+  // F31: each run made is one hit on the org's limit, counted with the insert: over it, 429 with Retry-After, and the
+  // key is not used up (the refused run was rolled back with its claim). A replay is answered without a hit. The count
+  // lives in Postgres, like the run: if the database is away, no run can be made anyway, so the limit cannot fail open.
   document.post("/runs", need("editor"), async (c) => {
     const { doc } = c.var;
     const key = idempotencyKey(c);
     const { instruction } = await body(c, CreateRunBody);
-    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id, idempotencyKey: key });
+    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id, idempotencyKey: key, limit: aiRunLimit });
     if (!run) return notFound(c); // the document was deleted in between
     if (run === "busy") return fail(c, 409, "run_in_progress");
     if (run === "key_reused") return fail(c, 422, "idempotency_key_reused");
+    if ("retryAfterSeconds" in run) return limited(c, run.retryAfterSeconds);
     try {
       await enqueue({ queue: "ai", jobId: run.id, orgId: run.orgId });
     } catch (err) {
