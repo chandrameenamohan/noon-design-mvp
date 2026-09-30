@@ -11,6 +11,7 @@ import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
 import { watchFence } from "./fence.ts";
+import { reportSlow } from "./slow.ts";
 import { createRoom, type Peer, type RateLimit, type Room, type RoomLimits } from "./room.ts";
 import { decodeSnapshot, snapshotter, type SnapshotCadence, type SnapshotStore } from "./snapshots.ts";
 
@@ -31,6 +32,8 @@ export type RunningSyncServer = {
 
 const PROTOCOL = "noon.v1";
 export const MAX_FRAME_BYTES = 64 * 1024; // an op is small; the contract caps props, this caps the frame BEFORE it is parsed
+// A journal call slower than this is logged: the e2e bound on a whole edit, browser to browser, is 200 ms.
+const SLOW_JOURNAL_MS = 250;
 const TOKEN_LEEWAY_SECONDS = 5; // the api signs, this process verifies: two clocks never agree exactly
 const DOCUMENT_PATH = /^\/documents\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 // 4000-4999 are ours to define. They mirror the HTTP status a REST call would have had.
@@ -303,14 +306,16 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
     // A fenced one never lands: the room is dropped, not healed (a newer owner is writing).
     let fenced = false;
+    // An edit reaches the other browsers only after these answer: a slow one is logged, with which it was.
+    const timed = reportSlow(SLOW_JOURNAL_MS, (what, ms) => { log(documentId, `journal ${what} took ${String(ms)} ms`, "warn"); });
     const journal = {
-      append: watchFence((op: SequencedOp) => bounded(store.append(orgId, documentId, op, fence?.claim)), () => {
+      append: watchFence((op: SequencedOp) => timed("append", bounded(store.append(orgId, documentId, op, fence?.claim))), () => {
         fenced = true;
         fence?.onFenced();
       }),
-      find: (actorId: string, opId: string) => bounded(store.find(orgId, documentId, actorId, opId)),
-      everAdded: (nodeId: string) => bounded(store.everAdded(orgId, documentId, nodeId)),
-      since: (after: number) => bounded(store.since(orgId, documentId, after)),
+      find: (actorId: string, opId: string) => timed("find", bounded(store.find(orgId, documentId, actorId, opId))),
+      everAdded: (nodeId: string) => timed("everAdded", bounded(store.everAdded(orgId, documentId, nodeId))),
+      since: (after: number) => timed("since", bounded(store.since(orgId, documentId, after))),
     };
     const snapshotFrom = Math.max(stored.snapshotSeq, stored.seq);
     let snapshot: ReturnType<typeof snapshotter> | undefined;
@@ -379,8 +384,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     }));
   }
 
-  function log(documentId: string, message: string): void {
-    process.stderr.write(`${JSON.stringify({ level: "error", source: "sync", documentId, message })}\n`);
+  function log(documentId: string, message: string, level: "error" | "warn" = "error"): void {
+    process.stderr.write(`${JSON.stringify({ level, source: "sync", documentId, message })}\n`);
   }
 
   function bounded<T>(work: Promise<T>): Promise<T> {
