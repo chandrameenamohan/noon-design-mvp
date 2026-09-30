@@ -1,0 +1,111 @@
+<title>TypeScript Lesson Seven</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 to 7 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+/* Lessons 5 to 7: the verification status is a fact the reader must not miss, so it is red-bordered, not accent. */
+.status { border: 1px solid var(--bad); background: var(--bad-wash); padding: 12px 16px; margin: 24px 0; font-size: 0.95rem; }
+.status p { margin: 0 0 8px; max-width: none; } .status p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 7 · Epic 7</p>
+  <h1>Multi-node: the lease, the clock, and the fence</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, why a lease is a lock with a time on it and why that time may only be read from your own monotonic clock counting from the moment you sent; why a Lua script is the unit of atomicity in Redis and what breaks when the token is issued outside it; why heartbeats may route a peer but never decide who owns a room, and why a dead owner's lease is waited out rather than stolen; why a process paused past its lease cannot be stopped by any check it performs itself, and what Kleppmann's fencing token is; why the fence must sit in the same SQL statement as the write, and what <code>FOR UPDATE</code> does there; where this design sits against ZooKeeper, etcd and Redisson, and what it gives up under CAP; and you can point at the line of code for every claim.</p>
+
+  <div class="status">
+    <p><strong>Verification status, honestly.</strong> Every commit in this chapter passed lint, the type checker and the unit tests (holder parsing, <span class="mono">keepLease</span>, the routing table and router, <span class="mono">takeLease</span>, <span class="mono">watchFence</span>, peer-client's reroute on 4409, the config fields), and each guard was mutation-checked. The integration suites (<span class="mono">packages/lease index.int</span>, <span class="mono">api session.int</span>, <span class="mono">sync one-room-globally.int</span>, <span class="mono">one-room-join-race.int</span>, <span class="mono">failover.int</span>, <span class="mono">packages/db fence.int</span> including the 20-round real race and the naive control) and the three chaos runs (<span class="mono">kill-owner-failover</span>, <span class="mono">fenced zombie</span>, <span class="mono">fenced partition</span>) are written and committed and <em>have not been run</em>: the host was too loaded to run Docker suites beside other work. They run on <span class="mono">build/epics</span> before anything merges to <span class="mono">main</span>. Where this page says "measured", it was measured in <span class="mono">learning-tests/redis</span> or an earlier epic; where it says "the test asserts", the test exists and is unrun. Section 8 is the by-hand demo to run first.</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what is committed. Sections 2, 4 and 5 are the ones a distributed-systems interview will dig into; section 6 is the comparison you will be asked to make.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now two sync nodes (3001, 3003) behind one Redis, through toxiproxy<br>pnpm exec vitest run packages/lease/src/lease.test.ts apps/sync/src/fence.test.ts packages/peer-client/src/peer.test.ts&nbsp;&nbsp;# the pure halves<br>docker compose exec -T redis redis-cli --no-auth-warning GET lease:&lt;doc&gt;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "1:sync": token 1, owned by node sync</p>
+    <p>Try it, once the stack is up: section 8 walks the kill, the pause and the partition by hand, then the suites and the chaos runs, with the exact commands and what each should show.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-7/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-7/check.sh</span> shows your progress. Neither needs Docker.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> With two nodes, nothing on the screen says which one a canvas landed on. Carry the node id from the lease to the status line: <code>SessionResponse</code> gains an optional, validated <code>nodeId</code> (<code>packages/contracts</code>); <code>syncRouter</code> answers <code>{ wsUrl, nodeId }</code>, and a single node <code>{ wsUrl }</code> with no id at all (<code>packages/lease/src/lease.ts</code>); <code>/session</code> puts it in the response; peer-client exposes <code>nodeId</code> from its <em>last</em> session, so a peer sent elsewhere by a 4409 shows where it landed; <code>onNode(nodeId)</code> in <code>apps/web/src/reasons.ts</code> says "on sync-2"; the canvas shows it after "saved", as text. <span class="mono">make check</span> must stay green: the type checker will name every caller of the router's result (the api, the worker's <code>roomUrl</code>, <code>apps/sync/src/testing.ts</code>, the one-room integration tests, <code>failover.int</code>). That list is the drill.</p>
+      <p>Predict first: why must the field be optional rather than required, and what would a required field force on every deployment with one sync node?</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-7/d2-fenced-room/room.ts</span> is the room cut down to the fence (queue, claim, fenced append, drop) with one bug from this chapter planted in it. Its first test freezes the room between two round trips while another node claims the document and reads the journal. Read the failing assertion and say, before you open the code, which row is in the journal that the new owner's room has never seen, and what the new owner's next append does to a journal that holds it. The fix replaces two calls with one.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. A holder could trust its lease until "the renewal's reply arrived plus ttl", read from <code>Date.now()</code>. Instead it trusts until "the renewal was sent plus 0.9 ttl" on <code>performance.now()</code>, and the doc comment says this is "not safety". Defend all three choices, then say what the fourth mechanism is that makes it safe.</summary>
+        <p>Redis starts its expiry countdown when the command <em>arrives</em>, which is after we sent it; so a deadline counted from the send can never outlast Redis's, while one counted from the reply trusts the lease for a whole round trip longer than Redis will keep it, and under a slow network that is a window in which two nodes both believe they own the room. The 0.9 is the allowance for the two clocks running at slightly different rates. <code>performance.now()</code> is monotonic: it cannot jump when NTP corrects the wall clock, and a backwards jump of <code>Date.now()</code> would extend a deadline by exactly the jump. "Not safety" because none of this runs while the process is frozen: a pause of two seconds inside an <code>await</code> resumes with the flag still true and the next instruction already chosen, and the learning test measured the other node owning the room 1.7 s before the frozen one could notice. The fourth mechanism is the fence: the storage compares a token the writer received when it became the owner, in the statement that writes, so what a frozen process believes is irrelevant to what lands. The clock bounds <em>failover time</em>; the token gives <em>safety</em>; neither does the other's job.</p></details>
+      <details class="recall"><summary>2. When an owner's heartbeat stops, the other node could take the room at once. Instead it sends new peers to a live node that polls until the dead lease expires, up to about one ttl, and never steals. Why, and why is the same rule applied to a node's <em>own</em> previous lease?</summary>
+        <p>Because "stopped beating" is not "stopped writing". A killed node does neither; a paused node does neither and then wakes; a node cut off from Redis stops beating and keeps its Postgres connection. Stealing on a missed heartbeat would make the paused case the normal one: two nodes owning a room from the moment of the steal until the old one's clock runs out, and every op the old one accepts in that window an op its peers were told about that the fence must then refuse. Waiting for the expiry keeps the invariant that at most one node believes it owns the room at any moment, pauses aside, and turns the fence into the rare backstop it should be. Liveness therefore only chooses where a peer is <em>sent</em> (a wrong guess costs one 4409), and the lease alone says who owns. A node's own dead lease is the same case seen from inside: the previous run was killed mid-room, its lease is real until Redis lets it go, and the new run cannot renew a holder value it does not have, so the honest thing is to wait exactly as it would for a stranger's. Doing that on the server, with the peer held connecting, is also what bounds failover to one ttl rather than a ttl plus a client backoff.</p></details>
+      <details class="recall"><summary>3. The fence compares a random claim id in <code>insert ... select ... where fence_claim is not distinct from $9 for update</code>, and <code>claim</code> uses strictly <code>&lt;</code>. Why not read the claim first in TypeScript and then insert; why a claim id and not "token at least the largest seen"; why <code>&lt;</code> and not <code>&lt;=</code>; and what does <code>for update</code> buy?</summary>
+        <p>Read-then-write has an <code>await</code> between the two, and a process can be frozen for a minute inside an <code>await</code>: A reads its claim (valid), freezes, B claims and reads the journal, A wakes and inserts a row one past what B read. The naive control in <code>fence.int</code> performs exactly that and asserts the zombie row is in the journal. In one statement the check and the write cannot be separated by a pause. A token high-water mark fails for two reasons specific to this repo: the counter lives in Redis and a flush restarts it, so the floor from <code>fence_token</code> is needed to keep tokens rising at all; and even then one token can be issued twice (a node paused between acquire and claim, then a flush that reissues the number), so the thing an append carries is an id of <em>this one opening</em>, and the loser of two openings under an equal token cannot write. <code>&lt;</code> rather than <code>&lt;=</code> is the same case at the claim: with <code>&lt;=</code> both openings under token 7 would claim and both would hold a valid claim id. <code>for update</code> takes a row lock on the documents row so that an append and a claim serialise: the claim waits for an in-flight insert to commit (and the new owner's replay then contains the row), or the claim commits first and the blocked append re-evaluates its <code>where</code> against the updated row and inserts nothing. Without the lock the two could interleave at the statement level and the "waits, then is refused" test would not hold.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the three Lua scripts and what each one checks before it acts. Then name the four things a node does when its lease is lost or its append is fenced. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p><code>ACQUIRE</code> checks "nobody holds it" and then lifts the counter to the floor, <code>INCR</code>s a token and <code>SET</code>s with <code>PX</code>, all in one script; <code>RENEW</code> checks "the value is still exactly mine" and <code>PEXPIRE</code>s; <code>RELEASE</code> checks the same and <code>DEL</code>s. On a lost lease or a <code>Fenced</code> append, <code>drop</code>: marks the room <code>lost</code>, stops its snapshots, forgets the room (so the next peer asks Redis again), and closes every socket with 4409, which peer-client treats as "ask <code>/session</code> again".</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. Ten peers of a new document join at once, five to each node. What token does the winner hold, and why does that number mean anything?</p>
+      <button id="q1a" data-correct>1: a token is issued only on the branch of the one script that also does the <code>SET</code>, so losers cost nothing and "the counter moved by one" is a checkable fact</button><button id="q1b">10: every acquirer increments the counter</button><button id="q1c">Whichever <code>INCR</code> ran first; it varies</button><button id="q1d">0 until the first renewal</button>
+      <p class="why" hidden>The join-race test asserts <code>token: 1</code> after the race and <code>2</code> after the room closes and is taken again.</p></div>
+    <div class="quiz"><p class="q">2. A renewal is sent at 300 ms and answered at 1100 ms (ttl 1000). Until when does the holder trust the lease?</p>
+      <button id="q2a" data-correct>1200: sent + 0.9 ttl, because Redis started its countdown when the command arrived, after 300</button><button id="q2b">2000: reply + 0.9 ttl</button><button id="q2c">2100: reply + ttl</button><button id="q2d">1300: sent + ttl</button>
+      <p class="why" hidden>Counting from the reply would trust the lease for a whole round trip longer than Redis keeps it. The test with the slow renewal is the mutation check.</p></div>
+    <div class="quiz"><p class="q">3. The owner of a room stops beating. What does the other node do when a peer of that room arrives?</p>
+      <button id="q3a" data-correct>Holds the peer connecting and polls every ttl/10 until the lease expires, then takes the room; it never deletes or overwrites the dead lease</button><button id="q3b">Takes the lease at once: no heartbeat means dead</button><button id="q3c">Refuses with 4409 and lets the peer retry on its own backoff</button><button id="q3d">Opens a second room and merges later</button>
+      <p class="why" hidden>"Stopped beating" is not "stopped writing" (a paused node wakes). Liveness routes; the lease alone owns.</p></div>
+    <div class="quiz"><p class="q">4. Why does a room that is fenced <em>drop</em> (4409 to every peer) rather than go read-only and heal, as it does when Postgres is down?</p>
+      <button id="q4a" data-correct>A fenced room will never be allowed to write again: a newer owner holds the claim, so healing would ping for ever; its peers belong with the new owner</button><button id="q4b">Because read-only mode does not work with two nodes</button><button id="q4c">Because the snapshot would otherwise be lost</button><button id="q4d">It does go read-only; the drop is only for a lost lease</button>
+      <p class="why" hidden><code>watchFence</code> tells the server once; <code>onReadOnly</code> checks <code>fenced</code> so the heal loop never starts.</p></div>
+    <div class="quiz"><p class="q">5. Why is the fence check inside the <code>insert ... select ... where fence_claim is not distinct from $9 for update</code> statement rather than a <code>select</code> in TypeScript before the insert?</p>
+      <button id="q5a" data-correct>A process can be frozen inside the <code>await</code> between the two: it reads a valid claim, another node claims and reads the journal, and it wakes and inserts a row the new owner never sees; one statement cannot be split by a pause</button><button id="q5b">It saves one round trip</button><button id="q5c">Postgres refuses two statements on the same row</button><button id="q5d">TypeScript cannot compare uuids</button>
+      <p class="why" hidden>The naive control in <code>fence.int</code> performs the interleaving and asserts the zombie's row IS in the journal. Drill 2 plants it.</p></div>
+    <div class="quiz"><p class="q">6. Redis is flushed while both nodes run. Why do tokens keep rising, and why is that not enough on its own?</p>
+      <button id="q6a" data-correct>Every acquire passes a floor read from <code>documents.fence_token</code>, and the script lifts the counter to it before <code>INCR</code>; but one token can still be issued twice (paused between acquire and claim, then a flush), so the append compares an exact claim id and the claim uses strictly <code>&lt;</code></button><button id="q6b">The counter is persisted with AOF</button><button id="q6c">Postgres issues the tokens</button><button id="q6d">They do not; the nodes restart</button>
+      <p class="why" hidden>The lease integration test deletes the counter mid-test and asserts 43 follows 42; <code>fence.int</code> asserts a second claim under the same token is refused.</p></div>
+    <div class="quiz"><p class="q">7. What does <code>for update</code> add to the append statement?</p>
+      <button id="q7a" data-correct>A row lock on the documents row, so an append and a claim serialise: the claim waits for an in-flight insert, or the blocked append re-checks its <code>where</code> against the claimed row and inserts nothing</button><button id="q7b">It makes the insert faster</button><button id="q7c">It locks the op_journal table</button><button id="q7d">Nothing: it is required syntax for <code>insert ... select</code></button>
+      <p class="why" hidden>The test "an append racing an uncommitted claim waits for it, then is refused" holds a second connection's transaction open for 300 ms and asserts the append has not settled.</p></div>
+    <div class="quiz"><p class="q">8. What does this design give up, in CAP terms, and why is that the right side?</p>
+      <button id="q8a" data-correct>Availability for up to one ttl after an owner dies: nobody takes the room until the lease expires, and peers hold their edits; two rooms for one document would be a divergence lesson 2's design cannot repair, while peer-client already absorbs a pause</button><button id="q8b">Consistency: peers may briefly see different documents</button><button id="q8c">Nothing: Redis makes it both</button><button id="q8d">Durability: ops made during the ttl are dropped</button>
+      <p class="why" hidden><code>LEASE_TTL_MS</code> is the dial; the chaos run's budget is expressed in ttl so the test moves with it.</p></div>
+  </section>
+
+  <footer>Next: Lesson 8, after epic 8. Auth, tenancy, RBAC and audit: a real identity replaces the dev header, roles decide what a member may do in every route and in the room, and every change is written down with who made it.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>

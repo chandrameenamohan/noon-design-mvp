@@ -1,0 +1,1068 @@
+<title>TypeScript Lesson Seven</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+<style>
+:root {
+  --ground: #F6F7F9; --surface: #FFFFFF; --ink: #141922; --slate: #5A6473; --rule: #DCE0E7;
+  --accent: #2456E6; --accent-wash: #E5ECFF; --code-bg: #EEF1F6;
+  --good: #1C8556; --bad: #B3261E; --bad-wash: #FBECEA;
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+    --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+    --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #10141B; --surface: #181D27; --ink: #E6E9EF; --slate: #98A2B3; --rule: #2B3342;
+  --accent: #7FA0FF; --accent-wash: #1B2747; --code-bg: #141A24;
+  --good: #5CCB97; --bad: #FF8A80; --bad-wash: #2A1917;
+}
+* { box-sizing: border-box; }
+body { background: var(--ground); color: var(--ink); font: 400 19px/1.62 var(--serif);
+       padding-inline: 20px; padding-block: 56px 96px; }
+main { max-width: 44rem; margin-inline: auto; }
+.prose { max-width: 36rem; }
+.eyebrow { font: 500 12px/1 var(--mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0; }
+h1 { font: 600 clamp(2rem, 6vw, 2.9rem)/1.08 var(--sans); letter-spacing: -0.02em; margin: 14px 0 16px; text-wrap: balance; }
+h2 { font: 600 1.3rem/1.25 var(--sans); letter-spacing: -0.01em; margin: 72px 0 10px; text-wrap: balance; scroll-margin-top: 24px; }
+h2 code { font-size: 0.92em; }
+.lede { color: var(--slate); font-size: 1.12rem; margin: 0; max-width: 36rem; }
+p { margin: 0 0 16px; max-width: 36rem; }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.84em; }
+p code, td code, li code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+ul, ol { padding-left: 1.2em; margin: 0 0 16px; max-width: 36rem; }
+li { margin-bottom: 6px; }
+.toc { list-style: none; padding: 0; margin: 28px 0 0; display: grid; gap: 4px; font: 500 15px/1.5 var(--sans); }
+.toc a { text-decoration: none; } .toc a:hover { text-decoration: underline; }
+.aside { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 24px 0; font-size: 0.95rem; }
+.aside p { margin: 0 0 8px; } .aside p:last-child { margin: 0; }
+.label { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate); margin: 22px 0 6px; }
+.label .mono { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink); }
+.note { border-left: 2px solid var(--accent); padding-left: 14px; margin: 18px 0; font-size: 0.97rem; }
+.scroll { overflow-x: auto; margin: 0 0 8px; }
+pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border: 1px solid var(--rule); border-radius: 3px;
+      font: 400 13.5px/1.55 var(--mono); color: var(--ink); width: max-content; min-width: 100%; tab-size: 2; }
+pre code { font-size: inherit; }
+pre.out { background: var(--surface); color: var(--slate); border-style: dashed; }
+table { border-collapse: collapse; width: 100%; font: 400 15px/1.45 var(--serif); margin: 4px 0 8px; }
+th { font: 500 11px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--slate);
+     text-align: left; padding: 0 16px 8px 0; border-bottom: 1.5px solid var(--ink); white-space: nowrap; }
+td { padding: 9px 16px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; min-width: 9rem; }
+.break { border: 1px solid var(--bad); background: var(--bad-wash); padding: 4px 16px 12px; margin: 22px 0 0; border-radius: 3px; }
+.break .label { color: var(--bad); } .break pre { background: var(--surface); }
+.break p { font-size: 0.95rem; margin: 10px 0 0; }
+.recall { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; max-width: 36rem; }
+summary { cursor: pointer; font: 500 15px var(--sans); color: var(--accent); }
+.recall p { margin: 12px 0 0; font-size: 0.95rem; }
+#score { font: 500 13px var(--mono); color: var(--slate); min-height: 1.4em; margin: 0 0 4px; }
+.quiz { border-top: 1px solid var(--rule); padding: 22px 0 8px; display: grid; gap: 8px; max-width: 36rem; }
+.quiz .q { font: 500 1rem/1.4 var(--sans); margin: 0 0 4px; }
+.quiz button { text-align: left; padding: 11px 14px; font: 400 16px/1.35 var(--serif); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; cursor: pointer; }
+.quiz button:hover:not(:disabled) { border-color: var(--ink); }
+.quiz button:disabled { cursor: default; color: var(--slate); }
+.quiz button.right { border-color: var(--good); color: var(--good); font-weight: 600; }
+.quiz button.wrong { border-color: var(--bad); color: var(--bad); text-decoration: line-through; }
+.quiz .why { font-size: 0.92rem; color: var(--slate); margin: 4px 0 0; }
+footer { margin-top: 72px; padding-top: 20px; border-top: 1px solid var(--rule); font: 400 13px/1.6 var(--mono); color: var(--slate); max-width: 36rem; }
+@media print {
+  body { font-size: 11.5pt; padding: 0; background: #fff; }
+  main { max-width: none; } p, ul, ol, .lede, .prose, .recall, .quiz, footer { max-width: none; }
+  /* Paper cannot scroll sideways: wrap long code lines instead of clipping them. */
+  .scroll { overflow: visible; } pre { white-space: pre-wrap; overflow-wrap: anywhere; width: auto; min-width: 0; font-size: 8.6pt; }
+  h2 { break-after: avoid; margin-top: 28pt; } .label { break-after: avoid; }
+  table, .break, .aside, .quiz, .note { break-inside: avoid; }
+  .toc a, a { color: inherit; text-decoration: none; } #score { display: none; }
+}
+@media (max-width: 480px) { body { font-size: 17.5px; padding-block: 36px 72px; } pre { font-size: 12.5px; } }
+</style>
+<style>
+/* Lesson 1 to 7 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+/* Lessons 5 to 7: the verification status is a fact the reader must not miss, so it is red-bordered, not accent. */
+.status { border: 1px solid var(--bad); background: var(--bad-wash); padding: 12px 16px; margin: 24px 0; font-size: 0.95rem; }
+.status p { margin: 0 0 8px; max-width: none; } .status p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 7 · Epic 7</p>
+  <h1>Multi-node: the lease, the clock, and the fence</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, why a lease is a lock with a time on it and why that time may only be read from your own monotonic clock counting from the moment you sent; why a Lua script is the unit of atomicity in Redis and what breaks when the token is issued outside it; why heartbeats may route a peer but never decide who owns a room, and why a dead owner's lease is waited out rather than stolen; why a process paused past its lease cannot be stopped by any check it performs itself, and what Kleppmann's fencing token is; why the fence must sit in the same SQL statement as the write, and what <code>FOR UPDATE</code> does there; where this design sits against ZooKeeper, etcd and Redisson, and what it gives up under CAP; and you can point at the line of code for every claim.</p>
+
+  <div class="status">
+    <p><strong>Verification status, honestly.</strong> Every commit in this chapter passed lint, the type checker and the unit tests (holder parsing, <span class="mono">keepLease</span>, the routing table and router, <span class="mono">takeLease</span>, <span class="mono">watchFence</span>, peer-client's reroute on 4409, the config fields), and each guard was mutation-checked. The integration suites (<span class="mono">packages/lease index.int</span>, <span class="mono">api session.int</span>, <span class="mono">sync one-room-globally.int</span>, <span class="mono">one-room-join-race.int</span>, <span class="mono">failover.int</span>, <span class="mono">packages/db fence.int</span> including the 20-round real race and the naive control) and the three chaos runs (<span class="mono">kill-owner-failover</span>, <span class="mono">fenced zombie</span>, <span class="mono">fenced partition</span>) are written and committed and <em>have not been run</em>: the host was too loaded to run Docker suites beside other work. They run on <span class="mono">build/epics</span> before anything merges to <span class="mono">main</span>. Where this page says "measured", it was measured in <span class="mono">learning-tests/redis</span> or an earlier epic; where it says "the test asserts", the test exists and is unrun. Section 8 is the by-hand demo to run first.</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">b702dcd</span>, so what you read is what is committed. Sections 2, 4 and 5 are the ones a distributed-systems interview will dig into; section 6 is the comparison you will be asked to make.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now two sync nodes (3001, 3003) behind one Redis, through toxiproxy<br>pnpm exec vitest run packages/lease/src/lease.test.ts apps/sync/src/fence.test.ts packages/peer-client/src/peer.test.ts&nbsp;&nbsp;# the pure halves<br>docker compose exec -T redis redis-cli --no-auth-warning GET lease:&lt;doc&gt;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "1:sync": token 1, owned by node sync</p>
+    <p>Try it, once the stack is up: section 8 walks the kill, the pause and the partition by hand, then the suites and the chaos runs, with the exact commands and what each should show.</p>
+  </div>
+
+  <ol class="toc"><li><a href="#map">The map: what multi-node means here</a></li><li><a href="#lease">1 · The lease: one script, one token, three compare-and-sets</a></li><li><a href="#clocks">2 · Clocks against tokens: when a holder must stop believing itself</a></li><li><a href="#oneroom">3 · One room globally: the loser says 4409, and /session knows the owner</a></li><li><a href="#failover">4 · Failover: heartbeats as a hint, and a dead lease waited out</a></li><li><a href="#fence">5 · The fence: the check and the write are one statement</a></li><li><a href="#tradeoffs">6 · Trade-offs and comparisons: where this design sits</a></li><li><a href="#testing">7 · Testing two nodes without Docker, and then with it</a></li><li><a href="#demo">8 · Two nodes by hand: what to run once the stack is up</a></li><li><a href="#limits">9 · What the type system could not see, epic 7 edition</a></li><li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  <section id="map"><h2>The map: what multi-node means here</h2><p>Epic 6 made one sync process trustworthy: an acknowledged edit survives a crash. Epic 7 asks what happens when there are <em>two</em> of them. The whole design rests on lesson 2's first rule: one room per document orders the ops, and there can never be two rooms for one document, because two rooms would mean two orderings and two documents. So with two processes the question is not "how do they share a room" but "how do they agree, at every moment, on <em>which one</em> has it", including the moments when one of them is dead, frozen, or cut off, and cannot be asked. Three features answer it. <strong>F20, one room globally:</strong> every peer of a document lands in the same room, whichever node it asked first. <strong>F21, failover:</strong> kill the node that owns a room and the room moves to the other within one lease, with F18's guarantees intact. <strong>F22, fencing:</strong> a node paused past its lease and then resumed cannot append to the journal; it closes its sockets; the journal has no gap and no duplicate.</p><div class="scroll"><table><tr><th>Step</th><th>Where</th><th>And</th><th>What happens</th></tr><tr><td>1</td><td><span class='mono'>packages/lease/src/index.ts</span></td><td><span class='mono'>packages/lease/src/lease.ts</span></td><td>a lease per document in Redis: acquire, renew and release as three Lua scripts; a fencing token from <code>INCR</code> issued with the <code>SET</code>; a <code>Holder</code> parsed back from <code>"&lt;token&gt;:&lt;node&gt;"</code></td></tr><tr><td>2</td><td><span class='mono'>packages/lease/src/lease.ts</span></td><td></td><td><code>keepLease</code>: when a holder must stop believing it holds the lease, on its own monotonic clock, counting from the moment a renewal was <em>sent</em></td></tr><tr><td>3</td><td><span class='mono'>apps/sync/src/server.ts</span></td><td><span class='mono'>apps/api/src/app.ts</span></td><td>a room opens only under the lease; the loser closes its peers with 4409; <code>/session</code> answers the owner's address from a routing table <code>id=url,id=url</code>; the worker routes the same way</td></tr><tr><td>4</td><td><span class='mono'>packages/lease/src/lease.ts</span></td><td><span class='mono'>scripts/chaos/kill-owner-failover.ts</span></td><td>heartbeats as a routing hint; <code>takeLease</code> waits a dead owner's lease out and never steals it; the chaos run kills the owner and does not restart it</td></tr><tr><td>5</td><td><span class='mono'>packages/db/migrations/0014_fence.sql</span></td><td><span class='mono'>packages/db/src/index.ts</span></td><td>the fence: <code>claim</code> the document under the lease token before reading the journal; every append is one statement that checks the claim and locks the row; <code>Fenced</code> drops the room</td></tr><tr><td>6</td><td><span class='mono'>apps/sync/src/fence.ts</span></td><td><span class='mono'>scripts/chaos/fenced.ts</span></td><td>a fenced append ends the room, not read-only; two chaos runs: <code>docker pause</code> past the lease, and a toxiproxy cut between one node and Redis</td></tr></table></div><p>Four ideas carry the epic, and they are the four an interviewer will ask about. <strong>A lease is a lock with an expiry</strong> (section 1): a holder that dies stops renewing, and the lock frees itself; the price is that "I hold it" is now a statement about time. <strong>Only your own clock, and only the moment you sent</strong> (section 2): a holder trusts its lease until <em>sent + 0.9 ttl</em> on a monotonic clock, never a wall clock, never Redis's clock, and gives up its peers when that passes. <strong>Liveness is a hint, never a truth</strong> (sections 3 and 4): heartbeats decide where a peer is <em>sent</em>; the lease alone decides who <em>owns</em>; a dead owner's lease is waited out, never stolen. <strong>The lock is not the safety; the storage is</strong> (section 5): a process frozen past its lease cannot know it, so the journal append itself refuses a writer whose claim is no longer the document's, in the same statement that writes. Kleppmann's fencing-token argument is the spine of the chapter, and the repo's own <code>learning-tests/redis</code> reproduced the zombie before a line of the epic was written.</p><div class="scroll"><table><tr><th>This repo</th><th>Java world</th><th>Python world</th></tr><tr><td>a Redis lease per document, three Lua scripts, an <code>INCR</code> token; renew every ttl/3</td><td>Redisson <code>RLock</code> (Lua too, a watchdog renews every ttl/3); Curator's <code>InterProcessMutex</code> over ZooKeeper ephemeral nodes</td><td><code>redis.lock.Lock</code> with a token and a Lua release; <code>kazoo.Lock</code>; <code>python-etcd3</code> leases</td></tr><tr><td>the token checked by the storage in the write statement</td><td>Kafka's producer epoch in the broker; ZooKeeper's zxid; Chubby's sequencer handed to the file server</td><td>the same idea; nothing in the standard library does it for you</td></tr><tr><td>routing through <code>/session</code> and a table in one env variable</td><td>a service registry (Eureka, Consul) plus sticky routing; or ZooKeeper's ephemeral nodes as the registry</td><td>Consul, or a Redis hash of owners</td></tr><tr><td>liveness as a heartbeat key with a short PX</td><td>ZooKeeper sessions and ephemeral nodes; etcd leases with keep-alive</td><td>etcd3 lease keep-alive; Consul checks</td></tr></table></div></section><section id="lease"><h2>1 · The lease: one script, one token, three compare-and-sets</h2><p>Redis was already in the stack for queues (lesson 3). SPEC §2a fixed the lease's shape from the learning test: <em>SET NX PX plus a fencing token from INCR in the same Lua script; renew and release are compare-and-set in Lua.</em> The package that implements it is small on purpose: <code>index.ts</code> talks to Redis, <code>lease.ts</code> is pure and holds every decision (parsing, deadlines, routing, waiting), so the decisions have unit tests and the I/O has an integration test against the real server.</p><p class="label">From <span class="mono">packages/lease/src/index.ts</span></p><div class="scroll"><pre><code>/**
+ * Room leases in Redis (SPEC §2a): who owns each document&#x27;s room, for how long, under which fencing token.
+ * Keys: `&lt;prefix&gt;lease:&lt;documentId&gt;` holds &quot;&lt;token&gt;:&lt;nodeId&gt;&quot; with a PX expiry; `&lt;prefix&gt;lease-token:&lt;documentId&gt;`
+ * is the document&#x27;s token counter, never expiring, so a later owner always gets a larger token.
+ * `&lt;prefix&gt;node:&lt;nodeId&gt;` is a sync node&#x27;s heartbeat (E7.2): it expires a third of a ttl after the node&#x27;s last
+ * beat, so a killed owner is known dead long before its leases expire. Routing reads it; nothing safe does.
+ * The counter lives in Redis, so a flushed Redis would start the tokens again at 1: an acquire therefore takes a
+ * `floor` (the largest token the journal&#x27;s fence has seen, E7.3) and never issues a token at or below it.
+ */
+export type Leases = {
+  /** How long a lease lives without renewal. The holder renews every third of it. */
+  readonly ttlMs: number;
+  /**
+   * Take the room if nobody holds it, under a token above `floor`. Answers the holder either way: compare its
+   * nodeId (and token) with yours.
+   */
+  acquire(documentId: string, nodeId: string, floor?: number): Promise&lt;{ acquired: boolean; holder: Holder }&gt;;
+  /** Extend, only if `holder` is still exactly the lease&#x27;s value. False: it expired or is someone else&#x27;s. */
+  renew(documentId: string, holder: Holder): Promise&lt;boolean&gt;;
+  /** Let go, only if still ours: a late release must never delete the NEXT owner&#x27;s lease. */
+  release(documentId: string, holder: Holder): Promise&lt;void&gt;;
+  owner(documentId: string): Promise&lt;Holder | undefined&gt;;
+  /** &quot;This node is alive&quot; for a third of a ttl. A sync node calls it every tenth of one. */
+  beat(nodeId: string): Promise&lt;void&gt;;
+  /** Which of these nodes beat recently. */
+  alive(nodeIds: readonly string[]): Promise&lt;ReadonlySet&lt;string&gt;&gt;;
+  /** Resolves once Redis answered a PING; rejects after `timeoutMs`. */
+  ready(): Promise&lt;void&gt;;
+  close(): Promise&lt;void&gt;;
+};</code></pre></div><p class="label">From <span class="mono">packages/lease/src/index.ts</span></p><div class="scroll"><pre><code>// One script, so nothing can happen between &quot;nobody holds it&quot;, the token and the SET. The token is issued
+// only when the SET happens: N racing acquirers of a free room move the counter by exactly one.
+const ACQUIRE = `
+local current = redis.call(&#x27;GET&#x27;, KEYS[1])
+if current then return {0, current} end
+if tonumber(redis.call(&#x27;GET&#x27;, KEYS[2]) or &#x27;0&#x27;) &lt; tonumber(ARGV[3]) then redis.call(&#x27;SET&#x27;, KEYS[2], ARGV[3]) end
+local holder = redis.call(&#x27;INCR&#x27;, KEYS[2]) .. &#x27;:&#x27; .. ARGV[1]
+redis.call(&#x27;SET&#x27;, KEYS[1], holder, &#x27;PX&#x27;, ARGV[2])
+return {1, holder}`;
+// Compare-and-extend and compare-and-delete: a plain PEXPIRE or DEL would touch a lease that expired and was
+// taken by another node in the meantime (reproduced in learning-tests/redis, finding 2).
+const RENEW = `if redis.call(&#x27;GET&#x27;, KEYS[1]) == ARGV[1] then return redis.call(&#x27;PEXPIRE&#x27;, KEYS[1], ARGV[2]) else return 0 end`;
+const RELEASE = `if redis.call(&#x27;GET&#x27;, KEYS[1]) == ARGV[1] then return redis.call(&#x27;DEL&#x27;, KEYS[1]) else return 0 end`;</code></pre></div><p>Read <code>ACQUIRE</code> as one atomic step, because that is what Redis makes it. Redis runs commands on one thread, and a Lua script is one command: nothing from any other client runs between its first line and its last. So <code>GET</code> (is it held?), the counter floor, <code>INCR</code> (issue a token) and <code>SET ... PX</code> (take it, with an expiry) happen with no gap, and the two properties the tests demand follow. <strong>Exactly one of N racing acquirers wins</strong>, because only the first to run sees no value. <strong>The counter moves by exactly one per acquisition</strong>, because the token is issued only on the branch that also does the <code>SET</code>; a loser returns the current holder and touches nothing. That second property is why the join-race test can assert <code>token: 1</code> after ten simultaneous joins and <code>2</code> after the room closes and is taken again. The naive version, <code>INCR</code> then <code>SET NX</code> as two round trips, would burn a token per loser and could hand a <em>smaller</em> token to a <em>later</em> owner if two acquirers interleaved, which section 5's fence could not survive.</p><p><code>RENEW</code> and <code>RELEASE</code> compare the exact value <code>"&lt;token&gt;:&lt;node&gt;"</code> before touching the key. The learning test reproduced why: a holder whose lease had expired issued a plain <code>DEL</code> and deleted <em>another</em> client's freshly acquired lease. A bare <code>PEXPIRE</code> has the same flaw in the other direction: it would extend a lease that is now someone else's. Comparing the whole holder, not just the node id, also stops a node that took the same room twice from renewing its own earlier, dead acquisition (the integration test's "same node, another acquisition" line).</p><p class="label">From <span class="mono">learning-tests/redis/test.ts</span></p><div class="scroll"><pre><code>// 2. CAS renew/release via Lua vs. naive DEL:
+//    CONFIRMED. A Lua script that does `if GET(key) == myValue then
+//    PEXPIRE/DEL else return 0` correctly refuses to touch a lease it does
+//    not own (imposter extend/release both returned 0, real owner&#x27;s lease
+//    was untouched). Demonstrated the actual bug too: a lease holder (C)
+//    that lets its lease expire and then issues a bare `DEL key` (with no
+//    ownership check) deleted a *different* client&#x27;s (D&#x27;s) freshly acquired
+//    lease on the same key. assumed &quot;plain DEL is dangerous&quot;, actual:
+//    reproduced exactly -- D&#x27;s live lease was wiped by C&#x27;s stale release.
+//</code></pre></div><p class="label">From <span class="mono">packages/lease/src/index.ts</span></p><div class="scroll"><pre><code>export function createLeases({ redisUrl, ttlMs = 10_000, prefix = &quot;&quot;, timeoutMs = 1000 }: { redisUrl: string; ttlMs?: number; prefix?: string; timeoutMs?: number }): Leases {
+  // Every call must FAIL within a deadline when Redis is away (E3.1 lesson 1): no offline queue, a command
+  // timeout, one retry. A caller that cannot ask refuses to open the room; it never guesses.
+  const redis = new Redis(redisUrl, { enableOfflineQueue: false, commandTimeout: timeoutMs, maxRetriesPerRequest: 1, connectTimeout: timeoutMs });
+  // Never log the error object: a failed AUTH carries the password in err.command.args.
+  redis.on(&quot;error&quot;, (err: unknown) =&gt; process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, source: &quot;lease&quot;, message: err instanceof Error ? err.message || err.name : &quot;unknown&quot; })}\n`));
+  const leaseKey = (documentId: string): string =&gt; `${prefix}lease:${documentId}`;
+  const ready = (): Promise&lt;void&gt; =&gt; new Promise((resolve, reject) =&gt; {
+    if (redis.status === &quot;ready&quot;) { resolve(); return; }
+    const timer = setTimeout(() =&gt; { reject(new Error(`redis did not answer within ${String(timeoutMs)} ms`)); }, timeoutMs);
+    redis.once(&quot;ready&quot;, () =&gt; { clearTimeout(timer); resolve(); });
+  });
+  return {
+    ttlMs,
+    async acquire(documentId, nodeId, floor = 0) {
+      const [taken, value] = (await redis.eval(ACQUIRE, 2, leaseKey(documentId), `${prefix}lease-token:${documentId}`, nodeId, String(ttlMs), String(floor))) as [number, string];
+      const holder = parseHolder(value);
+      if (!holder) throw new Error(`lease of ${documentId} holds a value that is not a holder`);
+      return { acquired: taken === 1, holder };
+    },
+    renew: async (documentId, holder) =&gt; (await redis.eval(RENEW, 1, leaseKey(documentId), formatHolder(holder), String(ttlMs))) === 1,
+    async release(documentId, holder) {
+      await redis.eval(RELEASE, 1, leaseKey(documentId), formatHolder(holder));
+    },</code></pre></div><p>Three TypeScript things in <code>createLeases</code>. <strong>The client options are the E3.1 lesson again:</strong> <code>enableOfflineQueue: false</code>, a <code>commandTimeout</code> and one retry, so every call <em>fails within a deadline</em> when Redis is away; a lease library that hangs is a room that never opens and never says why (the integration test times every failure). <strong><code>redis.eval(...) as [number, string]</code></strong> is a type assertion, not a conversion: ioredis types <code>eval</code>'s result as <code>unknown</code> because a script can return anything, and the cast records what <em>this</em> script returns. <code>parseHolder</code> then checks the string at runtime, so a key that holds something that is not ours reads as "nobody" rather than as a crash. <strong>The error handler never logs the error object</strong>: a failed <code>AUTH</code> carries the password in <code>err.command.args</code>, so only <code>err.message</code> goes to stderr.</p><p class="label">From <span class="mono">packages/lease/src/lease.ts</span></p><div class="scroll"><pre><code>/**
+ * Who owns a document&#x27;s room: a sync node, and the fencing token its acquisition was issued. The token
+ * rises with every acquisition of that document (INCR), so two holders are never confused, even when one
+ * node takes the same room twice, and a later owner always carries the larger number (the fence of E7.3).
+ */
+export type Holder = { token: number; nodeId: string };
+
+/** A node id is a URL path segment and a compose service name: lowercase, digits, dashes. */
+export const NodeId = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/, &quot;a sync node id is 1-32 of a-z, 0-9 and -, starting with a letter or digit&quot;);
+
+export const formatHolder = ({ token, nodeId }: Holder): string =&gt; `${String(token)}:${nodeId}`;
+
+/** A value read back from Redis. Anything else there is not ours to trust: undefined. */
+export function parseHolder(value: string): Holder | undefined {
+  const match = /^([1-9]\d{0,15}):(.+)$/.exec(value);
+  if (!match?.[1] || !match[2] || !NodeId.safeParse(match[2]).success) return undefined;
+  return { token: Number(match[1]), nodeId: match[2] };
+}</code></pre></div><p><code>Holder</code> is two numbers of information: <em>who</em>, and <em>which acquisition</em>. The token is the second one, and the whole of section 5 is built on it rising. <code>parseHolder</code> is strict by design: the regex refuses a leading zero, a token of more than sixteen digits (past <code>Number</code>'s safe range) and any node id that <code>NodeId</code> would refuse. A node id is a URL path segment and a compose service name, so it is lowercase letters, digits and dashes, and Zod's <code>.regex</code> carries that rule into every config file that names one.</p><p class="label">From <span class="mono">packages/lease/src/index.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;N simultaneous acquires of a free room: exactly one wins, and the token counter moves by exactly one&quot;, async () =&gt; {
+  await Promise.all(nodes.map((each) =&gt; each.ready()));
+  const documentId = randomUUID();
+  const results = await Promise.all(nodes.map((each, i) =&gt; each.acquire(documentId, `node-${String(i)}`)));
+  const winners = results.filter((result) =&gt; result.acquired);
+  expect(winners).toHaveLength(1);
+  // Every loser was told who won, with the winner&#x27;s token.
+  for (const result of results) expect(result.holder).toEqual(winners[0]?.holder);
+  expect(winners[0]?.holder.token).toBe(1);
+  expect(await raw.get(`${prefix}lease-token:${documentId}`)).toBe(&quot;1&quot;);
+  expect(await a.owner(documentId)).toEqual(winners[0]?.holder);
+});</code></pre></div><p class="label">From <span class="mono">packages/lease/src/index.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a late release by an old holder never deletes the next owner&#x27;s lease&quot;, async () =&gt; {
+  const documentId = randomUUID();
+  const old = await a.acquire(documentId, &quot;sync&quot;);
+  await new Promise((resolve) =&gt; setTimeout(resolve, TTL + 100));
+  const next = await b.acquire(documentId, &quot;sync-2&quot;);
+  await a.release(documentId, old.holder);
+  expect(await a.owner(documentId)).toEqual(next.holder);
+  await b.release(documentId, next.holder);
+  expect(await a.owner(documentId)).toBeUndefined();
+});</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>a Lua script as a template literal, sent with <code>redis.eval(script, numKeys, ...keys, ...args)</code></td><td>Redisson does the same inside <code>RLock</code>; Jedis <code>eval</code></td><td><code>redis.register_script</code> or <code>eval</code></td></tr><tr><td><code>(await redis.eval(...)) as [number, string]</code>: a tuple assertion</td><td><code>(List&lt;Object&gt;) result</code>, then casts per element</td><td>tuple unpacking; no check</td></tr><tr><td><code>z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/)</code> as a reusable field</td><td>a Bean Validation <code>@Pattern</code></td><td>a pydantic <code>constr(pattern=...)</code></td></tr><tr><td>eight separate <code>Redis</code> clients in one test, so the race is real</td><td>eight <code>JedisPool</code> connections</td><td>eight <code>redis.Redis()</code> instances</td></tr><tr><td><code>redis.on("error", ...)</code> logging <code>err.message</code> only</td><td>a <code>Logger</code> with the exception's message, not <code>toString</code></td><td><code>logging.warning(str(err))</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The token issued only with the SET, or the join-race test could not count.</strong></p><p>An earlier shape issued the token first (<code>INCR</code>) and then tried the <code>SET NX</code>, so ten racing joiners moved the counter by ten and the winner's token was whichever number its <code>INCR</code> happened to get. The test that asks "exactly one acquisition happened" cannot be written against that: token 1 for the winner is only meaningful if losers cost nothing. Moving the <code>INCR</code> after the <code>GET</code> check inside the one script made "the counter moved by one" a checkable fact, and the same script later took the floor (section 5) in the only place it can be applied safely: before the <code>INCR</code>, under the same atomicity.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The api acquiring leases on a node's behalf was rejected.</strong></p><p>It looked simpler: <code>/session</code> knows the document and could pick a node and take the lease for it. But a lease has to be <em>renewed</em>, and only the process that holds the room knows whether it still holds the room. A node that did not acquire cannot know it must renew, and a lease renewed by a third party is a lease that outlives the room it protects. The node takes its own lease when its first peer arrives, and the api only reads.</p></div><p class="note"><strong>The principle:</strong> a lease's three operations must each be atomic with their own check. Acquire checks "free" and takes; renew checks "still mine" and extends; release checks "still mine" and deletes. Redis gives atomicity for free inside one script, so the design puts each check and its effect in one script and never splits them across a round trip. Section 5 applies the same rule to Postgres, where the one statement is the atom.</p></section><section id="clocks"><h2>2 · Clocks against tokens: when a holder must stop believing itself</h2><p>A lease is a promise with a time on it, and a time raises the question every distributed-systems text spends a chapter on: <em>whose</em> time? Redis expires the key on its own clock, starting when it <em>receives</em> the command. The holder can only read its own clock. The two clocks run at slightly different rates, the message between them takes time, and the holder can be paused for a minute by the operating system, the garbage collector or <code>docker pause</code> without noticing. <code>keepLease</code> is the answer to "until when may this process act as the owner", and it is deliberately conservative.</p><p class="label">From <span class="mono">packages/lease/src/lease.ts</span></p><div class="scroll"><pre><code>export type LeaseKeeper = {
+  /** False from the moment this process can no longer be sure it holds the lease. Never true again. */
+  readonly held: boolean;
+  /** Renew once (call every ttl/3). Also the moment an unrenewable lease is declared lost. */
+  tick(): Promise&lt;void&gt;;
+};
+
+/**
+ * Keeps a lease that was just acquired, and decides when to stop trusting it.
+ *
+ * Only OUR monotonic clock is used, never a wall clock, never a time from another machine: Redis starts a
+ * PX countdown when it RECEIVES the command, which is after we sent it, so &quot;sent + ttl&quot; (on our own clock)
+ * is never later than Redis&#x27;s expiry. The margin covers the two clocks running at slightly different rates.
+ * `renew` answers false when the lease is someone else&#x27;s now (lost at once) and throws when Redis cannot be
+ * asked (still ours until the deadline passes). `acquiredAt` must be read BEFORE the acquire was sent.
+ *
+ * This is not safety: a process frozen past the deadline believes `held` until it runs again. The journal&#x27;s
+ * fence (E7.3) is what refuses that zombie&#x27;s writes; this only makes a live node give its peers up promptly.
+ */
+export function keepLease({ renew, ttlMs, now, acquiredAt, onLost }: { renew: () =&gt; Promise&lt;boolean&gt;; ttlMs: number; now: () =&gt; number; acquiredAt: number; onLost: () =&gt; void }): LeaseKeeper {
+  const trusted = (sentAt: number): number =&gt; sentAt + ttlMs * 0.9;
+  let validUntil = trusted(acquiredAt);
+  let lost = false;
+  let renewing = false;
+  const lose = (): void =&gt; {
+    if (lost) return;
+    lost = true;
+    onLost();
+  };
+  const expired = (): boolean =&gt; {
+    if (!lost &amp;&amp; now() &gt;= validUntil) lose();
+    return lost;
+  };
+  return {
+    get held() { return !expired(); },
+    async tick() {
+      // A renewal still in flight (a hung Redis, bounded by the client&#x27;s command timeout) is not waited
+      // for twice, but the deadline is still checked: a hang must not keep a room alive.
+      if (expired() || renewing) return;
+      renewing = true;
+      const sentAt = now();
+      try {
+        if (await renew()) validUntil = trusted(sentAt);
+        else lose();
+      } catch {
+        // Redis did not answer: keep trying on the next tick while the deadline allows.
+      } finally {
+        renewing = false;
+      }
+      expired();
+    },
+  };
+}</code></pre></div><p>Three decisions, each with a test. <strong>Only our monotonic clock.</strong> <code>now</code> is <code>performance.now()</code> in production, which cannot jump when NTP corrects the wall clock (<code>Date.now()</code> can, backwards). Java's <code>System.nanoTime()</code> and Python's <code>time.monotonic()</code> are the same instrument. <strong>Counting from the send, not the reply.</strong> Redis starts its <code>PX</code> countdown when the command arrives, which is after we sent it, so a deadline of <em>sent + ttl</em> on our clock can never be later than Redis's expiry; the <code>0.9</code> is the margin for the two clocks drifting. The test "the deadline counts from when a renewal was SENT" has a renewal that takes 800 ms to answer and asserts the lease is trusted until 300 + 900, not 1100 + 900. <strong>A hang does not extend anything.</strong> A renewal in flight is not awaited twice, but the deadline is still checked on every <code>tick</code> and every read of <code>held</code>, so a hung Redis cannot keep a room alive by never answering.</p><p>The idiom to notice is that <code>held</code> is a getter with a side effect: reading it may fire <code>onLost</code>. That is a deliberate trade. The room's server needs "are we still the owner" to be true at the moment of the question, not at the last timer tick, and the cheapest way to make every reader honest is to make the read itself check the clock. <code>lose</code> is idempotent so that <code>onLost</code> runs once however many readers ask.</p><p class="label">From <span class="mono">packages/lease/src/lease.test.ts</span></p><div class="scroll"><pre><code>  it(&quot;the deadline counts from when a renewal was SENT, not when its answer came back&quot;, async () =&gt; {
+    let clock = 0;
+    const keeper = keepLease({
+      renew: () =&gt; { clock += 800; return Promise.resolve(true); }, // a slow answer: Redis started its countdown at the send
+      ttlMs: TTL, now: () =&gt; clock, acquiredAt: 0, onLost: () =&gt; undefined,
+    });
+    clock = 300;
+    await keeper.tick(); // sent at 300, answered at 1100: trusted until 300 + 900
+    clock = 1150;
+    expect(keeper.held).toBe(true);
+    clock = 1200;
+    expect(keeper.held).toBe(false);
+  });
+
+  it(&quot;a renewal that hangs does not keep the lease: the deadline is checked even while one is in flight&quot;, async () =&gt; {
+    let clock = 0;
+    let lostCount = 0;
+    const keeper = keepLease({ renew: () =&gt; new Promise&lt;boolean&gt;(() =&gt; undefined), ttlMs: TTL, now: () =&gt; clock, acquiredAt: 0, onLost: () =&gt; { lostCount += 1; } });
+    clock = 300;
+    void keeper.tick();
+    clock = 950;
+    await keeper.tick();
+    expect(lostCount).toBe(1);
+    expect(keeper.held).toBe(false);
+  });</code></pre></div><p>Now the point the doc comment makes in its last paragraph, because it is the point of the epic. <em>This is not safety.</em> A process frozen for two seconds does not run <code>expired()</code> during those two seconds; when it wakes, its first read of <code>held</code> says false and it gives up, but between the wake and that read it may already have done something, and an <code>await</code> it was inside when it froze will simply continue. The learning test measured exactly that: owner A blocked its own event loop with <code>Atomics.wait</code> for two seconds, owner B took the lease 1.7 seconds before A woke, and A's in-memory flag still said "mine". Kleppmann's argument in <em>How to do distributed locking</em> (and chapter 8 of DDIA) is that no amount of care with clocks closes this gap, because the pause can happen at <em>any</em> instruction, including the one after the check. The only thing that closes it is a check by the storage, at write time, of a token that the frozen process cannot have updated. That is section 5; <code>keepLease</code> only makes a <em>live</em> node let go promptly, so that failover takes one ttl rather than a ttl plus a discovery.</p><p class="label">From <span class="mono">learning-tests/redis/test.ts</span></p><div class="scroll"><pre><code>// 4. Zombie lease when the client&#x27;s event loop is blocked past the TTL:
+//    CONFIRMED, and re-verified with much wider slack and Redis-side (not
+//    wall-clock) timestamps than an earlier draft of this test allowed for.
+//    Owner A acquired a 300ms lease (fencing token 1 from the same Lua
+//    acquire script as test 3). The main thread then synchronously blocked
+//    its OWN event loop for 2000ms via Atomics.wait on a SharedArrayBuffer
+//    (measured: unblocked after ~2001-2002ms). A separate OS process (owner
+//    B) polled independently and, on winning the lease, recorded Redis&#x27;s own
+//    `TIME` at the moment of acquisition (fencing token 2); A also recorded
+//    Redis&#x27;s own `TIME` immediately after unblocking. Measured margin between
+//    B&#x27;s Redis-side acquisition and A&#x27;s Redis-side unblock: ~1695-1698ms
+//    across repeated runs -- B won the lease and moved on roughly 1.7 seconds
+//    before A even had a chance to notice anything was wrong, ruling out any
+//    &quot;B only won after A unblocked&quot; ambiguity. Right after unblocking, A&#x27;s
+//    in-memory &quot;I own it&quot; flag was still `true` (measured/logged) while
+//    Redis&#x27;s `GET lease` already returned `owner-B` (measured/logged) --
+//    A is a confirmed zombie. A&#x27;s own CAS-renew Lua script (the same
+//    compare-and-set from test 2) was then run as owner-A and returned `0`
+//    (measured/logged): Redis&#x27;s compare-and-set correctly refuses to extend
+//    a lease for a client that no longer holds it. The fencing token B
+//    acquired (2) was confirmed strictly greater than A&#x27;s (1) (measured/
+//    logged). Implication: the lease/lock alone is not sufficient for safety
+//    under GC pauses, blocked event loops, or network partitions -- the
+//    *storage layer* must check the fencing token on every write and reject
+//    stale (lower) tokens, not just trust &quot;I hold a lock&quot; (a naive in-memory
+//    flag, as demonstrated here, survives being wrong indefinitely on its
+//    own).
+//</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>performance.now()</code>: monotonic, milliseconds, a double</td><td><code>System.nanoTime()</code></td><td><code>time.monotonic()</code></td></tr><tr><td>a getter with a side effect (<code>get held()</code> may fire <code>onLost</code>)</td><td>an <code>isHeld()</code> method that also fires a listener; unusual, and documented</td><td>a <code>@property</code> that calls a callback; unusual</td></tr><tr><td><code>now: () =&gt; number</code> injected, wound by hand in tests</td><td>an injected <code>Clock</code> (<code>java.time.Clock</code>)</td><td>an injected callable; <code>freezegun</code> for wall clocks only</td></tr><tr><td><code>Atomics.wait</code> on a <code>SharedArrayBuffer</code> to block the loop on purpose</td><td><code>Thread.sleep</code> on the one thread that matters</td><td><code>time.sleep</code></td></tr><tr><td><code>renewing</code> as a plain boolean guard</td><td>an <code>AtomicBoolean</code></td><td>a bool; the GIL and the loop make it safe</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Trusting the reply time would have given a slow Redis a longer lease than it granted.</strong></p><p>The obvious deadline is "when the renewal came back plus ttl". With an 800 ms round trip that trusts the lease for 800 ms longer than Redis will keep it: another node could acquire while this one still believes and still accepts ops. Every op accepted in that window is one the fence must refuse later, and one whose sender was told nothing for the whole window. Reading the clock before the send, into <code>sentAt</code>, and passing it to <code>trusted</code> after the answer is the whole fix; the test with the slow renewal is the mutation check.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A renewal that fails must not shorten what an earlier one earned.</strong></p><p>A first version set <code>validUntil</code> from the failed attempt's send time when Redis threw, which under a flaky network would have made the room give up its peers every time one renewal failed, although the previous one had bought it another 900 ms. The rule became: a refusal (<code>false</code>) loses at once, a throw changes nothing and is tried again next tick, and only a <code>true</code> moves the deadline. The test winds the clock to 1350 after a failed renewal at 800 and asserts still held.</p></div><p class="note"><strong>Principal-level point:</strong> there are two independent instruments here and they answer different questions. The <em>clock</em> answers "may I still act as the owner" and it is allowed to be wrong in one direction only, towards giving up early. The <em>token</em> answers "was this write made by the current owner" and it is never wrong, because it is compared by the storage, not by the process that might be frozen. A system that uses only the first is unsafe under pauses; a system that uses only the second is safe but has no failover time bound, because nobody ever gives anything up. This repo uses both, and keeps them in separate modules so that each has its own tests.</p></section><section id="oneroom"><h2>3 · One room globally: the loser says 4409, and /session knows the owner</h2><p>The lease decides who owns a room; the rest of F20 is making every peer arrive at the owner without the peer knowing anything about nodes. Lesson 2 already had the hook: a browser never dials a sync address it remembers, it asks <code>POST /documents/:id/session</code> and dials what comes back. So the routing lives in one place, and it needs one input: a table of nodes.</p><p class="label">From <span class="mono">packages/lease/src/lease.ts</span></p><div class="scroll"><pre><code>/**
+ * The sync nodes a peer can be sent to, from one variable: a single `ws(s)://` URL (one node, no lease
+ * lookup: the single-node setup and the tests), or `id=url,id=url` (the routing table of epic 7).
+ */
+export type SyncNodes = { kind: &quot;one&quot;; url: string } | { kind: &quot;many&quot;; nodes: ReadonlyMap&lt;string, string&gt; };
+
+// A query or fragment would swallow the &quot;/documents/&lt;id&gt;&quot; that gets appended to the address.
+const wsBase = (value: string): string | undefined =&gt; {
+  if (!URL.canParse(value)) return undefined;
+  const url = new URL(value);
+  return [&quot;ws:&quot;, &quot;wss:&quot;].includes(url.protocol) &amp;&amp; url.search === &quot;&quot; &amp;&amp; url.hash === &quot;&quot; &amp;&amp; !value.includes(&quot;?&quot;) &amp;&amp; !value.includes(&quot;#&quot;) ? value.replace(/\/+$/, &quot;&quot;) : undefined;
+};
+
+export function parseSyncNodes(value: string): SyncNodes | undefined {
+  if (!value.includes(&quot;=&quot;)) {
+    const url = wsBase(value);
+    return url === undefined ? undefined : { kind: &quot;one&quot;, url };
+  }
+  const nodes = new Map&lt;string, string&gt;();
+  for (const entry of value.split(&quot;,&quot;).map((part) =&gt; part.trim()).filter(Boolean)) {
+    const at = entry.indexOf(&quot;=&quot;);
+    const id = entry.slice(0, at).trim();
+    const url = wsBase(entry.slice(at + 1).trim());
+    if (!NodeId.safeParse(id).success || url === undefined || nodes.has(id)) return undefined;
+    nodes.set(id, url);
+  }
+  return nodes.size &gt; 0 ? { kind: &quot;many&quot;, nodes } : undefined;
+}</code></pre></div><p><code>SyncNodes</code> is a discriminated union with two shapes, and the <code>"one"</code> shape exists so that nothing changed for the single-node setup or for any test: one URL, no lookup, no Redis asked. <code>parseSyncNodes</code> is strict about what would route a peer nowhere: a query or fragment (it would swallow the <code>/documents/&lt;id&gt;</code> appended later), an <code>http://</code> scheme, a duplicate id, an id <code>NodeId</code> refuses. <code>URL.canParse</code> is Node 24's way to ask "is this a URL" without a <code>try</code>. The same field is used by the api (<code>SYNC_PUBLIC_URL</code>, what browsers dial) and by the worker (<code>SYNC_URL</code>, addresses inside the Docker network), because the two audiences reach the nodes through different networks.</p><p class="label">From <span class="mono">apps/api/src/config.ts</span></p><div class="scroll"><pre><code>  // The address BROWSERS use to reach the sync server (not the address inside the Docker network). One URL for
+  // one node; with several (E7.1) the routing table `id=url,id=url`, ids as the nodes&#x27; SYNC_NODE_ID.
+  SYNC_PUBLIC_URL: syncNodesField(&quot;SYNC_PUBLIC_URL&quot;),</code></pre></div><p class="label">From <span class="mono">apps/worker/src/config.ts</span></p><div class="scroll"><pre><code>  // How THIS process reaches the sync server. Not SYNC_PUBLIC_URL: that one is for browsers. One URL, or with
+  // several nodes (E7.1) the routing table `id=url,id=url` over their addresses inside the Docker network.
+  SYNC_URL: syncNodesField(&quot;SYNC_URL&quot;),</code></pre></div><p class="label">From <span class="mono">packages/lease/src/lease.ts</span></p><div class="scroll"><pre><code>/**
+ * Where a peer of `documentId` dials: the room&#x27;s owner if it has one and is alive, otherwise any live node
+ * (`pick`), whose first peer then tries to take the lease. Two nodes racing for a free room is fine: exactly one
+ * wins, and the other closes its peers with 4409, sending them back here, where the owner is now known.
+ * An owner that stopped beating (killed, E7.2) still holds its lease until it expires: its peers are sent to a
+ * live node, which waits that lease out and takes the room (takeLease below), instead of dialling a dead one.
+ * `owner` or `alive` throwing means Redis cannot be asked: the caller answers &quot;try again&quot;.
+ * Liveness is only a hint for routing: a node wrongly thought dead costs a peer one 4409, never a second room.
+ */
+export function syncRouter({ nodes, owner, alive, pick = randomNode }: { nodes: SyncNodes; owner: (documentId: string) =&gt; Promise&lt;Holder | undefined&gt;; alive: (nodeIds: readonly string[]) =&gt; Promise&lt;ReadonlySet&lt;string&gt;&gt;; pick?: (ids: readonly string[]) =&gt; string }): (documentId: string) =&gt; Promise&lt;string&gt; {
+  return async (documentId) =&gt; {
+    if (nodes.kind === &quot;one&quot;) return `${nodes.url}/documents/${documentId}`;
+    const ids = [...nodes.nodes.keys()];
+    const [holder, beating] = await Promise.all([owner(documentId), alive(ids)]);
+    // Owned by a node this table does not name: sending the peer anywhere else would loop on 4409 for ever.
+    if (holder &amp;&amp; !nodes.nodes.has(holder.nodeId)) throw new Error(`the room is owned by sync node &quot;${holder.nodeId}&quot;, which is not in the routing table`);
+    const live = ids.filter((id) =&gt; beating.has(id));
+    // Nobody beating at all (Redis just restarted, or heartbeats cannot be written): route as if all were alive.
+    const id = holder &amp;&amp; (beating.has(holder.nodeId) || live.length === 0) ? holder.nodeId : pick(live.length &gt; 0 ? live : ids);
+    return `${nodes.nodes.get(id) ?? &quot;&quot;}/documents/${documentId}`;
+  };
+}</code></pre></div><p>The router's contract, in order. An owner that beats: its address. An owner that stopped beating: any live node, which will wait the dead lease out (section 4). No owner: any live node, whose first peer takes the lease. Nobody beating at all: route as if everyone were alive, because "no heartbeats" after a Redis restart must not mean "no service". An owner the table does not name: an error, because sending the peer anywhere else would bounce on 4409 for ever, and a loud error is how a misconfigured table is found. And Redis unreachable propagates, so the caller can say "try again" honestly. <code>pick</code> is injectable so the tests can force a first dial to the wrong node, which is how the race in F20 is provoked on purpose.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // The routing hook (SPEC §2.11): a peer never knows a sync address in advance, it asks here, and gets the
+  // node that owns the room (E7.1), or any node when nobody does yet. The path names no org, so the lookup
+  // itself is membership-filtered.
+  app.post(&quot;/documents/:id/session&quot;, async (c) =&gt; {
+    const doc = await db.getDocumentForMember(c.req.param(&quot;id&quot;), c.var.user.id);
+    if (!doc) return notFound(c);
+    // E5.3a: a document is opening, so the git peer looks at Gitea now: a push whose delivery was lost reaches
+    // the canvas at once, not on the next timer. Best effort: a session is never refused over it.
+    await db.gitStore().requestReconcile().catch((err: unknown) =&gt; {
+      process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, path: c.req.path, message: `reconcile not requested: ${describeError(err)}` })}\n`);
+    });
+    let wsUrl;
+    try {
+      wsUrl = await route(doc.id);
+    } catch (err) {
+      // Redis cannot say who owns the room, and no node would open it without knowing: &quot;try again&quot;.
+      process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, path: c.req.path, message: `no sync node: ${describeError(err)}` })}\n`);
+      return fail(c, 503, &quot;sync_unavailable&quot;);
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const token = signSessionToken({ userId: c.var.user.id, name: c.var.user.name, orgId: doc.orgId, documentId: doc.id, secret: sessions.secret, ttlSeconds: sessions.ttlSeconds, now });
+    return c.json({
+      wsUrl,
+      token,
+      expiresAt: new Date((now + sessions.ttlSeconds) * 1000).toISOString(),
+    } satisfies SessionResponse);
+  });</code></pre></div><p class="label">From <span class="mono">apps/api/src/main.ts</span></p><div class="scroll"><pre><code>// Several sync nodes: /session reads each room&#x27;s owner from its lease. One node: nothing to ask.
+const leases = config.sessions.sync.kind === &quot;many&quot; ? createLeases({ redisUrl: config.redisUrl }) : undefined;</code></pre></div><p class="label">From <span class="mono">apps/worker/src/live.ts</span></p><div class="scroll"><pre><code>/**
+ * How THIS process reaches a document&#x27;s room (not the browsers&#x27; address): one sync node&#x27;s `syncUrl`, or, with
+ * several nodes (E7.1), a `route` to whichever node owns the room. Asked before every connection, like /session.
+ */
+export type SyncSessions = { secret: string } &amp; ({ syncUrl: string } | { route: (documentId: string) =&gt; Promise&lt;string&gt; });
+
+export const roomUrl = (sessions: SyncSessions, documentId: string): Promise&lt;string&gt; =&gt;
+  &quot;route&quot; in sessions ? sessions.route(documentId) : Promise.resolve(`${sessions.syncUrl}/documents/${documentId}`);
+
+/** SYNC_URL (config.ts) made usable: a table of nodes reads each room&#x27;s owner from its lease in Redis. */
+export function syncSessions(config: { secret: string } &amp; ({ syncUrl: string } | { nodes: ReadonlyMap&lt;string, string&gt; }), redisUrl: string): { sessions: SyncSessions; close: () =&gt; Promise&lt;void&gt; } {
+  if (!(&quot;nodes&quot; in config)) return { sessions: config, close: () =&gt; Promise.resolve() };
+  const leases = createLeases({ redisUrl });
+  return { sessions: { secret: config.secret, route: syncRouter({ nodes: { kind: &quot;many&quot;, nodes: config.nodes }, owner: (documentId) =&gt; leases.owner(documentId), alive: (nodeIds) =&gt; leases.alive(nodeIds) }) }, close: () =&gt; leases.close() };
+}</code></pre></div><p>The worker's AI, preview, ship and git peers used to dial <code>ws://sync:3001</code> directly. With two nodes that would have bounced on 4409 for every room the other node owns, for ever, because those peers had no <code>/session</code> to ask. <code>syncSessions</code> gives them the same router the api has, asked before every connection. It is a seam like <code>enqueue</code>: the app takes <code>owner</code> and <code>alive</code> as functions, so the api's tests run with no Redis at all (the default rejects, and the single-node shape never calls it).</p><p><strong>Now the node's side.</strong> A room opens only under the lease. <code>open()</code> takes it, starts renewing at once, loads the room, and hands back a room that also knows its sockets, so that losing the lease can send every peer elsewhere.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>// 4000-4999 are ours to define. They mirror the HTTP status a REST call would have had.
+// roomElsewhere (a 409, &quot;conflict&quot;): another sync node owns this document&#x27;s room. Not fatal to a peer: it
+// asks /session again, which answers with the owner&#x27;s address.
+const CLOSE = { invalidMessage: 4400, documentNotFound: 4404, roomElsewhere: 4409, tooManyRequests: 4429, documentCorrupt: 4500, unavailable: 4503 } as const;</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  /**
+   * Room ownership across sync nodes (F20): a room opens here only while this node holds the document&#x27;s lease
+   * in Redis. Without it this process opens every room it is asked for, which is right for exactly one node.
+   */
+  lease?: { leases: Leases; nodeId: string };
+};</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  /**
+   * Takes the document&#x27;s lease (when there are several nodes), then loads the room. Never rejects.
+   * `forget` drops this room from `rooms` if it is still the current one there.
+   */
+  async function open(documentId: string, orgId: string, forget: () =&gt; void): Promise&lt;Opened&gt; {
+    const owned = (loaded: Loaded, release: () =&gt; Promise&lt;void&gt;): Owned =&gt; ({ ...loaded, sockets: new Set(), lost: false, release });
+    if (!lease) {
+      const loaded = await load(documentId, orgId);
+      return &quot;closeCode&quot; in loaded ? loaded : owned(loaded, () =&gt; Promise.resolve());
+    }
+    const { leases, nodeId } = lease;
+    // The largest token that ever claimed the document (E7.3): ours must be above it, even after a Redis flush.
+    let floor = 0;
+    if (store) {
+      let fence;
+      try {
+        fence = await store.fence(orgId, documentId);
+      } catch {
+        return { closeCode: CLOSE.unavailable };
+      }
+      if (fence === undefined) return { closeCode: CLOSE.documentNotFound };
+      floor = fence;
+    }
+    let holder: Holder;
+    let acquiredAt: number; // BEFORE the winning send: our deadline must never outlast Redis&#x27;s (lease.ts)
+    try {
+      // Another live node owns the room: its peers are sent back to /session, which names the owner. A dead
+      // one&#x27;s lease (or our own previous run&#x27;s) is waited out here, up to one ttl, and then the room is ours (F21).
+      const taken = await takeLease({
+        acquire: () =&gt; leases.acquire(documentId, nodeId, floor), alive: async (id) =&gt; (await leases.alive([id])).has(id),
+        nodeId, ttlMs: leases.ttlMs, now: () =&gt; performance.now(), sleep: (ms) =&gt; new Promise((resolve) =&gt; setTimeout(resolve, ms).unref()),
+      });
+      if (!taken) return { closeCode: CLOSE.roomElsewhere };
+      ({ holder, acquiredAt } = taken);
+    } catch (err) {
+      // Redis cannot say who owns it: opening anyway could make a second room. &quot;Try again&quot; instead.
+      log(documentId, `lease not taken: ${err instanceof Error ? err.message : &quot;unknown&quot;}`);
+      return { closeCode: CLOSE.unavailable };
+    }
+    // Renewal starts NOW, not after the load: a long replay must not let the lease lapse unnoticed.
+    const opened: { room?: Owned } = {}; // filled once loaded
+    // The lease ran out (our clock) or the journal fenced us (a newer owner claimed the document): stop writing,
+    // send the peers to the new owner.
+    const drop = (why: string): void =&gt; {
+      clearInterval(renewing);
+      const { room } = opened;
+      if (!room || room.lost) return; // still loading: the check after load() below refuses it
+      log(documentId, `lease ${String(holder.token)} ${why}: its peers are sent to the new owner`);
+      room.lost = true;
+      room.snapshot?.stop();
+      forget(); // the next peer asks Redis again
+      for (const socket of room.sockets) socket.close(CLOSE.roomElsewhere, &quot;room_elsewhere&quot;);
+    };
+    const keeper = keepLease({
+      renew: () =&gt; leases.renew(documentId, holder), ttlMs: leases.ttlMs, now: () =&gt; performance.now(), acquiredAt,
+      onLost: () =&gt; { drop(&quot;lost&quot;); },
+    });
+    const renewing = setInterval(() =&gt; void keeper.tick(), leases.ttlMs / 3);
+    renewing.unref();
+    const release = async (): Promise&lt;void&gt; =&gt; {
+      clearInterval(renewing);
+      if (!keeper.held) return;
+      await leases.release(documentId, holder).catch((err: unknown) =&gt; {
+        log(documentId, `lease not released, it expires by itself: ${err instanceof Error ? err.message : &quot;unknown&quot;}`);
+      });
+    };</code></pre></div><p>Read <code>drop</code> and <code>keepLease</code>'s <code>onLost</code> together: when the deadline passes or a renewal is refused, the room is marked <code>lost</code>, snapshots stop, the room is forgotten (so the next peer asks Redis again rather than joining a corpse), and every socket is closed with 4409. Renewal starts <em>before</em> <code>load()</code>, because replaying a long journal can take longer than a third of a ttl. And a room whose lease lapsed <em>during</em> the load is refused at the end (<code>!keeper.held</code>), released, and answered 4409, so a peer never joins a room that is already dead.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    if (opened.lost) {
+      ws.close(CLOSE.roomElsewhere, &quot;room_elsewhere&quot;); // it lost its lease while this peer was on its way in
+      return;
+    }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>      if (opened.lost) return; // being sent elsewhere: take nothing more (an op already in the queue meets the fence)</code></pre></div><p>4409 is a <em>conflict</em> close code by analogy with HTTP 409, and it is the one code in the 4000s that is not fatal to a peer. peer-client's <code>FATAL_CLOSE_CODES</code> does not include it, so the peer does what it does on any non-fatal close: asks <code>session()</code> again and dials what it answers, which by now names the owner. Lesson 2's client needed no change for F20 except one test pinning this.</p><p class="label">From <span class="mono">packages/peer-client/src/peer.ts</span></p><div class="scroll"><pre><code>const FATAL_CLOSE_CODES = new Set([4400, 4404, 4500, 1009]);</code></pre></div><p class="label">From <span class="mono">packages/peer-client/src/peer.test.ts</span></p><div class="scroll"><pre><code>test(&quot;the room&#x27;s node dies, or says the room moved (4409): the next connection dials whatever /session answers NOW (F21)&quot;, async () =&gt; {
+  const net = fakeNet((socket, nth) =&gt; {
+    socket.say(welcome);
+    if (nth === 1) socket.close(1006); // killed
+    if (nth === 2) socket.close(4409); // not the owner (yet)
+  });
+  const addresses = [&quot;ws://node-a/documents/d&quot;, &quot;ws://node-b/documents/d&quot;, &quot;ws://node-c/documents/d&quot;];
+  let asked = 0;
+  const peer = connectPeer(options(net, { session: () =&gt; Promise.resolve({ wsUrl: addresses[Math.min(asked++, 2)] ?? &quot;&quot;, token: &quot;t&quot; }) }));
+  await until(() =&gt; net.sockets.length === 3 &amp;&amp; peer.status === &quot;live&quot;, &quot;live on the third address&quot;);
+  expect(net.sockets.map((socket) =&gt; socket.url)).toEqual(addresses);
+  peer.close();
+});</code></pre></div><p class="label">From <span class="mono">docker-compose.yml</span></p><div class="scroll"><pre><code>  # One room per open document, on exactly ONE of the sync nodes: whichever holds the document&#x27;s lease in
+  # Redis (E7.1, F20). Two nodes, `sync` and `sync-2`; the service name is the node id the routing tables use.
+  sync: &amp;sync
+    build: .
+    command: [&quot;node&quot;, &quot;apps/sync/src/main.ts&quot;]
+    environment: &amp;sync-env
+      PORT: &quot;3001&quot;
+      SYNC_NODE_ID: sync
+      # Through redis-proxy, on this node&#x27;s own listener (E7.3); the api and the workers dial Redis directly.
+      REDIS_URL: &quot;redis://:${REDIS_PASSWORD:?run ./init.sh}@redis-proxy:6379&quot;
+      # How long a room outlives a silent owner (tunable; empty = 10 s). Renewed every third of it.
+      LEASE_TTL_MS: &quot;${LEASE_TTL_MS:-}&quot;
+      DATABASE_URL: &quot;postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon&quot;
+      SESSION_TOKEN_SECRET: &quot;${SESSION_TOKEN_SECRET:?run ./init.sh}&quot;
+      MINIO_URL: http://minio:9000
+      MINIO_USER: noon
+      MINIO_PASSWORD: &quot;${MINIO_PASSWORD:?run ./init.sh}&quot;
+      # Tunable from the shell (SPEC §2.9); empty = the defaults, 500 ops and 30 s.
+      SNAPSHOT_EVERY_OPS: &quot;${SNAPSHOT_EVERY_OPS:-}&quot;
+      SNAPSHOT_EVERY_SECONDS: &quot;${SNAPSHOT_EVERY_SECONDS:-}&quot;
+    ports: [&quot;127.0.0.1:${SYNC_PORT:-3001}:3001&quot;]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      minio: { condition: service_healthy }
+      redis-proxy: { condition: service_healthy }
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;node&quot;, &quot;-e&quot;, &quot;fetch(&#x27;http://localhost:3001/health&#x27;).then(r =&gt; process.exit(r.ok ? 0 : 1), () =&gt; process.exit(1))&quot;]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  # The second node: the same service, another id and host port (3002 is Gitea&#x27;s).
+  sync-2:
+    &lt;&lt;: *sync
+    environment:
+      &lt;&lt;: *sync-env
+      SYNC_NODE_ID: sync-2
+      REDIS_URL: &quot;redis://:${REDIS_PASSWORD:?run ./init.sh}@redis-proxy:6380&quot;
+    ports: [&quot;127.0.0.1:${SYNC_2_PORT:-3003}:3001&quot;]</code></pre></div><p class="label">From <span class="mono">docker-compose.yml</span></p><div class="scroll"><pre><code>      # What a BROWSER on this machine dials to reach each sync node: id=url per node, ids as their SYNC_NODE_ID
+      # (E7.1). /session answers with the address of the node that owns the document&#x27;s room.
+      # Hosting through one public host (Vite proxies /sync and /sync-2 to the two nodes), set in the shell, not .env:
+      #   SYNC_PUBLIC_URL=sync=wss://&lt;public host&gt;/sync,sync-2=wss://&lt;public host&gt;/sync-2
+      SYNC_PUBLIC_URL: &quot;${SYNC_PUBLIC_URL:-sync=ws://localhost:${SYNC_PORT:-3001},sync-2=ws://localhost:${SYNC_2_PORT:-3003}}&quot;</code></pre></div><p class="label">From <span class="mono">apps/web/vite.config.ts</span></p><div class="scroll"><pre><code>      // One path per sync node (E7.1): the api&#x27;s SYNC_PUBLIC_URL=sync=wss://&lt;host&gt;/sync,sync-2=wss://&lt;host&gt;/sync-2.
+      // Anchored patterns: a plain &quot;/sync&quot; prefix would also swallow &quot;/sync-2&quot;.
+      &quot;^/sync(/|$)&quot;: { target: &quot;ws://localhost:3001&quot;, ws: true, rewrite: (path) =&gt; path.replace(/^\/sync/, &quot;&quot;) },
+      &quot;^/sync-2(/|$)&quot;: { target: &quot;ws://localhost:3003&quot;, ws: true, rewrite: (path) =&gt; path.replace(/^\/sync-2/, &quot;&quot;) },</code></pre></div><p class="label">From <span class="mono">apps/sync/src/one-room-globally.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a node whose lease is taken sends its peers away with 4409, and they land in the new owner&#x27;s room&quot;, async () =&gt; {
+  const documentId = randomUUID();
+  const peers = [peer(documentId, &quot;node-a&quot;), peer(documentId, &quot;node-a&quot;)];
+  await until(() =&gt; peers.every((each) =&gt; each.status === &quot;live&quot;), &quot;both peers live on node-a&quot;, 5000);
+  expect(nodes.roomAt(documentId)).toBe(0);
+  const before = await nodes.owner(documentId);
+
+  // What a long pause of node-a looks like from outside: its lease is gone, and node-b takes the room.
+  await nodes.leases.release(documentId, before ?? { token: 0, nodeId: &quot;none&quot; });
+  const usurper = await connect(nodes.servers[1].url, documentId);
+  await usurper.next(&quot;welcome&quot;);
+  const after = await nodes.owner(documentId);
+  expect(after).toMatchObject({ nodeId: &quot;node-b&quot; });
+  expect(after?.token).toBeGreaterThan(before?.token ?? Infinity); // a later owner always carries a larger token
+
+  // node-a&#x27;s next renewal (every ttl/3) is refused: it gives its peers up; they ask again and join node-b.
+  await until(() =&gt; nodes.servers[0].peerCount(documentId) === 0 &amp;&amp; nodes.servers[1].peerCount(documentId) === 3, &quot;every peer on node-b&quot;, 5000);
+  await until(() =&gt; peers.every((each) =&gt; each.status === &quot;live&quot;), &quot;both peers live again&quot;, 5000);
+  expect(nodes.roomAt(documentId)).toBe(1);
+  for (const each of peers) each.close();
+  usurper.close();
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/one-room-join-race.int.test.ts</span></p><div class="scroll"><pre><code>// integration:one-room-join-race (E7.1, F20). N peers of a brand-new document join at the same moment, split
+// across both sync nodes before anyone owns the room: both nodes race for the lease, exactly one wins, and it
+// issues exactly one fencing token; the loser sends its peers back to /session, and all N end in ONE room.</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>type SyncNodes = { kind: "one"; url } | { kind: "many"; nodes: ReadonlyMap }</code></td><td>a sealed interface with two records</td><td>a <code>Union</code> of two dataclasses with a <code>Literal</code> tag</td></tr><tr><td><code>URL.canParse(value)</code></td><td><code>new URI(value)</code> in a <code>try</code></td><td><code>urllib.parse.urlparse</code>, which never throws, so check the parts</td></tr><tr><td><code>owner = () =&gt; Promise.reject(new Error("no lease store"))</code> as a default that refuses</td><td>a constructor overload that throws <code>UnsupportedOperationException</code></td><td>a default argument that raises</td></tr><tr><td>YAML anchors: <code>sync: &amp;sync</code>, <code>sync-2: { &lt;&lt;: *sync }</code></td><td>the same YAML</td><td>the same YAML</td></tr><tr><td>a regex key in Vite's proxy: <code>"^/sync(/|$)"</code></td><td>a Spring Cloud Gateway route with an anchored predicate</td><td>an nginx <code>location ~ ^/sync(/|$)</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A plain "/sync" proxy prefix swallowed "/sync-2".</strong></p><p>The public demo runs through one host, and Vite forwards <code>/sync</code> to node one and <code>/sync-2</code> to node two. With prefix keys, every <code>/sync-2/documents/…</code> request matched <code>/sync</code> first and was rewritten to <code>-2/documents/…</code> on the wrong node. Anchoring the patterns (<code>^/sync(/|$)</code>) is a one-line fix, and the comment says why so nobody "simplifies" it back. A single-URL <code>SYNC_PUBLIC_URL</code> against two nodes is the same class of misconfiguration: browsers bounce on 4409 for every room the other node owns, and the commit names it so an operator recognises the symptom.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Hashing the document id to pick a node was rejected.</strong></p><p>Consistent hashing is the textbook answer for "which node", and it is wrong here: a dead node would be picked every time for its share of documents, and a peer's only remedy would be to keep retrying until the lease moved. The lease is already the truth about ownership; the pick only matters for a free room, and there it should prefer a node that is alive. Section 4's heartbeats are that preference.</p></div><p class="note"><strong>The shape:</strong> ownership is decided in one place (the lease), advertised through one door (<code>/session</code>), and enforced by the owner refusing what is not its (4409). A peer never needs a routing table, a node never needs to know the other nodes, and the api never needs to know which rooms are open. Each of them asks Redis one question and acts on the answer.</p></section><section id="failover"><h2>4 · Failover: heartbeats as a hint, and a dead lease waited out</h2><p>E7.1 left a named gap: kill the owner and its lease pins its peers to a dead address until it expires, and afterwards a random pick sends half of them back to the corpse. With peer-client's backoff (up to ten seconds) the room could come back a second ttl late. F21 budgets one ttl. Two additions close the gap, and both are careful to add <em>speed</em> without adding a second source of truth about ownership.</p><p class="label">From <span class="mono">packages/lease/src/index.ts</span></p><div class="scroll"><pre><code>    async beat(nodeId) {
+      await redis.set(`${prefix}node:${nodeId}`, &quot;1&quot;, &quot;PX&quot;, Math.max(1, Math.round(ttlMs / 3)));
+    },
+    async alive(nodeIds) {
+      if (nodeIds.length === 0) return new Set();
+      const beats = await redis.mget(...nodeIds.map((id) =&gt; `${prefix}node:${id}`));
+      return new Set(nodeIds.filter((_, i) =&gt; beats[i] !== null));
+    },</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  // &quot;Alive&quot; into Redis every tenth of a ttl (E7.2): /session stops sending peers to a node that went quiet,
+  // and a node knows which leases can only expire. A failed beat is not logged: Redis being away already is.
+  const beat = (): void =&gt; { if (lease &amp;&amp; !closing) void lease.leases.beat(lease.nodeId).catch(() =&gt; undefined); };
+  const beating = lease ? setInterval(beat, lease.leases.ttlMs / 10) : undefined;
+  beating?.unref();
+  beat();</code></pre></div><p><strong>Heartbeats.</strong> Every node writes <code>node:&lt;id&gt;</code> with an expiry of a third of a ttl, every tenth of one. A killed node is known dead within ttl/3, long before any of its leases expire. Two things are not done with that knowledge, on purpose. It does not decide ownership: the router uses it only to choose where a peer is <em>sent</em>, and a node wrongly thought dead costs a peer one 4409, never a second room. And it does not steal: a lease held by a node that stopped beating is still that node's until Redis lets it go, because "stopped beating" and "stopped writing" are different facts (a paused node does neither, and wakes).</p><p class="label">From <span class="mono">packages/lease/src/lease.ts</span></p><div class="scroll"><pre><code>/**
+ * A node&#x27;s first peer of a room has arrived: take the lease. Held by a live node: refused at once (its peers
+ * go to the owner). Held by a node that stopped beating, or under OUR id by a run of this node that is gone
+ * (killed and restarted): that lease can only expire, so wait for it, polling, for at most one ttl, then take
+ * the room (F21). Never stolen early: until it expires, the dead holder&#x27;s lease is the only truth there is.
+ * `acquiredAt` is read BEFORE the winning acquire was sent (keepLease&#x27;s deadline counts from it).
+ * ponytail: polls every ttl/10 rather than waiting for the key&#x27;s exact expiry; ceiling: the takeover lands up to
+ * ttl/10 after the lease expired. Upgrade: return the PTTL from the acquire script and sleep exactly that.
+ */
+export async function takeLease({ acquire, alive, nodeId, ttlMs, now, sleep }: { acquire: () =&gt; Promise&lt;{ acquired: boolean; holder: Holder }&gt;; alive: (nodeId: string) =&gt; Promise&lt;boolean&gt;; nodeId: string; ttlMs: number; now: () =&gt; number; sleep: (ms: number) =&gt; Promise&lt;void&gt; }): Promise&lt;{ holder: Holder; acquiredAt: number } | undefined&gt; {
+  const giveUpAt = now() + ttlMs + ttlMs / 10;
+  for (;;) {
+    const acquiredAt = now();
+    const taken = await acquire();
+    if (taken.acquired) return { holder: taken.holder, acquiredAt };
+    if (taken.holder.nodeId !== nodeId &amp;&amp; (await alive(taken.holder.nodeId))) return undefined;
+    if (now() &gt;= giveUpAt) return undefined; // it did not expire when it should have: renewed after all
+    await sleep(ttlMs / 10);
+  }
+}</code></pre></div><p><strong>Waiting the lease out.</strong> <code>takeLease</code> is the pure decision a node makes when its first peer of a room arrives and the acquire is refused. Held by a live node: refuse at once, the peer belongs with the owner. Held by a node that stopped beating, or by <em>our own id</em> from a previous run that was killed: poll every ttl/10 until the lease expires, then take it; if it does not expire within about a ttl it was renewed after all, so refuse. The peer's socket stays open the whole time, connecting, so the takeover lands within ttl/10 of the expiry rather than at the peer's next backoff. This is also what retires E7.1's ponytail: a restarted node no longer bounces its own peers with 4409 for up to a ttl.</p><p>The <code>for (;;)</code> with a return in the middle is the idiom for a poll with a deadline; <code>acquiredAt</code> is read before each acquire is sent, for the reason section 2 gave. The <code>sleep</code> is injected and the tests wind a fake clock through it, so a test of "waited out, taken within a poll of expiry" runs in microseconds and asserts on exact numbers.</p><p class="label">From <span class="mono">packages/lease/src/lease.test.ts</span></p><div class="scroll"><pre><code>  it(&quot;held by a node that stopped beating (killed): waited out, and taken no later than a poll after it expires&quot;, async () =&gt; {
+    const { take, clock } = setup({ holder: { token: 4, nodeId: &quot;sync-2&quot; }, expiresAt: 700, beating: new Set([&quot;sync&quot;]) });
+    const taken = await take();
+    expect(taken?.holder).toEqual({ token: 5, nodeId: &quot;sync&quot; });
+    expect(clock()).toBeLessThanOrEqual(700 + TTL / 10 + 1);
+    expect(taken?.acquiredAt).toBeGreaterThanOrEqual(700 - TTL / 10);
+  });
+
+  it(&quot;our OWN id on it (this node was killed and restarted) is waited out too, though our id is beating&quot;, async () =&gt; {
+    const { take } = setup({ holder: { token: 4, nodeId: &quot;sync&quot; }, expiresAt: 300, beating: new Set([&quot;sync&quot;]) });
+    expect((await take())?.holder.token).toBe(5);
+  });</code></pre></div><p class="label">From <span class="mono">apps/sync/src/failover.int.test.ts</span></p><div class="scroll"><pre><code>// integration:failover (E7.2, F21). Two sync nodes, one Redis. The node that owns a room dies without a word
+// (its Redis connection first, so it neither releases its lease nor beats again): its peers ask the router again,
+// are sent to the live node, and that node takes the room as soon as the dead lease expires, never later than
+// about one ttl after the kill. The data half of F21 (no acknowledged op lost or doubled) needs the journal:
+// scripts/chaos/kill-owner-failover.ts, against the compose stack.</code></pre></div><p class="label">From <span class="mono">apps/sync/src/failover.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;killing the owner moves the room: its peers reach the live node through the router, within about one ttl&quot;, async () =&gt; {
+  const documentId = randomUUID();
+  const peers = [peer(documentId), peer(documentId)];
+  await until(() =&gt; peers.every((each) =&gt; each.status === &quot;live&quot;), &quot;both peers live on node-a&quot;, 5000);
+  const before = await (lookup as Leases).owner(documentId);
+  expect(before).toMatchObject({ nodeId: &quot;node-a&quot; });
+
+  // kill: Redis first, so the lease is neither renewed nor released and the heartbeat stops; then the sockets.
+  killed = true;
+  await (leases[0] as Leases).close();
+  const killedAt = performance.now();
+  await (servers[0] as RunningSyncServer).close();
+
+  await until(() =&gt; peers.every((each) =&gt; each.status === &quot;live&quot;) &amp;&amp; (servers[1] as RunningSyncServer).peerCount(documentId) === 2, &quot;both peers live on node-b&quot;, 5000);
+  expect(performance.now() - killedAt).toBeLessThan(TTL + TTL / 10 + 500);
+  const after = await (lookup as Leases).owner(documentId);
+  expect(after).toMatchObject({ nodeId: &quot;node-b&quot; });
+  expect(after?.token).toBeGreaterThan(before?.token ?? Infinity);
+  for (const each of peers) each.close();
+});</code></pre></div><p>The integration test kills node-a the way a process dies: its Redis client is closed <em>first</em>, so the lease is neither renewed nor released and the heartbeat stops, then the sockets are torn down. Anything gentler (a clean <code>close()</code> releases the lease) would test a different, easier feature. The data half of F21 needs the journal and the real stack, and that is the chaos run.</p><p class="label">From <span class="mono">scripts/chaos/kill-owner-failover.ts</span></p><div class="scroll"><pre><code>// chaos:kill-owner-failover (E7.2, SPEC F21). Against the REAL compose stack (two sync nodes):
+//   ./init.sh   (or: docker compose up -d), then   node scripts/chaos/kill-owner-failover.ts   (ROUNDS=3 by default)
+// Each round, on a fresh document: a person (the api&#x27;s session route) and the AI (a token signed as its worker
+// signs it, routed by /session too) join through @noon/peer-client and get a few edits acknowledged. Each fires a
+// burst and the sync node that owns the room (read from its lease) is `kill -9`ed under it, as in E6.3. More edits
+// are made while it is gone. It is NOT started again: the peers must find the OTHER node through /session by
+// themselves, and that node must take the room as soon as the dead lease expires (never more than about one
+// LEASE_TTL_MS after the kill). Then scripts/chaos/no-loss.ts, unchanged, holds the ledger against the journal
+// (F18: every acknowledged op present, none twice, unacknowledged ops resent and applied once, peers converge).
+// Pitfalls (SPEC §4a): the fault opens while the workload is on the wire; waits poll the observable; it repeats;
+// the killed node is started again in `finally`. Prints one JSON line; exit 0 = PASS. The org is deleted at the end.</code></pre></div><p class="label">From <span class="mono">scripts/chaos/kill-owner-failover.ts</span></p><div class="scroll"><pre><code>    const before = holderOf(doc);
+    if (!before) throw new Error(`no sync node holds the lease of ${doc}`);
+    victim = before.node;
+    edit(20); // on the wire...
+    compose(&quot;kill&quot;, &quot;--signal&quot;, &quot;SIGKILL&quot;, victim); // ...and the owner dies under it. execFileSync: no ack is heard meanwhile.
+    const killedAt = Date.now();
+    ledger.fault();
+    await until(() =&gt; all.every(([, p]) =&gt; p.status !== &quot;live&quot;), &quot;both peers see the owner gone&quot;, 30_000);
+    edit(5); // made while no node has the room: held, sent after the next welcome
+
+    let after: ReturnType&lt;typeof holderOf&gt;;
+    await until(() =&gt; { after = holderOf(doc); return after !== undefined &amp;&amp; after.node !== victim; }, `another node takes the room (budget ${String(takeoverBudgetMs)} ms)`, takeoverBudgetMs + 30_000);
+    const movedAfterMs = Date.now() - killedAt;
+    if (!after || after.token &lt;= before.token) throw new Error(`the new owner&#x27;s token ${String(after?.token)} is not above the dead one&#x27;s ${String(before.token)}`);
+    await until(() =&gt; all.every(([, p]) =&gt; p.status === &quot;live&quot; &amp;&amp; p.pendingCount === 0), &quot;both peers reconnected through /session, nothing pending&quot;, 30_000);
+    await ledger.settle(15_000);
+    await until(() =&gt; all.every(([, p]) =&gt; p.seq === peers.person.seq), &quot;both peers at the same seq&quot;, 10_000);</code></pre></div><p>Everything lesson 6 said about the ledger applies unchanged, which was the point of writing <code>noLossViolations</code> as a pure function: a different fault, the same assertion. Two things are new. The victim is read from the lease (<code>holderOf</code>, <code>redis-cli GET lease:&lt;id&gt;</code>), because the run does not know which node the api routed the room to, and must kill <em>that</em> one. And the victim is <em>not</em> restarted until the round is over: the peers have to find the other node through <code>/session</code> by themselves, and the takeover time is measured against <code>ttl + ttl/10 + 2 s</code>, so a takeover that waited out a second ttl fails the run.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>redis.set(key, "1", "PX", ms)</code> as a heartbeat</td><td>Redisson's lock watchdog, or an etcd lease keep-alive</td><td><code>r.set(key, 1, px=ms)</code></td></tr><tr><td><code>for (;;) { ... return ...; await sleep(ms); }</code> with a deadline</td><td>a <code>while (true)</code> with <code>Thread.sleep</code>; Awaitility in tests</td><td><code>while True:</code> with <code>await asyncio.sleep</code></td></tr><tr><td><code>sleep: (ms) =&gt; Promise&lt;void&gt;</code> injected, advancing a fake clock</td><td>an injected <code>Sleeper</code></td><td>an injected coroutine</td></tr><tr><td><code>await leases.close()</code> before <code>server.close()</code>: an unclean death, on purpose</td><td>close the Jedis pool first</td><td>close the Redis client first</td></tr><tr><td><code>Date.now() - killedAt</code> against a budget computed from the ttl</td><td><code>Duration.between</code></td><td><code>time.time()</code> arithmetic</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Stealing the lease as soon as the heartbeat is gone was rejected.</strong></p><p>It would make failover take ttl/3 instead of a ttl. It would also make a paused owner's writes overlap with the new owner's from the moment of the steal, with nothing yet to stop them (the fence is E7.3, built after). Even with the fence, a steal turns "the old owner is fenced when it wakes" from a rare event into the normal one, and every op it accepted meanwhile is an op its peers were told about and the journal refused. Waiting for the expiry keeps the invariant that at most one node <em>believes</em> it owns a room at any wall-clock moment, except during a pause, and pauses are what the fence is for.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Shortening peer-client's backoff was rejected.</strong></p><p>The second-ttl delay came from the client's retry curve: a peer that bounced on 4409 backed off, and by the time it asked again the lease had long expired. The tempting fix is a faster curve. The chosen one is that the <em>server</em> holds the connecting peer while it waits the lease out, so the bound on takeover comes from the node, and every client, including the worker's peers, gets it without touching their retry behaviour.</p></div><p class="note"><strong>CAP, honestly:</strong> during the ttl after a kill the room is <em>unavailable</em>: the old owner is gone, the new one refuses to take the room until the lease expires, and peers hold their edits. That is a consistency-over-availability choice, made because two rooms for one document is a divergence the design cannot repair (lesson 2), while a ten-second pause is something peer-client already absorbs. The dial is <code>LEASE_TTL_MS</code>: shorter means faster failover and more false losses under load (a renewal that misses its window by a scheduler hiccup drops a healthy room); longer means the reverse. Ten seconds, renewed every three, is the default; the chaos run's budget is expressed in ttl so the test moves with the dial.</p></section><section id="fence"><h2>5 · The fence: the check and the write are one statement</h2><p>Section 2 ended with the argument: a process frozen past its lease cannot know it, so the storage must refuse it. F22 spells the fault out twice: <code>docker pause</code> the owner past its lease and resume it; and cut the owner off from Redis while Postgres still answers (a partition, scripted with toxiproxy). In both, the old owner wakes believing it owns the room, with ops queued and appends in flight, and the journal must end with no gap, no duplicate, and no row from it after the new owner read the journal.</p><p class="label">From <span class="mono">packages/db/migrations/0014_fence.sql</span></p><div class="scroll"><pre><code>-- E7.3 (F22): the fence. A sync node that took a room&#x27;s lease CLAIMS the document here before it reads the
+-- journal: fence_token rises to its lease token (never back down), fence_claim becomes the id of that one
+-- opening. The journal append inserts only while fence_claim is still the appender&#x27;s, in the SAME statement
+-- that locks this row (FOR UPDATE): an owner frozen past its lease that runs again cannot add a row after a
+-- newer owner&#x27;s claim, and a row it added before the claim is in the journal the newer owner then replays.
+-- The token is kept here, not only in Redis: a flushed Redis restarts its counter at 1, so the next acquire
+-- is seeded from fence_token, and tokens keep rising across the flush.
+alter table documents
+  add column fence_token bigint not null default 0 check (fence_token &gt;= 0),
+  add column fence_claim uuid;</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /** E7.3: the largest lease token that ever claimed this document (0: none); undefined when there is no such document. */
+  fence(orgId: string, documentId: string): Promise&lt;number | undefined&gt;;
+  /**
+   * E7.3: this opening of the room, under lease `token`, becomes the document&#x27;s only writer: from now on only
+   * appends that carry `claim` land. False: a claim with an equal or larger token was made (this lease is stale).
+   */
+  claim(orgId: string, documentId: string, token: number, claim: string): Promise&lt;boolean&gt;;
+  /**
+   * E6.1a: journals an accepted op, BEFORE anyone hears of it. Undefined: written. An op: this sender&#x27;s
+   * opId was journaled already, and that is what it became (a resend the room had forgotten). Rejects
+   * when the op is not durable: the database is away, the seq is taken (a second writer), the document is gone,
+   * or (E7.3) `claim` is no longer the document&#x27;s: `Fenced`. No claim: only a document never claimed takes it.
+   */
+  append(orgId: string, documentId: string, op: SequencedOp, claim?: string): Promise&lt;SequencedOp | undefined&gt;;</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>/** E7.3: the append was refused because a newer owner claimed the document. This room must stop writing. */
+export class Fenced extends Error {}</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async fence(orgId, documentId) {
+        if (!isId(orgId) || !isId(documentId)) return undefined;
+        return (await one(z.object({ fence_token: count }), &quot;select fence_token from documents where org_id = $1 and id = $2&quot;, [orgId, documentId]))?.fence_token;
+      },
+      async claim(orgId, documentId, token, claim) {
+        if (!isId(orgId) || !isId(documentId) || !isId(claim)) return false;
+        // `&lt;`, not `&lt;=`: two openings under one token (a flushed Redis issuing it again) cannot both claim.
+        const claimed = await pool.query(&quot;update documents set fence_token = $3, fence_claim = $4 where org_id = $1 and id = $2 and fence_token &lt; $3&quot;, [orgId, documentId, token, claim]);
+        return claimed.rowCount === 1;
+      },
+      async append(orgId, documentId, { seq, opId, actor, op }, claim) {
+        if (!isId(orgId) || !isId(documentId)) throw new Error(&quot;journal: not a document id&quot;);
+        try {
+          // From the document&#x27;s row, so that a document of another org (or one deleted meanwhile) takes no op.
+          // The fence is in the same statement (F22): the row must still name this room&#x27;s claim, and FOR UPDATE
+          // locks it, so a claim either waits for this insert (and its reader sees the row) or comes first (and
+          // Postgres re-checks the WHERE against the claimed row: nothing is inserted). Never read-then-write.
+          const written = await pool.query(
+            `insert into op_journal (document_id, org_id, ${JOURNAL_COLUMNS}) select id, org_id, $3, $4, $5, $6, $7, $8 from documents where org_id = $1 and id = $2 and fence_claim is not distinct from $9 for update`,
+            [orgId, documentId, seq, opId, actor.kind, actor.id, actor.runId ?? null, JSON.stringify(op), claim ?? null],
+          );
+          if (written.rowCount !== 1) {
+            // Only telling the two refusals apart, after the fact: nothing was written either way.
+            const exists = await pool.query(&quot;select 1 from documents where org_id = $1 and id = $2&quot;, [orgId, documentId]);
+            throw exists.rowCount === 1 ? new Fenced(&quot;journal: fenced, a newer owner claimed the document&quot;) : new Error(&quot;journal: the document is gone&quot;);
+          }
+          return undefined;
+        } catch (err) {
+          // Two unique keys, told apart by NAME: 23505 alone cannot say whether this is a resend or a rival writer.
+          if (err instanceof Error &amp;&amp; &quot;constraint&quot; in err &amp;&amp; err.constraint === &quot;op_journal_op&quot;) {
+            const original = await one(JournalRow, `select ${JOURNAL_COLUMNS} from op_journal where document_id = $1 and actor_id = $2 and op_id = $3`, [documentId, actor.id, opId]);
+            if (original) return original;
+          }
+          throw err;
+        }
+      },</code></pre></div><p>Three statements, and the whole feature is in how they relate. <strong><code>fence</code></strong> reads the largest token that ever claimed the document; the acquire in section 1 takes it as the <em>floor</em>, so a token issued after a Redis flush is still above every token the journal has seen. <strong><code>claim</code></strong> is how an opening becomes the document's only writer: one <code>update</code> that moves <code>fence_token</code> up to the lease token and sets <code>fence_claim</code> to a fresh random id, guarded by <code>fence_token &lt; $3</code>. Strictly less, not less-or-equal: two openings under one token (a node paused between acquire and claim, then a flush that reissues the number) cannot both claim. <strong><code>append</code></strong> is one statement: <code>insert ... select ... from documents where ... fence_claim is not distinct from $9 for update</code>. If the row still names this opening's claim, the row is written; if not, zero rows, and the store throws <code>Fenced</code>.</p><p>Why the check must be <em>in</em> the statement rather than before it is the naive control in <code>fence.int</code>, and it is exactly the interleaving a pause produces: A reads the claim (still its own), freezes, B claims and reads the journal, A wakes and inserts. A read-then-write in app code lets that row in, one past what B read, so B's room never has it and B's next append collides on the seq. In one statement Postgres does the work. <code>FOR UPDATE</code> takes a row lock on the documents row, so an append and a claim on the same document serialise: the claim waits for an in-flight insert to commit (and B's replay then contains that row, correctly, because it was written under a claim that was still valid), or the claim commits first, and the append, which was blocked on the lock, <em>re-evaluates its WHERE against the updated row</em> (Postgres's behaviour under READ COMMITTED when a locked row changed) and inserts nothing. The test "an append racing an uncommitted claim waits for it, then is refused" is that second branch, with two real connections.</p><p><code>is not distinct from</code> is SQL's null-safe equality: with no lease (one node, the tests) the append carries no claim, <code>$9</code> is <code>NULL</code>, and <code>NULL = NULL</code> would be unknown, never true; <code>IS NOT DISTINCT FROM</code> is true, so an unclaimed append lands only on a document never claimed, which is the right rule for a single node that has never had a rival.</p><p class="label">From <span class="mono">packages/db/src/fence.int.test.ts</span></p><div class="scroll"><pre><code>// integration:append-stale-token-rejected (E7.3, F22). Two owners of one document: A (lease token 1) is the
+// zombie, B (token 2) took the room after A&#x27;s lease ran out. B claims the document, reads the journal, and numbers
+// on from there. Whatever A tries after B&#x27;s claim must be refused, in a REAL race, and the journal must end with no
+// gap and no duplicate seq. The naive control (read the claim in app code, then insert) is shown to let A&#x27;s row in.
+let t: TestDb;
+beforeAll(async () =&gt; {
+  t = await createTestDb();
+});
+afterAll(() =&gt; t.drop());</code></pre></div><p class="label">From <span class="mono">packages/db/src/fence.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;an append racing an uncommitted claim waits for it, then is refused: the check and the insert are one statement&quot;, async () =&gt; {
+  const store = t.db.documentStore();
+  const doc = await t.createDocument(&quot;Fence&quot;);
+  const a = randomUUID();
+  await store.claim(doc.orgId, doc.id, 1, a);
+  const b = new Client({ connectionString: TEST_DATABASE_URL, options: `-c search_path=${t.schema}` });
+  await b.connect();
+  try {
+    await b.query(&quot;begin&quot;);
+    await b.query(&quot;update documents set fence_token = 2, fence_claim = $2 where id = $1&quot;, [doc.id, randomUUID()]);
+    // A read its claim BEFORE B&#x27;s update committed: a read-then-write would insert now. The fenced append waits.
+    let settled = false;
+    const late = store.append(doc.orgId, doc.id, row(1, &quot;a&quot;), a).finally(() =&gt; { settled = true; });
+    late.catch(() =&gt; undefined);
+    await new Promise((resolve) =&gt; setTimeout(resolve, 300));
+    expect(settled).toBe(false);
+    await b.query(&quot;commit&quot;);
+    await expect(late).rejects.toBeInstanceOf(Fenced);
+  } finally {
+    await b.end();
+  }
+  expect(await seqs(doc.id)).toEqual([]);
+});</code></pre></div><p class="label">From <span class="mono">packages/db/src/fence.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;naive control: the claim read in app code, then an insert, lets the zombie&#x27;s row in after the new owner read the journal&quot;, async () =&gt; {
+  const store = t.db.documentStore();
+  const doc = await t.createDocument(&quot;Naive&quot;);
+  const a = randomUUID();
+  await store.claim(doc.orgId, doc.id, 1, a);
+  // Read-then-write, with the new owner&#x27;s takeover landing between the read and the write: the one interleaving
+  // a real pause produces (A reads, is frozen past its lease, B claims and reads, A resumes and writes).
+  const current = ((await t.rawQuery(&quot;select fence_claim from documents where id = $1&quot;, [doc.id])) as { rows: [{ fence_claim: string }] }).rows[0].fence_claim;
+  expect(current).toBe(a); // A believes it may write
+  expect(await store.claim(doc.orgId, doc.id, 2, randomUUID())).toBe(true);
+  const read = (await store.since(doc.orgId, doc.id, 0)).at(-1)?.seq ?? 0;
+  const late = row(read + 1, &quot;a&quot;);
+  await t.rawQuery(&quot;insert into op_journal (document_id, org_id, seq, op_id, actor_kind, actor_id, op) values ($1, $2, $3, $4, &#x27;user&#x27;, &#x27;a&#x27;, $5)&quot;, [doc.id, doc.orgId, late.seq, late.opId, JSON.stringify(late.op)]);
+  // The property the fenced append keeps is broken: a zombie row past what the new owner read. B&#x27;s own next op
+  // now collides on that seq, or (had B numbered first) A&#x27;s op is lost from B&#x27;s room and every peer&#x27;s view.
+  expect((await seqs(doc.id)).filter((r) =&gt; r.actor === &quot;a&quot; &amp;&amp; r.seq &gt; read)).toHaveLength(1);
+  // The same interleaving through the fenced append: refused.
+  await expect(store.append(doc.orgId, doc.id, row(read + 1, &quot;a&quot;), a)).rejects.toBeInstanceOf(Fenced);
+});</code></pre></div><p><strong>Why a claim id and not "token at least the high-water mark".</strong> The textbook fence compares tokens: the storage remembers the largest it has seen and refuses anything smaller. Two things about this repo made that insufficient. The counter lives in Redis, and a flushed Redis restarts it at 1, so the floor was needed to keep tokens rising at all. And even with the floor, one token can be issued twice (the pause-then-flush case), so the claim is a random id of <em>this one opening</em>, and an append compares the exact id: the loser of two openings under an equal token cannot write either. The token still matters, as the thing that orders claims and as the floor; the claim id is what an append carries.</p><p class="label">From <span class="mono">packages/lease/src/index.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a floor (the journal&#x27;s fence, E7.3) keeps tokens rising after the counter is lost, as a flushed Redis loses it&quot;, async () =&gt; {
+  const documentId = randomUUID();
+  const first = await a.acquire(documentId, &quot;sync&quot;, 41);
+  expect(first.holder.token).toBe(42);
+  await a.release(documentId, first.holder);
+  await raw.del(`${prefix}lease-token:${documentId}`); // FLUSHALL, for this one document
+  const next = await b.acquire(documentId, &quot;sync-2&quot;, 42);
+  expect(next.holder.token).toBe(43);
+  await b.release(documentId, next.holder);
+  expect((await a.acquire(documentId, &quot;sync&quot;, 5)).holder.token).toBe(44); // a floor below the counter changes nothing
+});</code></pre></div><p><strong>The node's side.</strong> The claim happens in <code>open()</code>, after the lease and before the journal is read: from that moment only this opening's appends land, and every row a previous owner wrote before it is in what <code>load()</code> replays. A lost claim at open means a newer lease exists: 4409. A database that cannot answer the fence or the claim: 4503, try again.</p><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // The fence (F22), BEFORE the journal is read: from here on only this opening&#x27;s appends land, and every row a
+    // previous owner added before this moment is in what load() replays. A lost claim: a newer lease exists.
+    const claim = randomUUID();
+    let claimed = true;
+    if (store) {
+      try {
+        claimed = await store.claim(orgId, documentId, holder.token, claim);
+      } catch {
+        await release();
+        return { closeCode: CLOSE.unavailable };
+      }
+    }
+    const loaded = claimed ? await load(documentId, orgId, { claim, onFenced: () =&gt; { drop(&quot;fenced by a newer owner&#x27;s claim&quot;); } }) : { closeCode: CLOSE.roomElsewhere };
+    if (&quot;closeCode&quot; in loaded || !keeper.held) {
+      await release();
+      if (!(&quot;closeCode&quot; in loaded)) loaded.snapshot?.stop();
+      return &quot;closeCode&quot; in loaded ? loaded : { closeCode: CLOSE.roomElsewhere };
+    }
+    opened.room = owned(loaded, release);
+    return opened.room;
+  }</code></pre></div><p class="label">From <span class="mono">apps/sync/src/fence.ts</span></p><div class="scroll"><pre><code>import { Fenced } from &quot;@noon/db&quot;;
+
+/**
+ * A room&#x27;s journal append that also tells the server when it was FENCED (E7.3, F22): a newer owner claimed the
+ * document, so this room must stop at once and send its peers to that owner. The refusal itself still reaches
+ * the room (which answers &quot;unavailable&quot; and applies nothing); any other failure is only an outage, left to
+ * E6.1b&#x27;s read-only mode. `onFenced` runs once, however many queued appends are refused after it.
+ */
+export function watchFence&lt;A extends unknown[], R&gt;(append: (...args: A) =&gt; Promise&lt;R&gt;, onFenced: () =&gt; void): (...args: A) =&gt; Promise&lt;R&gt; {
+  let fenced = false;
+  return async (...args) =&gt; {
+    try {
+      return await append(...args);
+    } catch (err) {
+      if (err instanceof Fenced &amp;&amp; !fenced) {
+        fenced = true;
+        onFenced();
+      }
+      throw err;
+    }
+  };
+}</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>    // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
+    // A fenced one never lands: the room is dropped, not healed (a newer owner is writing).
+    let fenced = false;
+    const journal = {
+      append: watchFence((op: SequencedOp) =&gt; bounded(store.append(orgId, documentId, op, fence?.claim)), () =&gt; {
+        fenced = true;
+        fence?.onFenced();
+      }),
+      find: (actorId: string, opId: string) =&gt; bounded(store.find(orgId, documentId, actorId, opId)),
+      everAdded: (nodeId: string) =&gt; bounded(store.everAdded(orgId, documentId, nodeId)),
+      since: (after: number) =&gt; bounded(store.since(orgId, documentId, after)),
+    };</code></pre></div><p><code>watchFence</code> is a higher-order function typed with a tuple rest parameter, the same shape as lesson 6's <code>guard</code>: it wraps the append, keeps its signature, and tells the server <em>once</em> when a <code>Fenced</code> comes through, however many queued ops are refused behind it. The distinction it draws is the design decision of the bead: <strong>a fence is not an outage.</strong> Lesson 6's read-only mode is for a journal that will answer again; a fenced room will never be allowed to write again, so it must not sit in a heal loop pinging the database for ever. <code>onFenced</code> calls the same <code>drop</code> a lost lease calls: 4409 to every socket, snapshots stopped, room forgotten. <code>onReadOnly</code> checks <code>fenced</code> first so the heal loop is never started. The refusal itself still reaches the room, which answers "unavailable" to a socket that is already closing and applies nothing.</p><p class="label">From <span class="mono">apps/sync/src/fence.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a fenced append is still refused to the room, and says so to the server exactly once&quot;, async () =&gt; {
+  const onFenced = vi.fn();
+  const append = watchFence((seq: number) =&gt; (seq &gt; 1 ? Promise.reject(new Fenced(&quot;fenced&quot;)) : Promise.resolve(undefined)), onFenced);
+  await expect(append(1)).resolves.toBeUndefined();
+  expect(onFenced).not.toHaveBeenCalled();
+  await expect(append(2)).rejects.toBeInstanceOf(Fenced);
+  await expect(append(3)).rejects.toBeInstanceOf(Fenced); // a queued op refused after it: not a second drop
+  expect(onFenced).toHaveBeenCalledTimes(1);
+});
+
+test(&quot;an outage is not a fence: the room goes read-only and the server keeps the room&quot;, async () =&gt; {
+  const onFenced = vi.fn();
+  const append = watchFence(() =&gt; Promise.reject(new Error(&quot;journal timed out&quot;)), onFenced);
+  await expect(append()).rejects.toThrow(&quot;timed out&quot;);
+  expect(onFenced).not.toHaveBeenCalled();
+});</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  /** The room&#x27;s last snapshot, once the ops still in its queue are handled. False: not stored (logged). */
+  async function snapshotNow(opened: Owned): Promise&lt;boolean&gt; {
+    // A room that lost its lease writes nothing more: the new owner is the only writer (the journal is fenced).
+    if (opened.lost) return false;
+    await opened.room.settled();
+    return (await opened.snapshot?.take()) ?? true;
+  }</code></pre></div><p>Two more places had to learn about <code>lost</code>. A room that lost its lease or was fenced writes <em>no last snapshot</em>: the new owner is the only writer, and a snapshot from the old one could name a document the journal has moved past. And the shutdown path releases every lease after its snapshot, so that a clean stop moves rooms at once rather than a ttl later.</p><p><strong>The runs.</strong> Both faults are scripted against the compose stack. <code>docker pause</code> freezes every thread of the container; when it is unpaused, the process continues from the instruction it was on, with its sockets still open and its in-flight promises still pending, which is the most faithful zombie there is. The partition uses toxiproxy in the path between each node and Redis, one listener per node, so <em>one</em> node can be cut off from Redis with a <code>timeout</code> toxic (bytes stop, connections stay open) while it still reaches Postgres, which is the case where the fence is the only thing standing.</p><p class="label">From <span class="mono">docker-compose.yml</span></p><div class="scroll"><pre><code>  # E7.3: each sync node reaches Redis through this proxy, one listener per node (scripts/chaos/toxiproxy.json), so
+  # that chaos:partition-fenced can cut ONE node off Redis (bytes stop, connections stay open) while it still
+  # reaches Postgres. A plain pass-through otherwise. The control API is published on 127.0.0.1 for the chaos runs.
+  # ponytail: in the path of every sync-&gt;Redis call, in every run; ceiling: one more hop and one more container.
+  # Upgrade: a chaos-only compose override that inserts it.
+  redis-proxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: [&quot;-host=0.0.0.0&quot;, &quot;-config=/toxiproxy.json&quot;]
+    volumes: [&quot;./scripts/chaos/toxiproxy.json:/toxiproxy.json:ro&quot;]
+    ports: [&quot;127.0.0.1:${TOXIPROXY_PORT:-8474}:8474&quot;]
+    depends_on:
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: [&quot;CMD&quot;, &quot;/toxiproxy-cli&quot;, &quot;list&quot;]
+      interval: 2s
+      timeout: 2s
+      retries: 30</code></pre></div><p class="label">From <span class="mono">scripts/chaos/toxiproxy.json</span></p><div class="scroll"><pre><code>[
+  { &quot;name&quot;: &quot;sync&quot;, &quot;listen&quot;: &quot;0.0.0.0:6379&quot;, &quot;upstream&quot;: &quot;redis:6379&quot;, &quot;enabled&quot;: true },
+  { &quot;name&quot;: &quot;sync-2&quot;, &quot;listen&quot;: &quot;0.0.0.0:6380&quot;, &quot;upstream&quot;: &quot;redis:6379&quot;, &quot;enabled&quot;: true }
+]</code></pre></div><p class="label">From <span class="mono">scripts/chaos/fenced.ts</span></p><div class="scroll"><pre><code>// chaos:zombie-fenced and chaos:partition-fenced (E7.3, SPEC F22). Against the REAL compose stack (two sync nodes,
+// each reaching Redis through the `redis-proxy` toxiproxy):
+//   ./init.sh   (or: docker compose up -d), then   node scripts/chaos/fenced.ts zombie|partition   (ROUNDS=2 by default)
+// Each round, on a fresh document: a person and the AI (both routed by /session, as in E7.2) get a few edits
+// acknowledged, and a WITNESS, a bare WebSocket that never reconnects, joins the owner&#x27;s room. Then, under a burst:
+//   zombie:    the owner is `docker pause`d past its lease (ttl + 2 s after another node took the room), then resumed;
+//   partition: the owner is cut off from Redis ONLY (toxiproxy&#x27;s timeout toxic: bytes stop, connections stay open,
+//              Postgres still answers), for as long, then the cut is healed.
+// Either way: the peers must find the other node through /session, the lease must move to it with a larger token,
+// the old owner must close its sockets (the witness is dropped, and the old owner logs why) and never append again (every row
+// of the journal is one the peers made, once; seqs 1..n, no gap, no duplicate: scripts/chaos/no-loss.ts). Edits made
+// AFTER the old owner is back must land too. How many appends the fence itself refused is read from the old owner&#x27;s
+// log and reported (a paused owner usually notices its lost lease first; the fence is for the ones that do not).
+// Pitfalls (SPEC §4a): the fault opens while the workload is on the wire; waits poll the observable; it repeats; the
+// fault is undone in `finally`. Prints one JSON line; exit 0 = PASS. The org is deleted at the end.</code></pre></div><p class="label">From <span class="mono">scripts/chaos/fenced.ts</span></p><div class="scroll"><pre><code>// The toxiproxy proxy of a node is named as the node (scripts/chaos/toxiproxy.json). Both directions stop.
+const STREAMS = [&quot;upstream&quot;, &quot;downstream&quot;] as const;
+async function toxics(node: string, cut: boolean): Promise&lt;void&gt; {
+  for (const stream of STREAMS) {
+    const res = cut
+      ? await fetch(`${toxiproxy}/proxies/${node}/toxics`, { method: &quot;POST&quot;, body: JSON.stringify({ name: `cut-${stream}`, type: &quot;timeout&quot;, stream, toxicity: 1, attributes: { timeout: 0 } }) })
+      : await fetch(`${toxiproxy}/proxies/${node}/toxics/cut-${stream}`, { method: &quot;DELETE&quot; });
+    if (!res.ok &amp;&amp; !(res.status === 404 &amp;&amp; !cut)) throw new Error(`toxiproxy ${cut ? &quot;cut&quot; : &quot;heal&quot;} ${node} ${stream} -&gt; ${String(res.status)}`);
+  }
+}
+async function open(node: string): Promise&lt;void&gt; {
+  if (fault === &quot;zombie&quot;) compose(&quot;pause&quot;, node);
+  else await toxics(node, true);
+}
+async function undo(node: string): Promise&lt;void&gt; {
+  if (fault === &quot;zombie&quot;) compose(&quot;unpause&quot;, node);
+  else await toxics(node, false);
+}</code></pre></div><p class="label">From <span class="mono">scripts/chaos/fenced.ts</span></p><div class="scroll"><pre><code>/**
+ * A peer of the owner&#x27;s room that never reconnects (its session answers once, then &quot;give up&quot;) and never waits for
+ * anything (so its own silence watchdog never fires): it stops being live only when the old owner closes it.
+ */
+async function witness(session: () =&gt; Promise&lt;{ wsUrl: string; token: string }&gt;): Promise&lt;{ closed: () =&gt; boolean; close: () =&gt; void }&gt; {
+  let asked = false;
+  const peer = connectPeer({ manifest, session: async () =&gt; { if (asked) return null; asked = true; return session(); } });
+  await until(() =&gt; peer.status === &quot;live&quot;, &quot;the witness joins the owner&#x27;s room&quot;, 15_000);
+  return { closed: () =&gt; peer.status !== &quot;live&quot;, close: () =&gt; { peer.close(); } };
+}</code></pre></div><p class="label">From <span class="mono">scripts/chaos/fenced.ts</span></p><div class="scroll"><pre><code>    edit(20); // on the wire...
+    await open(victim); // ...and the owner freezes, or loses Redis, under it
+    ledger.fault();
+    await until(() =&gt; all.every(([, p]) =&gt; p.status !== &quot;live&quot;), &quot;both peers see the owner gone&quot;, 30_000);
+    edit(5); // made while the room is moving: held, sent after the next welcome
+
+    let after: ReturnType&lt;typeof holderOf&gt;;
+    await until(() =&gt; { after = holderOf(doc); return after !== undefined &amp;&amp; after.node !== victim; }, &quot;another node takes the room&quot;, ttlMs * 2 + 30_000);
+    if (!after || after.token &lt;= before.token) throw new Error(`the new owner&#x27;s token ${String(after?.token)} is not above the old one&#x27;s ${String(before.token)}`);
+    await until(() =&gt; all.every(([, p]) =&gt; p.status === &quot;live&quot; &amp;&amp; p.pendingCount === 0), &quot;both peers reconnected through /session, nothing pending&quot;, 30_000);
+    // Past its lease for certain, then back: a zombie that still believes it owns the room.
+    await new Promise((resolve) =&gt; setTimeout(resolve, 2000));
+    await undo(victim);
+    const back = victim;
+    victim = undefined;
+    await until(() =&gt; watcher?.closed() === true, `the old owner ${back} closes its sockets`, ttlMs + 10_000);
+
+    edit(10); // the old owner is running again: none of this may reach it
+    await ledger.settle(15_000);
+    await until(() =&gt; all.every(([, p]) =&gt; p.seq === peers.person.seq &amp;&amp; p.pendingCount === 0), &quot;both peers at the same seq&quot;, 10_000);</code></pre></div><p>The <em>witness</em> is the observable for "it closes its sockets": a bare peer that never reconnects and never times out on its own, so the only way it stops being live is the old owner closing it. The run also reads the old owner's log for two lines: that it gave the room up (<code>lease N lost</code> or <code>fenced</code>), and how many appends the fence itself refused. A paused owner usually notices its lost lease first, from its clock, and the count is often zero; the fence is for the runs where it does not, and the report says which happened. Edits made <em>after</em> the old owner is back must also land, on the new owner, which is the last thing the ledger checks.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>insert ... select ... where ... for update</code>: the check, the lock and the write in one statement</td><td>the same SQL through JDBC; JPA's <code>@Version</code> is the row-level cousin, not this</td><td>the same SQL with psycopg</td></tr><tr><td><code>fence_claim is not distinct from $9</code>: null-safe equality</td><td>the same SQL; <code>&lt;=&gt;</code> in MySQL</td><td>the same SQL</td></tr><tr><td><code>class Fenced extends Error {}</code>, told apart with <code>instanceof</code></td><td>a checked exception type</td><td>a custom exception class</td></tr><tr><td><code>watchFence&lt;A extends unknown[], R&gt;(append, onFenced)</code>: a wrapper that keeps the signature</td><td>a decorator with one wrapper per arity</td><td>a decorator with <code>ParamSpec</code></td></tr><tr><td><code>randomUUID()</code> as an opening's identity</td><td><code>UUID.randomUUID()</code></td><td><code>uuid.uuid4()</code></td></tr><tr><td><code>new Client({ options: "-c search_path=..." })</code>: a second real connection in a test</td><td>a second <code>DataSource</code></td><td>a second <code>psycopg.connect</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The fence in app code, before the insert, was rejected by writing its failure down as a test.</strong></p><p>The first sketch read <code>fence_claim</code>, compared it, and inserted. It is the shape every ORM invites, and the naive control in <code>fence.int</code> exists to keep it out: it performs the read, then the takeover, then the insert, and asserts that the zombie's row <em>is</em> in the journal. A control that shows the wrong design failing is worth more than a comment saying it would, because the next person who wants to "simplify" the statement has a red test to explain. Drill 2 plants this shape.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Seeding the Redis counter only at sync start was rejected.</strong></p><p>Reading <code>fence_token</code> once when the node boots and <code>SET</code>ting the counter would handle a flush that happened while the node was down. A flush while it runs would still reissue tokens. Taking the floor on <em>every</em> acquire, inside the same script, costs one <code>GET</code> per acquisition and closes the window entirely; the integration test deletes the counter mid-test and asserts 43 follows 42.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>Two openings under one token, and why "less than" is not "less than or equal".</strong></p><p>A node acquires token 7, is paused before it claims, Redis is flushed, another node acquires and gets 7 again from a floor of 6, claims, and reads the journal. The paused node wakes and claims with 7. Under <code>&lt;=</code> it would succeed, and two rooms would each hold a valid claim; under <code>&lt;</code> it is refused and answers 4409. The exact-claim compare in the append is the second half: even if both somehow held token 7, only one holds the claim id the row names.</p></div><p class="note"><strong>The distributed-systems shape, in one sentence:</strong> the lease says who <em>should</em> write, the clock says how long they may <em>believe</em> it, and the storage says whose writes actually <em>land</em>, by comparing a token the writer received when it became the owner. Chubby's sequencers, ZooKeeper's zxid, Kafka's producer epoch and etcd's revision are the same third piece with other names. A design with only the first two is the one Kleppmann's essay takes apart.</p></section><section id="tradeoffs"><h2>6 · Trade-offs and comparisons: where this design sits</h2><p>An interviewer will ask why Redis and not ZooKeeper or etcd, and what breaks when. Here is the honest map.</p><div class="scroll"><table><tr><th>Question</th><th>This repo</th><th>ZooKeeper / etcd</th><th>Notes</th></tr><tr><td>Where the lease lives</td><td>Redis: one node, no consensus, fast, loses everything on a flush or crash</td><td>ZooKeeper (ZAB) or etcd (Raft): a majority must agree; survives a minority failing</td><td>the same two choices; Consul sessions are a third</td></tr><tr><td>What losing it costs</td><td>leases are taken again; the token floor in Postgres keeps tokens rising; queues are rebuilt from the <code>jobs</code> table (SPEC §4)</td><td>a lost quorum stops all acquisitions until it returns</td><td></td></tr><tr><td>The fencing token</td><td><code>INCR</code> per document, floored by Postgres</td><td>etcd's <code>revision</code>; ZooKeeper's <code>zxid</code> or the sequential node's number</td><td></td></tr><tr><td>Who checks the token</td><td>Postgres, in the append statement</td><td>the storage the lock protects, always; ZooKeeper and etcd only <em>issue</em> it</td><td></td></tr><tr><td>Liveness</td><td>a heartbeat key with a short PX; a hint only</td><td>an ephemeral node that vanishes with the session; a lease that lapses without keep-alive</td><td></td></tr><tr><td>Java's Redisson <code>RLock</code></td><td>same Lua shape; a watchdog renews every ttl/3; <strong>no fencing token</strong>, so a paused holder's writes are not refused by anything</td><td></td><td></td></tr><tr><td>RedLock (several Redis masters)</td><td>not used: Kleppmann's critique applies (it still relies on timing), and one Redis with a fence in the storage is both simpler and safer for this workload</td><td></td><td></td></tr></table></div><p><strong>Why Redis is enough here.</strong> The lease is a <em>performance</em> mechanism in this design, not a <em>safety</em> one. Its job is to make sure that, almost always, exactly one node believes it owns a room, so that peers are not bounced and ops are not refused. Safety, the guarantee that no two writers ever both land rows for one document, is Postgres's job through the fence, and Postgres was already the truth for the journal. A consensus system would make the lease itself more reliable, at the cost of a second quorum to run, and it would still need the fence in the storage, because a leader elected by Raft can also be paused. Kleppmann's point is that the lock service is the wrong place to look for safety whatever it is built on.</p><p><strong>What is not solved.</strong> A room moves only when its owner dies or lets go; there is no rebalancing, so a node that happened to be picked for many free rooms keeps them. The pick for a free room is random among live nodes, with no load signal. Both are named ponytails with an obvious upgrade (a room count per node in Redis, read by <code>pick</code>). Failover takes one ttl, which is visible: peers show "offline" for up to ten seconds. And <code>redis-proxy</code> is in the path of every run, not only chaos runs, one hop and one container that a compose override would move aside.</p><p><strong>Redis flushed while everything runs.</strong> Every lease disappears at once. Every owner's next renewal is refused (the key is gone), so every room drops its peers within a third of a ttl; every peer asks <code>/session</code>, which sees no owner and picks a live node (or, with no heartbeats written yet, any node); the node acquires with a floor read from <code>fence_token</code>, so its token is above every claim the journal has seen, claims, replays, and opens. No op is lost: acknowledged ops are in the journal, in-flight ones are held by peer-client and re-offered after the next welcome. SPEC §4's row, <em>Redis lost: leases re-acquired; no document data lost</em>, is this paragraph.</p><p class="note"><strong>The interview answer in one breath:</strong> one lease per document in Redis with a monotonic token from the same script; holders trust it for 0.9 ttl from the send on their own monotonic clock; heartbeats route but never decide; a dead lease is waited out, never stolen; and the write path in Postgres checks a per-opening claim in the same statement that inserts, so a zombie's writes are refused whatever it believes. Consistency over availability for up to one ttl, by choice, because two rooms for one document cannot be repaired.</p></section><section id="testing"><h2>7 · Testing two nodes without Docker, and then with it</h2><p>The split from lesson 6 holds: every decision has a pure test that ran on every commit, and every I/O rule has an integration or chaos test that is written and unrun. Four shapes are new.</p><p><strong>A fake clock that the sleep advances.</strong> <code>takeLease</code>'s tests inject <code>now</code>, <code>sleep</code> and <code>acquire</code>; the acquire costs one millisecond of fake time and answers "free" once the clock passes <code>expiresAt</code>; the sleep records what it was asked and moves the clock. So "waited out, taken within a poll of expiry" is an assertion on exact numbers, and the whole suite runs in milliseconds.</p><p><strong>Two real servers in one process.</strong> <code>useTwoNodes</code> starts two <code>startSyncServer</code>s on free ports with two <code>createLeases</code> clients under a random key prefix, and hands the test a <code>route</code> that is the api's router with an injectable first pick. <code>roomAt</code> asks both servers who has peers for a document and <em>throws</em> if both do, which is the F20 invariant as a helper.</p><p class="label">From <span class="mono">apps/sync/src/testing.ts</span></p><div class="scroll"><pre><code>/**
+ * Two sync nodes sharing one Redis (keys under a prefix of this file&#x27;s own), for the F20 tests: each node holds
+ * rooms only under its lease. `route` is what the api&#x27;s /session answers: the owner&#x27;s address, else `pick`.
+ * Redis is the compose stack&#x27;s (./init.sh).
+ */
+export function useTwoNodes({ ttlMs = 600 }: { ttlMs?: number } = {}) {
+  const prefix = `test-nodes-${randomUUID()}:`;
+  const ids = [&quot;node-a&quot;, &quot;node-b&quot;] as const;
+  let state: { servers: [RunningSyncServer, RunningSyncServer]; leases: Leases[]; route: (documentId: string, pick?: (typeof ids)[number]) =&gt; Promise&lt;string&gt; } | undefined;
+  beforeAll(async () =&gt; {
+    const leases = ids.map(() =&gt; createLeases({ redisUrl: TEST_REDIS_URL, ttlMs, prefix }));
+    await Promise.all(leases.map((each) =&gt; each.ready()));
+    const servers = await Promise.all(ids.map((nodeId, i) =&gt; startSyncServer({ port: 0, secrets: [TEST_SECRET], lease: { leases: leases[i] as Leases, nodeId } }))) as [RunningSyncServer, RunningSyncServer];
+    const nodes = { kind: &quot;many&quot;, nodes: new Map(ids.map((id, i) =&gt; [id, (servers[i] as RunningSyncServer).url])) } as const;
+    const lookup = leases[0] as Leases;
+    state = {
+      servers, leases,
+      route: (documentId, pick) =&gt; syncRouter({ nodes, owner: (id) =&gt; lookup.owner(id), alive: (nodeIds) =&gt; lookup.alive(nodeIds), ...(pick === undefined ? {} : { pick: () =&gt; pick }) })(documentId),
+    };
+  });</code></pre></div><p><strong>A second database connection.</strong> The race test in <code>fence.int</code> needs an <em>uncommitted</em> claim to be visible to nothing and blocking to one thing, which a pool cannot express: it opens a raw <code>pg.Client</code> on the test schema, begins a transaction, updates the row, and only then commits, while the store's append sits on the lock. <code>settled</code> being false after 300 ms is the assertion that the append waited rather than returned.</p><p class="label">From <span class="mono">packages/db/src/fence.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;real race, 20 rounds: after the claim no zombie append lands, and the journal has no gap and no duplicate seq&quot;, async () =&gt; {
+  const store = t.db.documentStore();
+  for (let round = 0; round &lt; 20; round++) {
+    const doc = await t.createDocument(`Race ${String(round)}`);
+    const a = randomUUID();
+    await store.claim(doc.orgId, doc.id, 1, a);
+    const [refusals, read] = await Promise.all([zombie(store, doc, a), takeOver(store, doc, round % 5)]);
+    const journal = await seqs(doc.id);
+    expect(journal.map((r) =&gt; r.seq)).toEqual(journal.map((_, i) =&gt; i + 1)); // 1..n: no gap, no duplicate
+    expect(journal.filter((r) =&gt; r.actor === &quot;a&quot;).every((r) =&gt; r.seq &lt;= read)).toBe(true); // A only before B read
+    expect(journal.filter((r) =&gt; r.actor === &quot;b&quot;)).toHaveLength(20);
+    expect(refusals.at(-1)).toBeInstanceOf(Fenced); // the zombie was stopped by the fence, not by running out
+  }
+});</code></pre></div><p><strong>A witness.</strong> The chaos runs need to observe "the old owner closed its sockets", and a normal peer hides that by reconnecting. The witness is <code>connectPeer</code> with a <code>session</code> that answers once and then <code>null</code> ("give up"), so its status leaving <code>live</code> can only mean the server closed it.</p><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>sleep: (ms) =&gt; { slept.push(ms); clock += ms; return Promise.resolve(); }</code></td><td>a fake <code>Sleeper</code> that advances a fake <code>Clock</code></td><td>a fake sleep coroutine</td></tr><tr><td><code>as [RunningSyncServer, RunningSyncServer]</code>: a tuple from <code>Promise.all</code> of a mapped array</td><td>an array of two, indexed</td><td>a tuple from <code>asyncio.gather</code></td></tr><tr><td><code>new Client({ options: "-c search_path=..." })</code></td><td>a JDBC URL with <code>currentSchema</code></td><td><code>psycopg.connect(options="-c search_path=...")</code></td></tr><tr><td><code>if (asked) return null; asked = true;</code>: a session that answers once</td><td>a one-shot <code>Supplier</code></td><td>a closure over a flag</td></tr><tr><td><code>execFileSync("docker", ["compose", "pause", node])</code></td><td><code>ProcessBuilder</code></td><td><code>subprocess.run</code></td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The integration test's kill had to be unclean to test anything.</strong></p><p>A first draft of the failover test called <code>server.close()</code>, which snapshots and <em>releases</em> every lease; the room moved instantly and the test was green for the wrong reason. Closing the node's Redis client first, so that the release fails and the heartbeat stops, is what makes the test wait out a real lease. "Green for the wrong reason" is the failure mode of every test of a failure: check what the fault actually removed.</p></div><p class="note"><strong>Honest status, repeated here because it matters:</strong> the unit tests (holder parsing, <code>keepLease</code>, <code>parseSyncNodes</code>, <code>syncRouter</code>, <code>takeLease</code>, <code>watchFence</code>, peer-client's reroute, the routing config fields) ran green on every commit and were mutation-checked. The integration suites (<code>lease index.int</code>, <code>api session.int</code>, <code>one-room-globally.int</code>, <code>one-room-join-race.int</code>, <code>failover.int</code>, <code>packages/db fence.int</code>) and the three chaos runs (<code>kill-owner-failover</code>, <code>fenced zombie</code>, <code>fenced partition</code>) are written, reviewed and committed, and have not been run. The next section is what running them looks like.</p></section><section id="demo"><h2>8 · Two nodes by hand: what to run once the stack is up</h2><p>The exact commands and what each should show. The dev stack now runs <code>sync</code> and <code>sync-2</code> (host ports 3001 and 3003), <code>redis-proxy</code> (toxiproxy, control API on 127.0.0.1:8474), and the api's <code>SYNC_PUBLIC_URL</code> is the two-node table. Where a document id is needed it is the <code>?doc=</code> in the canvas's address bar.</p><p class="label">0 · Bring the stack up</p><div class="scroll"><pre class="out"><code>./init.sh                                    # two sync nodes; migrate runs 0014 (fence_token, fence_claim)
+docker compose ps                            # sync, sync-2, redis-proxy healthy
+open http://localhost:5173/?user=you@example.com     # New document; Add Stack; note ?doc=&lt;id&gt;</code></pre></div><p class="label">1 · Who owns the room (F20)</p><div class="scroll"><pre class="out"><code>docker compose exec -T redis redis-cli --no-auth-warning GET lease:&lt;id&gt;      # "1:sync" or "1:sync-2": token 1, the owner
+docker compose exec -T redis redis-cli --no-auth-warning MGET node:sync node:sync-2   # both "1": both beating
+curl -s -X POST -H 'x-dev-user: you@example.com' localhost:3000/documents/&lt;id&gt;/session | jq .wsUrl   # the owner's address
+# Open the same document in a second tab: it lands in the same room (edits appear in both). Open a NEW document: it may land on the other node.
+docker compose exec -T postgres psql -U noon -d noon -c "select fence_token, fence_claim from documents where id = '&lt;id&gt;'"   # 1, and this opening's claim</code></pre></div><p class="label">2 · Kill the owner (F21)</p><div class="scroll"><pre class="out"><code>docker compose kill --signal SIGKILL sync    # (or sync-2: whichever GET lease named). Keep editing: "offline", edits queue locally
+docker compose exec -T redis redis-cli --no-auth-warning MGET node:sync node:sync-2   # the dead one is nil within ttl/3 (about 3 s)
+# Within about 10 s (one LEASE_TTL_MS), without a reload: "live", then "saved"; the lease now names the other node with token 2:
+docker compose exec -T redis redis-cli --no-auth-warning GET lease:&lt;id&gt;      # "2:sync-2"
+docker compose start sync                    # back for the next run; it owns nothing until a free room's first peer lands on it</code></pre></div><p class="label">3 · The zombie (F22)</p><div class="scroll"><pre class="out"><code>docker compose pause &lt;owner&gt;                # the owner freezes. Edit in the tab: "offline"; the other node takes the room after one ttl
+docker compose unpause &lt;owner&gt;              # a moment later its log says the room was given up:
+docker compose logs --no-color &lt;owner&gt; | grep -E 'lease [0-9]+ (lost|fenced)'
+docker compose exec -T postgres psql -U noon -d noon -c \
+  "select count(*), count(distinct seq), max(seq) from op_journal where document_id = '&lt;id&gt;'"   # all equal: no gap, no duplicate</code></pre></div><p class="label">4 · The partition (F22, the other fault)</p><div class="scroll"><pre class="out"><code>curl -s -X POST localhost:8474/proxies/sync/toxics -d '{"name":"cut","type":"timeout","stream":"downstream","toxicity":1,"attributes":{"timeout":0}}'
+                                             # node "sync" can no longer hear Redis; Postgres still answers it. Its renewals fail; after 0.9 ttl it drops its rooms
+curl -s -X DELETE localhost:8474/proxies/sync/toxics/cut
+LEASE_TTL_MS=3000 docker compose up -d sync sync-2   # to watch faster: failover in about three seconds</code></pre></div><p class="label">5 · Then the checks that prove it without hands</p><div class="scroll"><pre class="out"><code>pnpm exec vitest run --config vitest.integration.config.ts packages/lease/src/index.int.test.ts apps/api/src/session.int.test.ts apps/sync/src/one-room-globally.int.test.ts apps/sync/src/one-room-join-race.int.test.ts apps/sync/src/failover.int.test.ts packages/db/src/fence.int.test.ts
+node scripts/chaos/kill-owner-failover.ts    # {"chaos":"kill-owner-failover","verdict":"PASS","rounds":[{"from":"sync","to":"sync-2","movedAfterMs":...,"violations":[]},...]}
+node scripts/chaos/fenced.ts zombie          # {"chaos":"zombie-fenced","verdict":"PASS","rounds":[{"fencedAppends":0,...}]}
+node scripts/chaos/fenced.ts partition       # {"chaos":"partition-fenced",...}
+make chaos                                   # all five runs, in order; breaks and restores the real stack
+make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="label">From <span class="mono">Makefile</span></p><div class="scroll"><pre><code># Outside `make check`: the chaos checks (SPEC §4a) break the REAL compose stack (./init.sh first) and prove
+# the system&#x27;s guarantees hold. Each prints one JSON line and exits non-zero on FAIL.
+.PHONY: chaos
+chaos: ; node scripts/chaos/postgres-down-read-only.ts &amp;&amp; node scripts/chaos/kill-sync-no-loss.ts &amp;&amp; node scripts/chaos/kill-owner-failover.ts &amp;&amp; node scripts/chaos/fenced.ts zombie &amp;&amp; node scripts/chaos/fenced.ts partition</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>b702dcd</code>, and the code is right until a test says otherwise. A step that fails is a finding: write it as <em>sequence → false belief → consequence → smallest fix</em> (SPEC §4a's form) and file it against the bead that owns the code.</p></section><section id="limits"><h2>9 · What the type system could not see, epic 7 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>a token issued to every loser of an acquire race</td><td>two round trips look like one operation</td><td><code>INCR</code> only on the branch that does the <code>SET</code>, in one script</td></tr><tr><td>a stale holder's <code>DEL</code> deleted the next owner's lease (measured)</td><td>a key is a key</td><td>compare-and-delete in Lua</td></tr><tr><td>a deadline counted from the reply, not the send</td><td>both are "now"</td><td><code>sentAt</code> read before the await</td></tr><tr><td>a hung renewal kept a room alive</td><td>a promise in flight is not an error</td><td>the deadline is checked on every read of <code>held</code></td></tr><tr><td>a failed renewal shortened a lease an earlier one had earned</td><td>an assignment is an assignment</td><td>only <code>true</code> moves <code>validUntil</code></td></tr><tr><td>a wall clock that jumps backwards</td><td><code>Date.now()</code> and <code>performance.now()</code> are both numbers</td><td>monotonic only</td></tr><tr><td>a frozen process believes it holds the lease (measured, 1.7 s)</td><td>no type describes a pause</td><td>the fence in the storage</td></tr><tr><td>the api took leases for nodes that could not renew them</td><td>acquire and renew look independent</td><td>the holder is the acquirer</td></tr><tr><td>a hash pick sent peers to a dead node for ever</td><td>a pure function looks fair</td><td>heartbeats as a routing hint</td></tr><tr><td>stealing on a missed heartbeat let a paused owner overlap the new one</td><td>"not beating" reads as "dead"</td><td>wait the lease out; never steal</td></tr><tr><td>a second ttl lost to the client's backoff</td><td>a retry curve has no budget</td><td>the server holds the peer while it waits</td></tr><tr><td>a restarted node bounced its own peers (E7.1's ponytail)</td><td>its own id looked like a rival</td><td>our own dead lease is waited out too</td></tr><tr><td>"/sync" swallowed "/sync-2"</td><td>a prefix is a prefix</td><td>anchored regex keys</td></tr><tr><td>an owner not in the routing table looped on 4409</td><td>a <code>Map.get</code> returns undefined quietly</td><td>throw, loudly</td></tr><tr><td>the fence checked in app code let a zombie row in (the naive control)</td><td>two statements look sequential</td><td>one statement, <code>for update</code></td></tr><tr><td>a flushed Redis reissued token 1</td><td>a counter is assumed monotonic</td><td>a floor from <code>fence_token</code> on every acquire</td></tr><tr><td>two openings under one token both claimed</td><td><code>&lt;=</code> reads as harmless</td><td><code>&lt;</code>, and an exact claim id</td></tr><tr><td><code>NULL = NULL</code> refused every single-node append</td><td>SQL's three-valued logic</td><td><code>is not distinct from</code></td></tr><tr><td>a fenced room healed for ever</td><td>a refused append looked like an outage</td><td><code>Fenced</code> drops; <code>onReadOnly</code> checks <code>fenced</code></td></tr><tr><td>a lost room wrote a last snapshot over the new owner's</td><td>the snapshot path did not know about leases</td><td><code>if (opened.lost) return false</code></td></tr><tr><td>a clean close killed the failover test's reason to exist</td><td>release and death look alike to a test</td><td>close the Redis client first</td></tr><tr><td>the worker's peers dialled one node directly</td><td>a URL compiled fine</td><td><code>syncSessions</code> routes like <code>/session</code></td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lesson 6 said types cannot see whether a write happened or which order two effects took. Epic 7 adds the two that multi-node turns on: types cannot see <em>time</em> (a deadline from the wrong instant compiles; a pause is invisible) and cannot see <em>which process is speaking</em> (a stale owner's write is the same TypeScript as a live one's). Both were answered the same way as before: put the truth in one place (Redis for who should own, Postgres for whose writes land), read it before you believe anything, compare tokens rather than clocks wherever safety is at stake, and write a test that provokes the exact interleaving.</p></section>
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-7/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-7/check.sh</span> shows your progress. Neither needs Docker.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> With two nodes, nothing on the screen says which one a canvas landed on. Carry the node id from the lease to the status line: <code>SessionResponse</code> gains an optional, validated <code>nodeId</code> (<code>packages/contracts</code>); <code>syncRouter</code> answers <code>{ wsUrl, nodeId }</code>, and a single node <code>{ wsUrl }</code> with no id at all (<code>packages/lease/src/lease.ts</code>); <code>/session</code> puts it in the response; peer-client exposes <code>nodeId</code> from its <em>last</em> session, so a peer sent elsewhere by a 4409 shows where it landed; <code>onNode(nodeId)</code> in <code>apps/web/src/reasons.ts</code> says "on sync-2"; the canvas shows it after "saved", as text. <span class="mono">make check</span> must stay green: the type checker will name every caller of the router's result (the api, the worker's <code>roomUrl</code>, <code>apps/sync/src/testing.ts</code>, the one-room integration tests, <code>failover.int</code>). That list is the drill.</p>
+      <p>Predict first: why must the field be optional rather than required, and what would a required field force on every deployment with one sync node?</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-7/d2-fenced-room/room.ts</span> is the room cut down to the fence (queue, claim, fenced append, drop) with one bug from this chapter planted in it. Its first test freezes the room between two round trips while another node claims the document and reads the journal. Read the failing assertion and say, before you open the code, which row is in the journal that the new owner's room has never seen, and what the new owner's next append does to a journal that holds it. The fix replaces two calls with one.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. A holder could trust its lease until "the renewal's reply arrived plus ttl", read from <code>Date.now()</code>. Instead it trusts until "the renewal was sent plus 0.9 ttl" on <code>performance.now()</code>, and the doc comment says this is "not safety". Defend all three choices, then say what the fourth mechanism is that makes it safe.</summary>
+        <p>Redis starts its expiry countdown when the command <em>arrives</em>, which is after we sent it; so a deadline counted from the send can never outlast Redis's, while one counted from the reply trusts the lease for a whole round trip longer than Redis will keep it, and under a slow network that is a window in which two nodes both believe they own the room. The 0.9 is the allowance for the two clocks running at slightly different rates. <code>performance.now()</code> is monotonic: it cannot jump when NTP corrects the wall clock, and a backwards jump of <code>Date.now()</code> would extend a deadline by exactly the jump. "Not safety" because none of this runs while the process is frozen: a pause of two seconds inside an <code>await</code> resumes with the flag still true and the next instruction already chosen, and the learning test measured the other node owning the room 1.7 s before the frozen one could notice. The fourth mechanism is the fence: the storage compares a token the writer received when it became the owner, in the statement that writes, so what a frozen process believes is irrelevant to what lands. The clock bounds <em>failover time</em>; the token gives <em>safety</em>; neither does the other's job.</p></details>
+      <details class="recall"><summary>2. When an owner's heartbeat stops, the other node could take the room at once. Instead it sends new peers to a live node that polls until the dead lease expires, up to about one ttl, and never steals. Why, and why is the same rule applied to a node's <em>own</em> previous lease?</summary>
+        <p>Because "stopped beating" is not "stopped writing". A killed node does neither; a paused node does neither and then wakes; a node cut off from Redis stops beating and keeps its Postgres connection. Stealing on a missed heartbeat would make the paused case the normal one: two nodes owning a room from the moment of the steal until the old one's clock runs out, and every op the old one accepts in that window an op its peers were told about that the fence must then refuse. Waiting for the expiry keeps the invariant that at most one node believes it owns the room at any moment, pauses aside, and turns the fence into the rare backstop it should be. Liveness therefore only chooses where a peer is <em>sent</em> (a wrong guess costs one 4409), and the lease alone says who owns. A node's own dead lease is the same case seen from inside: the previous run was killed mid-room, its lease is real until Redis lets it go, and the new run cannot renew a holder value it does not have, so the honest thing is to wait exactly as it would for a stranger's. Doing that on the server, with the peer held connecting, is also what bounds failover to one ttl rather than a ttl plus a client backoff.</p></details>
+      <details class="recall"><summary>3. The fence compares a random claim id in <code>insert ... select ... where fence_claim is not distinct from $9 for update</code>, and <code>claim</code> uses strictly <code>&lt;</code>. Why not read the claim first in TypeScript and then insert; why a claim id and not "token at least the largest seen"; why <code>&lt;</code> and not <code>&lt;=</code>; and what does <code>for update</code> buy?</summary>
+        <p>Read-then-write has an <code>await</code> between the two, and a process can be frozen for a minute inside an <code>await</code>: A reads its claim (valid), freezes, B claims and reads the journal, A wakes and inserts a row one past what B read. The naive control in <code>fence.int</code> performs exactly that and asserts the zombie row is in the journal. In one statement the check and the write cannot be separated by a pause. A token high-water mark fails for two reasons specific to this repo: the counter lives in Redis and a flush restarts it, so the floor from <code>fence_token</code> is needed to keep tokens rising at all; and even then one token can be issued twice (a node paused between acquire and claim, then a flush that reissues the number), so the thing an append carries is an id of <em>this one opening</em>, and the loser of two openings under an equal token cannot write. <code>&lt;</code> rather than <code>&lt;=</code> is the same case at the claim: with <code>&lt;=</code> both openings under token 7 would claim and both would hold a valid claim id. <code>for update</code> takes a row lock on the documents row so that an append and a claim serialise: the claim waits for an in-flight insert to commit (and the new owner's replay then contains the row), or the claim commits first and the blocked append re-evaluates its <code>where</code> against the updated row and inserts nothing. Without the lock the two could interleave at the statement level and the "waits, then is refused" test would not hold.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the three Lua scripts and what each one checks before it acts. Then name the four things a node does when its lease is lost or its append is fenced. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p><code>ACQUIRE</code> checks "nobody holds it" and then lifts the counter to the floor, <code>INCR</code>s a token and <code>SET</code>s with <code>PX</code>, all in one script; <code>RENEW</code> checks "the value is still exactly mine" and <code>PEXPIRE</code>s; <code>RELEASE</code> checks the same and <code>DEL</code>s. On a lost lease or a <code>Fenced</code> append, <code>drop</code>: marks the room <code>lost</code>, stops its snapshots, forgets the room (so the next peer asks Redis again), and closes every socket with 4409, which peer-client treats as "ask <code>/session</code> again".</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. Ten peers of a new document join at once, five to each node. What token does the winner hold, and why does that number mean anything?</p>
+      <button id="q1a" data-correct>1: a token is issued only on the branch of the one script that also does the <code>SET</code>, so losers cost nothing and "the counter moved by one" is a checkable fact</button><button id="q1b">10: every acquirer increments the counter</button><button id="q1c">Whichever <code>INCR</code> ran first; it varies</button><button id="q1d">0 until the first renewal</button>
+      <p class="why" hidden>The join-race test asserts <code>token: 1</code> after the race and <code>2</code> after the room closes and is taken again.</p></div>
+    <div class="quiz"><p class="q">2. A renewal is sent at 300 ms and answered at 1100 ms (ttl 1000). Until when does the holder trust the lease?</p>
+      <button id="q2a" data-correct>1200: sent + 0.9 ttl, because Redis started its countdown when the command arrived, after 300</button><button id="q2b">2000: reply + 0.9 ttl</button><button id="q2c">2100: reply + ttl</button><button id="q2d">1300: sent + ttl</button>
+      <p class="why" hidden>Counting from the reply would trust the lease for a whole round trip longer than Redis keeps it. The test with the slow renewal is the mutation check.</p></div>
+    <div class="quiz"><p class="q">3. The owner of a room stops beating. What does the other node do when a peer of that room arrives?</p>
+      <button id="q3a" data-correct>Holds the peer connecting and polls every ttl/10 until the lease expires, then takes the room; it never deletes or overwrites the dead lease</button><button id="q3b">Takes the lease at once: no heartbeat means dead</button><button id="q3c">Refuses with 4409 and lets the peer retry on its own backoff</button><button id="q3d">Opens a second room and merges later</button>
+      <p class="why" hidden>"Stopped beating" is not "stopped writing" (a paused node wakes). Liveness routes; the lease alone owns.</p></div>
+    <div class="quiz"><p class="q">4. Why does a room that is fenced <em>drop</em> (4409 to every peer) rather than go read-only and heal, as it does when Postgres is down?</p>
+      <button id="q4a" data-correct>A fenced room will never be allowed to write again: a newer owner holds the claim, so healing would ping for ever; its peers belong with the new owner</button><button id="q4b">Because read-only mode does not work with two nodes</button><button id="q4c">Because the snapshot would otherwise be lost</button><button id="q4d">It does go read-only; the drop is only for a lost lease</button>
+      <p class="why" hidden><code>watchFence</code> tells the server once; <code>onReadOnly</code> checks <code>fenced</code> so the heal loop never starts.</p></div>
+    <div class="quiz"><p class="q">5. Why is the fence check inside the <code>insert ... select ... where fence_claim is not distinct from $9 for update</code> statement rather than a <code>select</code> in TypeScript before the insert?</p>
+      <button id="q5a" data-correct>A process can be frozen inside the <code>await</code> between the two: it reads a valid claim, another node claims and reads the journal, and it wakes and inserts a row the new owner never sees; one statement cannot be split by a pause</button><button id="q5b">It saves one round trip</button><button id="q5c">Postgres refuses two statements on the same row</button><button id="q5d">TypeScript cannot compare uuids</button>
+      <p class="why" hidden>The naive control in <code>fence.int</code> performs the interleaving and asserts the zombie's row IS in the journal. Drill 2 plants it.</p></div>
+    <div class="quiz"><p class="q">6. Redis is flushed while both nodes run. Why do tokens keep rising, and why is that not enough on its own?</p>
+      <button id="q6a" data-correct>Every acquire passes a floor read from <code>documents.fence_token</code>, and the script lifts the counter to it before <code>INCR</code>; but one token can still be issued twice (paused between acquire and claim, then a flush), so the append compares an exact claim id and the claim uses strictly <code>&lt;</code></button><button id="q6b">The counter is persisted with AOF</button><button id="q6c">Postgres issues the tokens</button><button id="q6d">They do not; the nodes restart</button>
+      <p class="why" hidden>The lease integration test deletes the counter mid-test and asserts 43 follows 42; <code>fence.int</code> asserts a second claim under the same token is refused.</p></div>
+    <div class="quiz"><p class="q">7. What does <code>for update</code> add to the append statement?</p>
+      <button id="q7a" data-correct>A row lock on the documents row, so an append and a claim serialise: the claim waits for an in-flight insert, or the blocked append re-checks its <code>where</code> against the claimed row and inserts nothing</button><button id="q7b">It makes the insert faster</button><button id="q7c">It locks the op_journal table</button><button id="q7d">Nothing: it is required syntax for <code>insert ... select</code></button>
+      <p class="why" hidden>The test "an append racing an uncommitted claim waits for it, then is refused" holds a second connection's transaction open for 300 ms and asserts the append has not settled.</p></div>
+    <div class="quiz"><p class="q">8. What does this design give up, in CAP terms, and why is that the right side?</p>
+      <button id="q8a" data-correct>Availability for up to one ttl after an owner dies: nobody takes the room until the lease expires, and peers hold their edits; two rooms for one document would be a divergence lesson 2's design cannot repair, while peer-client already absorbs a pause</button><button id="q8b">Consistency: peers may briefly see different documents</button><button id="q8c">Nothing: Redis makes it both</button><button id="q8d">Durability: ops made during the ttl are dropped</button>
+      <p class="why" hidden><code>LEASE_TTL_MS</code> is the dial; the chaos run's budget is expressed in ttl so the test moves with it.</p></div>
+  </section>
+
+  <footer>Next: Lesson 8, after epic 8. Auth, tenancy, RBAC and audit: a real identity replaces the dev header, roles decide what a member may do in every route and in the room, and every change is written down with who made it.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
