@@ -4,7 +4,8 @@
     ".": {
       "entry": [
         "e2e/**/*.ts",
-        "scripts/*.ts"
+        "scripts/*.ts",
+        "scripts/chaos/*.ts"
       ],
       "vitest": {
         "config": [

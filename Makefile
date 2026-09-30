@@ -20,6 +20,11 @@ sim: ; node apps/sync/src/sim-cli.ts
 .PHONY: drills
 drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh && sh drills/lesson-2/check.sh && sh drills/lesson-3/check.sh && sh drills/lesson-4/check.sh && sh drills/lesson-5/check.sh
 
+# Outside `make check`: the chaos checks (SPEC §4a) break the REAL compose stack (./init.sh first) and prove
+# the system's guarantees hold. Each prints one JSON line and exits non-zero on FAIL.
+.PHONY: chaos
+chaos: ; node scripts/chaos/postgres-down-read-only.ts && node scripts/chaos/kill-sync-no-loss.ts
+
 # Outside `make check` (minutes, builds an image): F1 on a fresh clone of the committed HEAD.
 .PHONY: clean-clone
 clean-clone: ; sh scripts/clean-clone.sh
