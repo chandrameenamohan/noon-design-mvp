@@ -9,6 +9,8 @@ import stylesheet from "../../../seed/sample-app/src/design-system/tokens.css?ra
 
 /** The frame's class: the design system's own tokens and page rules apply inside it and nowhere else. */
 export const FRAME = "page-frame";
+/** The library's thumbnail tile (E10.5): the same rules, scoped a second time, so a tile is a tiny page of its own. */
+export const THUMB = "thumb-frame";
 
 /**
  * By manifest name. The doc's props were checked against the manifest by the replica before they got
@@ -24,6 +26,8 @@ export const components: Readonly<Record<string, ComponentType<Record<string, un
  * (`.ds-*`) is left as written. One source of truth: the seed's own stylesheet, rewritten on load.
  * ponytail: a regex over CSS the repo owns; a foreign stylesheet gets the iframe, not this.
  */
-export const scopeToFrame = (css: string): string => css.replace(/(^|[}\s])(?::root|body)(?=\s*\{)/gu, `$1.${FRAME}`);
+export const scopeTo = (css: string, className: string): string => css.replace(/(^|[}\s])(?::root|body)(?=\s*\{)/gu, `$1.${className}`);
+export const scopeToFrame = (css: string): string => scopeTo(css, FRAME);
 
 export const frameStylesheet = scopeToFrame(stylesheet);
+export const thumbStylesheet = scopeTo(stylesheet, THUMB);

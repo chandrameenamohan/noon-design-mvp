@@ -8,6 +8,8 @@ import { ConflictBanner } from "./ConflictBanner.tsx";
 import { Inspector, type Hint } from "./Inspector.tsx";
 import { LayersPanel } from "./LayersPanel.tsx";
 import type { Row } from "./layer-moves.ts";
+import { addOpAt, type Slot } from "./library-adds.ts";
+import { LibraryPanel, type Carry } from "./LibraryPanel.tsx";
 import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
@@ -17,15 +19,6 @@ import { usePeer } from "./usePeer.ts";
 
 type Component = Manifest["components"][number];
 const componentOf = (name: string): Component | undefined => manifest.components.find((c) => c.name === name);
-
-/** The props a new node must have: the manifest says which are required, and of what type. */
-function requiredProps(component: Component): Extract<Op, { type: "add_node" }>["props"] {
-  const props: Record<string, string | number | boolean> = {};
-  for (const prop of component.props.filter((p) => p.required)) {
-    props[prop.name] = prop.type.kind === "string" ? component.name : prop.type.kind === "number" ? 0 : prop.type.kind === "boolean" ? false : (prop.type.options[0] ?? "");
-  }
-  return props;
-}
 
 /**
  * Every node in reading order, with a name a person (and a screen reader) can tell apart, "Stack 2"
@@ -56,10 +49,15 @@ export function Canvas({ documentId }: { documentId: string }) {
   const [aiOpen, setAiOpen] = useState(true);
   // A gap or padding control is hovered or focused in the inspector: the canvas shades that space (E10.4).
   const [hint, setHint] = useState<Hint | null>(null);
+  // A component is carried from the library over the tree or the canvas (E10.5): whichever it is over shows where it would land.
+  const [carry, setCarry] = useState<Carry | null>(null);
   // A ref, not state: the pointer moves sixty times a second and nothing on OUR screen depends on it.
   const cursor = useRef<Presence["cursor"]>(null);
   const selection = peer && wanted !== ROOT_ID && peer.doc.nodes[wanted] ? wanted : null;
   useEffect(() => { peer?.setPresence({ cursor: cursor.current, selection }); }, [peer, selection]);
+  // An add of this person's was refused (by the replica at once, or by the room later): the node it selected is
+  // gone, and the selection goes back to the page instead of saying someone else removed it.
+  useEffect(() => { if (refusals.some((each) => each.op?.type === "add_node" && each.op.nodeId === wanted)) setSelected(ROOT_ID); }, [refusals, wanted]);
   if (!peer) return <Page><h1>Document</h1><p><span role="status">connecting</span></p></Page>;
   if (peer.status === "closed") {
     // The peer ended for good (peer.closedBecause: no session, a fatal close code, a corrupt document).
@@ -76,6 +74,7 @@ export function Canvas({ documentId }: { documentId: string }) {
   const selectedBy = Map.groupBy(peer.others.filter((p) => p.selection !== null), (p) => p.selection ?? "");
   const point = (next: Presence["cursor"]): void => { cursor.current = next; peer.setPresence({ cursor: next, selection }); };
   const holdsChildren = (each: DocNode): boolean => each.parentId === null || componentOf(each.component)?.acceptsChildren === true;
+  const isContainer = (id: string): boolean => { const each = doc.nodes[id]; return each !== undefined && holdsChildren(each); };
   const containers = [...labels].flatMap(([id, label]) => { const each = doc.nodes[id]; return each && holdsChildren(each) ? [{ id, label }] : []; });
 
   /**
@@ -83,21 +82,24 @@ export function Canvas({ documentId }: { documentId: string }) {
    * A new edit of a prop supersedes the refusal its last edit met: the inspector shows one complaint per
    * prop, the latest, and a fixed value clears it.
    */
-  const submit = (op: Op): void => {
+  const submit = (op: Op): boolean => {
     if (op.type === "set_prop") for (const each of refusals) if (each.op?.type === "set_prop" && each.op.nodeId === op.nodeId && each.op.key === op.key) dismiss(each.id);
     const result = peer.submit(op);
     if (!result.ok) refuse(result.reason, op);
+    return result.ok;
   };
   // The selected node's refused prop edits, latest per prop, for the inspector to repeat beside the control.
   const propRefusals = new Map(refusals.flatMap((each) => (each.op?.type === "set_prop" && each.op.nodeId === node.id ? [[each.op.key, each.reason] as const] : [])));
-  // New nodes go INTO the selection when it can hold children, otherwise onto the page.
-  const parent = holdsChildren(node) ? node : root;
-  // The id is minted HERE, random and never reused (SPEC §2.4). `index` is the node's final position: the end.
-  const add = (component: Component): void => { submit({ type: "add_node", nodeId: crypto.randomUUID(), parentId: parent.id, index: parent.children.length, component: component.name, props: requiredProps(component) }); };
+  // The library's one add (E10.5): the id is minted HERE, random and never reused (SPEC §2.4); the slot is the
+  // library's (into or after the selection, or where a drag let go). The new node is selected, if the replica took it.
+  const addAt = (component: Component, slot: Slot): void => {
+    const nodeId = crypto.randomUUID();
+    if (submit(addOpAt(slot, component, nodeId))) setSelected(nodeId);
+  };
 
   // The shell (E10.1): the top bar says how the document is doing and who is here, and holds Ship and AI;
-  // layers left (E10.3 fills it; the component toolbar sits there until E10.5's library replaces it), the
-  // canvas in the centre, the inspector right with the AI panel under it. Share arrives with E10.8.
+  // layers left with the library under them (E10.3, E10.5), the canvas in the centre, the inspector right
+  // with the AI panel under it. Share arrives with E10.8.
   return (
     <Shell
       topBar={
@@ -133,18 +135,17 @@ export function Canvas({ documentId }: { documentId: string }) {
         <>
           {/* The document as a tree (E10.3): the same selection as the canvas, and drag or Alt+arrows move a node as ONE move_node through submit. */}
           <Panel title="Layers">
-            <LayersPanel doc={doc} rows={layers} selected={node.id} isContainer={(id) => { const each = doc.nodes[id]; return each !== undefined && holdsChildren(each); }} onSelect={setSelected} submit={submit} />
+            <LayersPanel doc={doc} rows={layers} selected={node.id} isContainer={isContainer} onSelect={setSelected} submit={submit} insertion={carry?.kind === "tree" ? { targetId: carry.targetId, placement: carry.placement, allowed: carry.slot !== null } : null} />
           </Panel>
+          {/* The library (E10.5): under the layers, not a tab beside them: a drag from a tile onto a ROW needs both on the screen at once. */}
           <Panel title="Library">
-            <div role="toolbar" aria-label="Add a component">
-              {manifest.components.map((component) => <button key={component.name} type="button" disabled={readOnly} onClick={() => { add(component); }}>Add {component.name}</button>)}
-            </div>
+            <LibraryPanel doc={doc} selected={node.id} labels={labels} isContainer={isContainer} disabled={readOnly} onCarry={setCarry} onAdd={addAt} />
           </Panel>
         </>
       }
       centre={
         <>
-          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} onSelect={setSelected} onPoint={point}>
+          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} isContainer={isContainer} insertion={carry?.kind === "canvas" ? carry.slot : null} onSelect={setSelected} onPoint={point}>
             {peer.others.map((p) => p.cursor && (
               <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
             ))}

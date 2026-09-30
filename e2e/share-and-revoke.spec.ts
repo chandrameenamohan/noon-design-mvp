@@ -39,16 +39,16 @@ test("an outsider edits a shared document live; revoked, their page closes, sees
   const guest = await (await browser.newContext()).newPage();
   await guest.goto(`/?user=${outsider}&doc=${documentId}`);
   await expect(guest.getByRole("status")).toHaveText("live");
-  await page.getByRole("button", { name: "Add Card", exact: true }).click();
+  await page.getByRole("option", { name: "Card", exact: true }).click();
   await expect(guest.locator("[data-component=Card]")).toHaveCount(1); // the owner's edit, live
-  await guest.getByRole("button", { name: "Add Card", exact: true }).click();
+  await guest.getByRole("option", { name: "Card", exact: true }).click();
   await expect(page.locator("[data-component=Card]")).toHaveCount(2); // and the outsider's, accepted
 
   const early = SessionResponse.parse(await (await request.post(`/api/documents/${documentId}/session`, as(outsider))).json());
   expect((await request.delete(`/api/documents/${documentId}/shares/${shared.userId}`, as(owner))).status()).toBe(204);
 
   await expect(guest.getByRole("alert")).toContainText("This document cannot be opened", { timeout: 10_000 }); // within F24's 10 s
-  await page.getByRole("button", { name: "Add Card", exact: true }).click();
+  await page.getByRole("option", { name: "Card", exact: true }).click();
   await expect(page.locator("[data-component=Card]")).toHaveCount(3);
   await expect(guest.locator("[data-component=Card]")).toHaveCount(0); // no canvas, no further ops
   await expect(guest.getByRole("status")).toHaveCount(0); // and no connection trying to come back

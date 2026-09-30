@@ -7,6 +7,8 @@ import { expect, test } from "./fixtures.ts";
 // Delete do the same by keyboard; the other browser sees every move live; axe-clean light and dark.
 const user = `e2e-${String(Date.now())}-layers@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
+const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading");
 /** The page's direct children on the canvas, in order. */
@@ -63,12 +65,13 @@ test("the tree mirrors the canvas both ways; drag reorders and nests as ONE move
   await expect(other.getByRole("status")).toHaveText("live");
 
   // Page [Card 1 [Button 1], Stack 1, Text 1]
-  await button(page, "Add Card").click();
+  await tile(page, "Card").click();
   await layer(page, "Card 1").click();
-  await button(page, "Add Button").click();
+  await tile(page, "Button").click();
   await layer(page, "Page").click();
-  await button(page, "Add Stack").click();
-  await button(page, "Add Text").click();
+  await tile(page, "Stack").click();
+  await layer(page, "Page").click(); // the new stack is selected (E10.5); the text is to land beside it
+  await tile(page, "Text").click();
   await expect(other.locator("[data-node-id]")).toHaveCount(5);
 
   // An ARIA tree: levels, expanded state on rows with children only, one tab stop.

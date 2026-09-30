@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 import { DESIGN_SYSTEM_ENTRY, manifest } from "@noon/design-system";
-import { components, scopeToFrame } from "./designSystem.ts";
+import { components, scopeTo, scopeToFrame, THUMB } from "./designSystem.ts";
 
 // E10.2: the canvas renders the manifest's components, with the sample app's stylesheet kept to the frame.
 
@@ -18,4 +18,6 @@ test("the page selectors become the frame's class; the component rules are untou
   expect(scoped).not.toMatch(/(^|[}\s])(:root|body)\s*\{/u);
   expect(scoped).toContain(".page-frame {");
   expect(scoped).toContain(".ds-button");
+  // The library's tiles (E10.5) get the same sheet under their own class, so a tile never wears the frame's geometry.
+  expect(scopeTo(":root { --a: 1; } body { padding: 24px; }", THUMB)).toBe(`.${THUMB} { --a: 1; } .${THUMB} { padding: 24px; }`);
 });

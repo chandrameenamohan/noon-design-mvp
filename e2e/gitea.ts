@@ -53,7 +53,7 @@ export async function documentWithButton(page: Page, user: string): Promise<{ do
   await page.goto(`/?user=${user}`);
   await page.getByRole("button", { name: "New document", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("live");
-  await page.getByRole("button", { name: "Add Button", exact: true }).click();
+  await page.getByRole("option", { name: "Button", exact: true }).click();
   await expect(page.getByText("saved", { exact: true })).toBeVisible();
   const documentId = new URL(page.url()).searchParams.get("doc") ?? "";
   const buttonId = (await page.locator("[data-component=Button]").getAttribute("data-node-id")) ?? "";

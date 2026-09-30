@@ -26,10 +26,10 @@ test("a viewer watches the owner edit live and sees its own edit refused", async
   await expect(watcher.getByRole("status")).toHaveText("live");
   await expect(watcher.getByRole("list", { name: "Also here" }).getByRole("listitem")).toContainText("e2e-"); // the owner's presence
 
-  await page.getByRole("button", { name: "Add Card", exact: true }).click();
+  await page.getByRole("option", { name: "Card", exact: true }).click();
   await expect(watcher.locator("[data-component=Card]")).toHaveCount(1); // the owner's edit, live
 
-  await watcher.getByRole("button", { name: "Add Card", exact: true }).click();
+  await watcher.getByRole("option", { name: "Card", exact: true }).click();
   await expect(watcher.getByRole("alert").filter({ hasText: "You can view this document but not edit it." })).toBeVisible();
   await expect(watcher.locator("[data-component=Card]")).toHaveCount(1); // its own card was undone
   await expect(page.locator("[data-component=Card]")).toHaveCount(1); // and never reached the owner

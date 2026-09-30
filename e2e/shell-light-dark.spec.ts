@@ -32,7 +32,7 @@ test("a document opens in the three-pane shell, follows the OS theme, and the to
   if (!layers || !canvas || !inspector) throw new Error("a pane is missing");
   expect(layers.x + layers.width).toBeLessThanOrEqual(canvas.x + 1);
   expect(canvas.x + canvas.width).toBeLessThanOrEqual(inspector.x + 1);
-  await expect(page.getByRole("region", { name: "Library" }).getByRole("button", { name: "Add Card", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Library" }).getByRole("option", { name: "Card", exact: true })).toBeVisible();
 
   // Light, as the OS says; screenshot and axe.
   const toggle = page.getByRole("button", { name: "Dark theme", exact: true });

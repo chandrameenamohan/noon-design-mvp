@@ -6,6 +6,8 @@ import { expect, test } from "./fixtures.ts";
 // click and keyboard selection with an outline and a label; the frame is inert; axe-clean in both themes.
 const user = `e2e-${String(Date.now())}-zoom@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
+const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const canvasOf = (page: Page) => page.getByRole("region", { name: "Canvas" });
 const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading");
@@ -31,10 +33,10 @@ async function pageWithCardButtonText(page: Page): Promise<void> {
   await page.goto(`/?user=${user}`);
   await button(page, "New document").click();
   await expect(page.getByRole("status")).toHaveText("live");
-  await button(page, "Add Card").click();
+  await tile(page, "Card").click();
   await layer(page, "Card 1").click();
-  await button(page, "Add Button").click(); // into the card
-  await button(page, "Add Text").click(); // into the card, after the button
+  await tile(page, "Button").click(); // into the card
+  await tile(page, "Text").click(); // into the card, after the button
   await expect(page.locator("[data-node-id][data-component=Card] [data-node-id]")).toHaveCount(2);
 }
 

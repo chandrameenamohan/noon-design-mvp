@@ -57,6 +57,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    ponytail: one desktop width; E10.7 brings device frames. */
 .page-frame { box-sizing: border-box; width: 960px; min-height: 600px; box-shadow: var(--frame-shadow); color-scheme: light; }
 .node { display: contents; }
+/* An empty container would be 0 px tall (a Stack with no children): it gets room to be clicked and dropped into (E10.5), and a dashed edge to say so. */
+.node[data-empty-container] > * { min-height: 24px; outline: 1px dashed var(--canvas-dot); outline-offset: -1px; }
 .node-props { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .unknown-component { padding: var(--space-2); border: 1px dashed var(--border-strong); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-muted); }
 .editor-layer { position: absolute; left: 0; top: 0; pointer-events: none; }
@@ -66,13 +68,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .outline-peer { --stroke-colour: var(--peer-colour); }
 /* The space a hovered gap or padding control stands for (E10.4): a translucent fill, no stroke, no label. */
 .outline-shade { box-shadow: none; background: var(--accent); opacity: 0.3; }
+/* A component carried over the canvas (E10.5): a box round the parent it would join, and a line where it lands among the children. */
+.outline-insert { box-shadow: 0 0 0 calc(2px / var(--zoom)) var(--stroke-colour), inset 0 0 0 calc(1px / var(--zoom)) var(--stroke-colour); }
+.outline-insert-line { box-shadow: none; background: var(--accent); min-width: calc(2px / var(--zoom)); min-height: calc(2px / var(--zoom)); border-radius: calc(1px / var(--zoom)); }
 .outline-label { position: absolute; left: calc(-2px / var(--zoom)); bottom: 100%; padding: 0 calc(6px / var(--zoom)); border-radius: calc(var(--radius-sm) / var(--zoom)) calc(var(--radius-sm) / var(--zoom)) 0 0; font-size: calc(var(--text-xs) / var(--zoom)); line-height: 1.5; font-weight: 600; white-space: nowrap; color: var(--on-accent); background: var(--accent); }
 .outline-hovered .outline-label { color: var(--fg); background: var(--surface); }
 .outline-peer .outline-label { color: #fff; background: var(--peer-colour); }
 .zoom-bar { position: absolute; right: var(--space-3); bottom: var(--space-3); display: flex; align-items: center; gap: var(--space-1); padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); font-size: var(--text-sm); }
 .zoom-bar button { padding-inline: var(--space-2); }
 .zoom-level { min-width: 3.5rem; text-align: center; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-[role="toolbar"] { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 /* --- the layers (left pane, E10.3): one flat ARIA tree, rows indented by depth ------------------------ */
 .tree { list-style: none; margin: 0; padding: 0; touch-action: none; }
@@ -91,6 +95,24 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .tree-row[data-drop="before"]::after { top: -1px; }
 .tree-row[data-drop="after"]::after { bottom: -1px; }
 .tree-row[data-drop="into"] { box-shadow: inset 0 0 0 2px var(--accent); }
+
+/* --- the library (left pane, E10.5): a search box and a listbox of tiles, each the REAL component, small ---- */
+.library { display: grid; gap: var(--space-2); }
+.library-search { width: 100%; box-sizing: border-box; }
+.library-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); touch-action: none; }
+.library[data-dragging] { cursor: grabbing; }
+.library-item { display: grid; gap: var(--space-1); padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); cursor: grab; user-select: none; -webkit-user-select: none; }
+.library-item:hover { border-color: var(--border-strong); }
+.library-item[aria-selected="true"] { border-color: var(--accent); }
+.library-item[aria-disabled="true"] { color: var(--fg-muted); cursor: not-allowed; }
+.library-item[data-dragging] { opacity: 0.5; }
+.library-item:focus-visible { outline-offset: 0; }
+.library-name { font-size: var(--text-sm); text-align: center; }
+/* The tile: the component at 60 %, clipped, on the design system's own light ground in both themes, like the frame. */
+.thumb { display: flex; align-items: center; justify-content: center; height: 3.25rem; overflow: hidden; border-radius: var(--radius-sm); background: var(--surface-2); }
+.library .thumb-frame { display: grid; gap: 6px; width: 170px; padding: 10px; border-radius: var(--radius-sm); transform: scale(0.6); color-scheme: light; }
+/* What a container holds in its tile: two stand-in children, since the manifest knows none. */
+.thumb-block { display: block; height: 12px; min-width: 36px; border-radius: 4px; background: #c4cad3; }
 
 /* --- presence: names in the bar, cursors and selection tags on the canvas ---------------------------- */
 /* The person's colour is a DOT beside the name, not the name's colour: the palette reads on white, not on a dark surface. */

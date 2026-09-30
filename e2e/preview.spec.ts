@@ -7,6 +7,8 @@ import { expect, test } from "./fixtures.ts";
 // its own pool (playwright.config.ts), against real Docker.
 const user = `e2e-${String(Date.now())}-preview@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
+const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const preview = (page: Page) => page.frameLocator("iframe[title='Preview of this page']");
 const docker = (...args: string[]): string =>
@@ -30,7 +32,7 @@ test.setTimeout(120_000);
 
 test("the preview follows an edit within 3 s, without reloading the page", async ({ page, baseURL }) => {
   const documentId = await newDocument(page);
-  await button(page, "Add Button").click();
+  await tile(page, "Button").click();
   await layer(page, "Button 1").click();
   await labelButton(page, "First");
   await expect(preview(page).getByRole("button", { name: "First" })).toBeVisible({ timeout: 90_000 });
@@ -58,7 +60,7 @@ test.describe("when the container dies", () => {
 
   test("the preview says it is rebuilding, and comes back with the document on its own", async ({ page }) => {
     const documentId = await newDocument(page);
-    await button(page, "Add Button").click();
+    await tile(page, "Button").click();
     await layer(page, "Button 1").click();
     // Something a FRESH container would not show (it starts from an empty page): if the preview
     // below shows it, the new container really was given the document, not merely started.

@@ -47,7 +47,7 @@ test("a push that breaks the page's shape changes nothing; the canvas names the 
     expect(messages.filter((m) => m.type === "op" && m.actor?.kind === "git")).toEqual([]);
 
     // Editing keeps working, with the banner up.
-    await page.getByRole("button", { name: "Add Button", exact: true }).click();
+    await page.getByRole("option", { name: "Button", exact: true }).click();
     await expect(page.locator("[data-component=Button]")).toHaveCount(2);
     await expect(page.getByText("saved", { exact: true })).toBeVisible();
     expect((await roomState(browser, page.url())).seq).toBe(before.seq + 1);

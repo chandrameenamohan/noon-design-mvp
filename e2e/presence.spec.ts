@@ -7,7 +7,7 @@ test("each browser sees the other's name, pointer and selection, and forgets a c
   await page.goto(`/?user=${user}`);
   await page.getByRole("button", { name: "New document", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("live");
-  await page.getByRole("button", { name: "Add Card", exact: true }).click();
+  await page.getByRole("option", { name: "Card", exact: true }).click();
 
   const other = await (await browser.newContext()).newPage();
   await other.goto(page.url());

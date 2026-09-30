@@ -31,7 +31,7 @@ test("an instruction makes the AI appear, its nodes arrive on BOTH canvases one 
   await expect.poll(() => aiButtons.count()).toBeGreaterThanOrEqual(1);
   expect(await aiButtons.count()).toBeLessThan(4);
   // A person edits during the run: an ordinary concurrent edit (F11).
-  await other.getByRole("button", { name: "Add Text", exact: true }).click();
+  await other.getByRole("option", { name: "Text", exact: true }).click();
 
   await expect(page.locator("#ai-status")).toHaveAttribute("data-run-status", "succeeded", { timeout: 15_000 });
   await expect(page.locator("#ai-status")).toHaveText("The AI has finished.");

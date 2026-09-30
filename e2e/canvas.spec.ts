@@ -34,7 +34,7 @@ test("a node added in one browser appears in the other; p95 under 200 ms over 25
     // Playwright's own round trips, which only makes the number pessimistic.
     const [from, to] = i % 2 === 1 ? [page, other] : [other, page];
     const started = Date.now();
-    await from.getByRole("button", { name: i % 3 === 0 ? "Add Text" : "Add Stack", exact: true }).click();
+    await from.getByRole("option", { name: i % 3 === 0 ? "Text" : "Stack", exact: true }).click();
     await to.waitForFunction((count) => document.querySelectorAll("[data-node-id]:not([data-node-id=root])").length >= count, i, { polling: "raf" });
     latencies.push(Date.now() - started);
   }
@@ -58,9 +58,9 @@ test("a node can be added INSIDE a selected container, and the other browser nes
   await page.getByRole("button", { name: "New document", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("live"); // only now does the address bar name the document
   const other = await open(browser, page.url());
-  await page.getByRole("button", { name: "Add Card", exact: true }).click();
+  await page.getByRole("option", { name: "Card", exact: true }).click();
   await page.getByRole("treeitem", { name: "Card 1", exact: true }).click();
-  await page.getByRole("button", { name: "Add Button", exact: true }).click();
+  await page.getByRole("option", { name: "Button", exact: true }).click();
   await expect(other.locator("[data-component=Card] [data-component=Button]")).toHaveCount(1);
   expect(await treeOf(page)).toBe(await treeOf(other));
 });

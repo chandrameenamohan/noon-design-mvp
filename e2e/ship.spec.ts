@@ -28,7 +28,7 @@ test("Ship twice with the conflict banner up: one open pull request, whose page 
     expect(await pageInGitea(documentId)).toBe(pageOf((await welcomeOf(browser, page.url())).doc)); // on top of the broken page, back in shape
 
     // An edit, and Ship again: the same pull request now holds the new page.
-    await page.getByRole("button", { name: "Add Button", exact: true }).click();
+    await page.getByRole("option", { name: "Button", exact: true }).click();
     await expect(page.locator("[data-component=Button]")).toHaveCount(2);
     await expect(page.getByText("saved", { exact: true })).toBeVisible();
     const final = pageOf((await welcomeOf(browser, page.url())).doc);

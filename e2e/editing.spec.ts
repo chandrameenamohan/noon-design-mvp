@@ -4,6 +4,8 @@ import { expect, test } from "./fixtures.ts";
 // F5 + F6: every kind of edit from the UI, what a refusal looks like, and what a lost race looks like.
 const user = `e2e-${String(Date.now())}-edit@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
+const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const treeOf = (page: Page): Promise<string> =>
   page.evaluate(() => {
@@ -41,9 +43,10 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
   const other = await (await browser.newContext()).newPage();
   await other.goto(url);
 
-  await button(page, "Add Card").click();
-  await button(page, "Add Text").click();
-  await button(page, "Add Button").click();
+  await tile(page, "Card").click();
+  await layer(page, "Page").click(); // a new node is selected (E10.5); the next two are to land on the page, not in the card
+  await tile(page, "Text").click();
+  await tile(page, "Button").click(); // after the selected text
 
   // A prop, typed: the form comes from the manifest (Text.value is a string, Text.size an enum of three: a segmented choice, E10.4).
   await layer(page, "Text 1").click();
@@ -79,9 +82,9 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
 
 test("an edit the document's rules forbid never leaves the page, and says why", async ({ page }) => {
   await newDocument(page);
-  await button(page, "Add Card").click();
+  await tile(page, "Card").click();
   await layer(page, "Card 1").click();
-  await button(page, "Add Stack").click(); // inside the card
+  await tile(page, "Stack").click(); // inside the card
   await layer(page, "Card 1").click();
   await page.getByLabel("Move into", { exact: true }).selectOption({ label: "Stack 1" }); // into its own child
   await button(page, "Move").click();
@@ -91,8 +94,9 @@ test("an edit the document's rules forbid never leaves the page, and says why", 
 
 test("an edit the SERVER refuses is rolled back and its reason is shown; the other browser never sees it", async ({ page, browser }) => {
   const url = await newDocument(page);
-  await button(page, "Add Card").click();
-  await button(page, "Add Stack").click();
+  await tile(page, "Card").click();
+  await layer(page, "Page").click();
+  await tile(page, "Stack").click();
   const late = await openHeld(browser, url);
 
   // Both are valid alone; together they are a cycle. The server takes whichever arrives first.
@@ -119,7 +123,7 @@ test("an edit the SERVER refuses is rolled back and its reason is shown; the oth
 
 test("an edit to a node someone else just removed simply disappears: no error, no leftovers", async ({ page, browser }) => {
   const url = await newDocument(page);
-  await button(page, "Add Text").click();
+  await tile(page, "Text").click();
   const late = await openHeld(browser, url);
 
   late.hold();
@@ -141,7 +145,7 @@ test("an edit to a node someone else just removed simply disappears: no error, n
 
 test("a number the browser cannot read (1e999) changes nothing; it must not be taken for 'clear this prop'", async ({ page }) => {
   await newDocument(page);
-  await button(page, "Add Card").click();
+  await tile(page, "Card").click();
   await layer(page, "Card 1").click();
   const padding = page.getByLabel("padding", { exact: true });
   await padding.fill("8");

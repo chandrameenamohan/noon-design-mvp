@@ -8,6 +8,8 @@ import { expect, test } from "./fixtures.ts";
 // while hovered or focused; a refusal is repeated beside its control; axe-clean light and dark.
 const user = `e2e-${String(Date.now())}-inspector@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
+/** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
+const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const inspector = (page: Page) => page.getByRole("complementary", { name: "Selected element" });
 const radio = (page: Page, group: string, option: string) => inspector(page).getByRole("radiogroup", { name: group, exact: true }).getByRole("radio", { name: option, exact: true });
@@ -44,12 +46,12 @@ test("sections from the manifest; every control kind edits as one set_prop that 
   await expect(other.getByRole("status")).toHaveText("live");
 
   // Page [Stack 1 [Button 1, Text 1], Card 1]
-  await button(page, "Add Stack").click();
+  await tile(page, "Stack").click();
   await layer(page, "Stack 1").click();
-  await button(page, "Add Button").click();
-  await button(page, "Add Text").click();
+  await tile(page, "Button").click();
+  await tile(page, "Text").click();
   await layer(page, "Page").click();
-  await button(page, "Add Card").click();
+  await tile(page, "Card").click();
   await expect(other.locator("[data-node-id]")).toHaveCount(5);
 
   // The page itself has no props to edit; a node's inspector has the three sections, from the manifest.

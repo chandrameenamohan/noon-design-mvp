@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Doc, Op } from "@noon/contracts";
-import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Drop, type KeyMove, type Row } from "./layer-moves.ts";
+import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Drop, type KeyMove, type Placement, type Row } from "./layer-moves.ts";
 
 /**
  * The layers (E10.3): the document as an ARIA tree whose selection IS the canvas's selection, both ways.
@@ -15,7 +15,8 @@ import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Drop, type KeyM
  * same document, so another person's move shows here the moment the room broadcasts it.
  *
  * Pointer events, not HTML drag and drop: the same gestures the canvas speaks, no ghost image to
- * fight, and the indicator follows the pointer's exact height on the row.
+ * fight, and the indicator follows the pointer's exact height on the row. A component carried here from
+ * the library (E10.5, `insertion`) wears the same line or box: the library reads the rows the same way.
  * ponytail: no auto-scroll while dragging near the pane's edge; no type-ahead. Both are the upgrade
  * when a document outgrows one screen of layers.
  */
@@ -28,7 +29,12 @@ type Props = {
   isContainer: (id: string) => boolean;
   onSelect: (id: string) => void;
   submit: (op: Op) => void;
+  /** A component from the library carried over a row, and whether it can land there; null while none is. */
+  insertion?: Insertion | null;
 };
+
+/** Where a carried component would land on the tree, as the library measured it. */
+type Insertion = { targetId: string; placement: Placement; allowed: boolean };
 
 /** A drag under way: what is held, and the row and place under the pointer, if any. `allowed` false: a place the node cannot go. */
 type Drag = { nodeId: string; over: (Drop & { allowed: boolean }) | null };
@@ -37,7 +43,7 @@ type Press = { id: string; x: number; y: number };
 const KEY_MOVES: Record<string, KeyMove> = { ArrowUp: "up", ArrowDown: "down", ArrowRight: "nest", ArrowLeft: "outdent" };
 const rowUnder = (x: number, y: number): HTMLElement | null => document.elementFromPoint(x, y)?.closest<HTMLElement>("[role=treeitem]") ?? null;
 
-export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit }: Props) {
+export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit, insertion = null }: Props) {
   const tree = useRef<HTMLUListElement>(null);
   const hintId = useId();
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -154,7 +160,7 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
         {shown.map((row) => {
           const node = doc.nodes[row.id];
           const siblings = node?.parentId == null ? [row.id] : (doc.nodes[node.parentId]?.children ?? []);
-          const over = drag?.over?.targetId === row.id ? drag.over : null;
+          const over = drag?.over?.targetId === row.id ? drag.over : insertion?.targetId === row.id ? insertion : null;
           return (
             <li
               key={row.id}
@@ -179,7 +185,7 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
           );
         })}
       </ul>
-      <p id={hintId} className="visually-hidden">Arrow keys move between layers; Right opens a layer or goes into it, Left closes it or goes to its parent. Alt with Up or Down reorders the layer, Alt with Right nests it into the layer above, Alt with Left moves it out. Delete removes it. Drag a layer to reorder it or to drop it into a container.</p>
+      <p id={hintId} className="visually-hidden">Arrow keys move between layers; Right opens a layer or goes into it, Left closes it or goes to its parent. Alt with Up or Down reorders the layer, Alt with Right nests it into the layer above, Alt with Left moves it out. Delete removes it. Drag a layer to reorder it or to drop it into a container; drag a component from the library onto a layer to add it there.</p>
       <p aria-live="polite" className="visually-hidden">{said}</p>
     </>
   );
