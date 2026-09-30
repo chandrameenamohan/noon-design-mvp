@@ -36,7 +36,7 @@ const proxyName = (pool: string): string => `noon-sandbox-proxy-${pool}`;
 const PROXY_PORT = 8080;
 const PROXY_PROGRAM = `${readFileSync(new URL("sandbox-proxy.ts", import.meta.url), "utf8")}\nservePreviews({ key: process.env.PREVIEW_KEY ?? "", port: ${String(PROXY_PORT)} });\n`;
 /** Names what a key signs without naming the key: a label anyone with `docker inspect` can read. */
-const fingerprint = (...parts: string[]): string => createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 16);
+export const fingerprint = (...parts: string[]): string => createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 16);
 
 /**
  * Where every sandbox's clone comes from (E5.1: the org's repo in Gitea). The WORKER fetches it: a
@@ -245,7 +245,7 @@ function bundleOf(seed: SeedRepo, deadline: AbortSignal): Promise<Buffer> {
 }
 
 /** git's environment: the token as an HTTP header (GIT_CONFIG_*, git >= 2.31), and never a prompt. */
-function gitEnv(seed: SeedRepo): NodeJS.ProcessEnv {
+export function gitEnv(seed: SeedRepo): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   if (!seed.auth) return env;
   const basic = Buffer.from(`${seed.auth.user}:${seed.auth.token}`).toString("base64");
@@ -428,7 +428,7 @@ async function dockerCli(docker: string, args: string[], deadline: AbortSignal, 
 }
 
 /** One CLI call under the deadline, as dockerCli says. `name` starts its errors. */
-function cli(file: string, args: string[], deadline: AbortSignal, options: { name: string; input?: string | Buffer; env?: NodeJS.ProcessEnv }): Promise<{ stdout: Buffer; stderr: string }> {
+export function cli(file: string, args: string[], deadline: AbortSignal, options: { name: string; input?: string | Buffer; env?: NodeJS.ProcessEnv }): Promise<{ stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (deadline.aborted) {
       reject(deadline.reason as Error);

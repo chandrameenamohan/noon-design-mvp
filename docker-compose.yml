@@ -87,6 +87,8 @@ services:
       # init.sh generates hex passwords, so the value is safe inside a URL without escaping.
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      # E5.3a: Gitea signs every push delivery to /webhooks/gitea with this (init.sh put it into the hook).
+      GITEA_WEBHOOK_SECRET: "${GITEA_WEBHOOK_SECRET:-}"
     ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -179,6 +181,31 @@ services:
       interval: 2s
       timeout: 2s
       retries: 30
+  # E5.3a: the git peer. Keeps a bare mirror of Gitea's repo in its volume (SPEC §2.15), records each push
+  # the webhook missed (Gitea never retries), and works through the commit events, one worktree per job.
+  # No Docker socket and no model: it reads what anyone who can push wrote, and only reads it.
+  worker-git:
+    build: .
+    command: ["node", "apps/worker/src/main.ts"]
+    environment:
+      WORKER_QUEUE: git
+      DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
+      SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+      SYNC_URL: "ws://sync:3001"
+      SEED_REPO: http://gitea:3000/noon/sample-app.git
+      GITEA_TOKEN: "${GITEA_TOKEN:-}"
+      GIT_PEER_DIR: /var/lib/noon-git
+    volumes: ["gitpeer:/var/lib/noon-git"]
+    depends_on:
+      gitea: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
 volumes:
   pgdata:
   giteadata:
+  gitpeer:

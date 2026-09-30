@@ -29,4 +29,6 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY apps apps
 COPY packages packages
+# The git peer's volume mounts here (E5.3a): a fresh named volume takes this directory's owner, so node can write it.
+RUN mkdir -p /var/lib/noon-git && chown node:node /var/lib/noon-git
 USER node

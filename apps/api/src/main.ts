@@ -13,7 +13,7 @@ if (identify === devHeaderIdentity) {
   // A misconfigured deployment should at least be unmissable in its own logs.
   process.stderr.write("DEV IDENTITY: the x-dev-user header authenticates any caller. Never run this outside development.\n");
 }
-const server = await startServer({ port: config.port, db, identify, sessions: config.sessions, previewOrigin: config.previewOrigin, enqueue: producer.enqueue });
+const server = await startServer({ port: config.port, db, identify, sessions: config.sessions, previewOrigin: config.previewOrigin, webhookSecret: config.webhookSecret, enqueue: producer.enqueue });
 process.stdout.write(`api listening on ${server.url} (${config.nodeEnv})\n`);
 
 // SIGTERM is `docker stop`; SIGINT is Ctrl-C. Stop taking requests, then close the pool.

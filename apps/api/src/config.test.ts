@@ -50,3 +50,10 @@ test("the public preview origin is optional (empty = unset) and must be an http(
     expect(() => loadConfig({ ...rest, DATABASE_URL: url, PREVIEW_PUBLIC_URL: bad }), bad).toThrow(/PREVIEW_PUBLIC_URL/);
   }
 });
+
+test("the Gitea webhook secret is optional, and a short one is refused rather than guessed at", () => {
+  expect(loadConfig({ ...rest, DATABASE_URL: url }).webhookSecret).toBeUndefined();
+  expect(loadConfig({ ...rest, DATABASE_URL: url, GITEA_WEBHOOK_SECRET: "" }).webhookSecret).toBeUndefined();
+  expect(loadConfig({ ...rest, DATABASE_URL: url, GITEA_WEBHOOK_SECRET: "w".repeat(48) }).webhookSecret).toBe("w".repeat(48));
+  expect(() => loadConfig({ ...rest, DATABASE_URL: url, GITEA_WEBHOOK_SECRET: "short" })).toThrow(/GITEA_WEBHOOK_SECRET/);
+});

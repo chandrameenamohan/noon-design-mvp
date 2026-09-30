@@ -25,6 +25,8 @@ export type Db = {
   documentStore(): DocumentStore;
   /** Claiming and finishing jobs, for the worker. Every call names the org. */
   jobStore(): JobStore;
+  /** The git peer's inbox (E5.3a): the stack's one repo, so no org. */
+  gitStore(): GitStore;
   /** The ONLY way to reach tenant data: every query it runs is filtered by this org. */
   forOrg(orgId: string): OrgScope;
   close(): Promise<void>;
@@ -59,6 +61,33 @@ type JobStore = {
    */
   sandboxesInUse(graceMs: number): Promise<string[]>;
 };
+
+/** "This branch now points at this commit": what the webhook and the reconcile both record (E5.3a). */
+export type GitEvent = { id: string; ref: string; before: string; after: string };
+export type GitStore = {
+  /**
+   * Records a commit event. False when it was known already: the same delivery again, or this commit on
+   * this branch (the webhook and the reconcile raced, or a delivery was replayed under a new id). The
+   * unique constraints decide. ponytail: a branch moved back to a commit it held before (a force-push
+   * A -> B -> A) is taken as known; ceiling: such reverts go unseen; upgrade: key on (ref, before, after).
+   */
+  record(event: { ref: string; before: string; after: string; deliveryId?: string }): Promise<boolean>;
+  /** The newest recorded commit of every branch: what the reconcile compares the mirror with. */
+  heads(): Promise<Map<string, string>>;
+  /** The oldest waiting event, pending -> running. Undefined when nothing waits. */
+  claim(): Promise<GitEvent | undefined>;
+  /** Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it. */
+  finish(id: string, status: "done" | "failed" | "pending"): Promise<void>;
+  /** A document was opened: the git peer reconciles soon. Requests coalesce into one flag. */
+  requestReconcile(): Promise<void>;
+  /** Clears the flag; true when it was set. Called as a reconcile STARTS, so an open during it sets it again. */
+  takeReconcileRequest(): Promise<boolean>;
+};
+// The same rules the table's checks hold, parsed BEFORE the write: a bad value is a caller's bug, named here.
+const GitSha = z.string().regex(/^([0-9a-f]{40}|[0-9a-f]{64})$/);
+const GitEventInput = z.object({ ref: z.string().regex(/^refs\/heads\/[A-Za-z0-9._/-]{1,200}$/), before: GitSha, after: GitSha, deliveryId: z.string().regex(/^[\x21-\x7e]{1,100}$/).optional() });
+const GitEventRow = z.object({ id: z.string(), ref: z.string(), before_sha: z.string(), after_sha: z.string() })
+  .transform((r): GitEvent => ({ id: r.id, ref: r.ref, before: r.before_sha, after: r.after_sha }));
 
 type PageInput = { limit?: number; cursor?: string | undefined };
 
@@ -362,6 +391,32 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           "select distinct document_id from jobs where queue = 'sandbox' and (status in ('queued', 'running') or finished_at > now() - make_interval(secs => $1::float8 / 1000))",
           [graceMs],
         ),
+    }),
+
+    gitStore: () => ({
+      async record(input) {
+        const e = GitEventInput.parse(input);
+        // `on conflict do nothing` with no target: EITHER unique key (delivery, or branch + commit) makes it a no-op.
+        const result = await pool.query("insert into git_events (ref, before_sha, after_sha, delivery_id) values ($1, $2, $3, $4) on conflict do nothing returning id", [e.ref, e.before, e.after, e.deliveryId ?? null]);
+        return result.rowCount === 1;
+      },
+      heads: async () =>
+        new Map(await rows(
+          z.object({ ref: z.string(), after_sha: z.string() }).transform((r): [string, string] => [r.ref, r.after_sha]),
+          "select distinct on (ref) ref, after_sha from git_events order by ref, created_at desc, id desc",
+          [],
+        )),
+      // `skip locked`: two peers never claim one event, and neither waits for the other.
+      claim: () =>
+        one(GitEventRow, "update git_events set status = 'running' where id = (select id from git_events where status = 'pending' order by created_at, id limit 1 for update skip locked) returning *", []),
+      async finish(id, status) {
+        if (!isId(id)) return;
+        await pool.query("update git_events set status = $2, finished_at = case when $2 = 'pending' then null else now() end where id = $1 and status = 'running'", [id, status]);
+      },
+      async requestReconcile() {
+        await pool.query("update git_reconcile set requested = true where not requested"); // no write, no row lock, when it is already asked for
+      },
+      takeReconcileRequest: async () => (await pool.query("update git_reconcile set requested = false where requested")).rowCount === 1,
     }),
 
     getDocumentForMember: async (documentId, userId) =>

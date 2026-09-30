@@ -7,10 +7,11 @@ beforeAll(async () => {
 });
 afterAll(() => t.drop());
 
-test("migrations create the seven tables, and every tenant table carries org_id", async () => {
+test("migrations create the tables, and every tenant table carries org_id", async () => {
   const tables = await t.columnsByTable();
   expect(Object.keys(tables).sort()).toEqual(
-    ["documents", "jobs", "memberships", "orgs", "schema_migrations", "usage", "users", "workspaces"].sort(),
+    // git_events and git_reconcile are the stack's one repo, not an org's data (E5.3a).
+    ["documents", "git_events", "git_reconcile", "jobs", "memberships", "orgs", "schema_migrations", "usage", "users", "workspaces"].sort(),
   );
   for (const tenantTable of ["memberships", "workspaces", "documents", "jobs", "usage"]) {
     expect(tables[tenantTable], tenantTable).toContain("org_id");

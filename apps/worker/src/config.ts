@@ -24,7 +24,8 @@ const Env = z.object({
   ANTHROPIC_AUTH_TOKEN: mustBeUnset("ANTHROPIC_AUTH_TOKEN"),
   // ONE queue per process. The sandbox queue needs the Docker daemon, which is root on the host; the
   // AI queue runs a model's subprocess. They never share a process (E4.2a security review).
-  WORKER_QUEUE: z.enum(["ai", "sandbox"], { error: "WORKER_QUEUE must be ai or sandbox" }).default("ai"),
+  // `git` is the git peer (E5.3a): no queue message drives it, it polls its inbox in Postgres.
+  WORKER_QUEUE: z.enum(["ai", "sandbox", "git"], { error: "WORKER_QUEUE must be ai, sandbox or git" }).default("ai"),
   SANDBOX_IMAGE: z.string().min(1).default("noon-sandbox:dev"),
   DOCKER: z.string().min(1).default("docker"),
   // This stack's sandboxes: the only ones its reaper may remove (the daemon is shared with tests).
@@ -39,11 +40,13 @@ const Env = z.object({
   SEED_REPO: z.string().refine((value) => URL.canParse(value) && ["http:", "https:"].includes(new URL(value).protocol) && new URL(value).username === "" && new URL(value).password === "", "SEED_REPO must be an http(s) URL without credentials").default("http://gitea:3000/noon/sample-app.git"),
   GITEA_USER: z.string().min(1).default("noon"),
   GITEA_TOKEN: z.string().optional().transform((value) => (value === "" ? undefined : value)),
+  // The git peer's mirror and its jobs' worktrees: a volume in compose (SPEC §2.15), so a restart fetches, not clones.
+  GIT_PEER_DIR: z.string().startsWith("/", "GIT_PEER_DIR must be an absolute path").default("/var/lib/noon-git"),
 });
 
 export function loadConfig(env: Record<string, string | undefined>): {
   databaseUrl: string; redisUrl: string; sessions: { secret: string; syncUrl: string }; oauthToken: string | undefined; model: string;
-  queue: "ai" | "sandbox"; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string; seed: SeedRepo };
+  queue: "ai" | "sandbox" | "git"; gitDir: string; sandbox: { image: string; docker: string; pool: string; concurrency: number; proxyPort: number; previewKey: string; seed: SeedRepo };
 } {
   const parsed = parseEnv(Env, env);
   // The preview tokens' key, derived and not a new secret in .env: the sync server's secret never leaves
@@ -51,7 +54,7 @@ export function loadConfig(env: Record<string, string | undefined>): {
   const previewKey = createHmac("sha256", parsed.SESSION_TOKEN_SECRET).update("noon-sandbox-preview-key").digest("hex");
   return {
     databaseUrl: parsed.DATABASE_URL, redisUrl: parsed.REDIS_URL, sessions: { secret: parsed.SESSION_TOKEN_SECRET, syncUrl: parsed.SYNC_URL }, oauthToken: parsed.CLAUDE_CODE_OAUTH_TOKEN, model: parsed.AI_MODEL,
-    queue: parsed.WORKER_QUEUE, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY, proxyPort: parsed.SANDBOX_PROXY_PORT, previewKey,
+    queue: parsed.WORKER_QUEUE, gitDir: parsed.GIT_PEER_DIR, sandbox: { image: parsed.SANDBOX_IMAGE, docker: parsed.DOCKER, pool: parsed.SANDBOX_POOL, concurrency: parsed.SANDBOX_CONCURRENCY, proxyPort: parsed.SANDBOX_PROXY_PORT, previewKey,
       seed: { url: parsed.SEED_REPO, ...(parsed.GITEA_TOKEN === undefined ? {} : { auth: { user: parsed.GITEA_USER, token: parsed.GITEA_TOKEN } }) } },
   };
 }

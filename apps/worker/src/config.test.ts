@@ -41,6 +41,9 @@ test("a worker drains the AI queue unless told otherwise, and anything but one k
   expect(loadConfig({ ...good, WORKER_QUEUE: "sandbox", SANDBOX_IMAGE: "noon-sandbox:v2", DOCKER: "/usr/local/bin/docker", SANDBOX_CONCURRENCY: "3" })).toMatchObject({ sandbox: { image: "noon-sandbox:v2", docker: "/usr/local/bin/docker", concurrency: 3 } });
   // "ai,sandbox" above all: the AI's subprocess must never share a process with the Docker socket.
   for (const bad of ["", "mail", "ai,sandbox", "AI"]) expect(() => loadConfig({ ...good, WORKER_QUEUE: bad }), bad).toThrow(/WORKER_QUEUE/);
+  expect(loadConfig({ ...good, WORKER_QUEUE: "git" })).toMatchObject({ queue: "git", gitDir: "/var/lib/noon-git" });
+  expect(loadConfig({ ...good, WORKER_QUEUE: "git", GIT_PEER_DIR: "/data/git" }).gitDir).toBe("/data/git");
+  expect(() => loadConfig({ ...good, WORKER_QUEUE: "git", GIT_PEER_DIR: "relative/git" })).toThrow(/GIT_PEER_DIR/);
   expect(loadConfig({ ...good, WORKER_QUEUE: "sandbox", SANDBOX_POOL: "noon-clean" }).sandbox.pool).toBe("noon-clean");
   for (const bad of ["", "Has Space", "x=y"]) expect(() => loadConfig({ ...good, SANDBOX_POOL: bad }), bad).toThrow(/SANDBOX_POOL/);
   for (const bad of ["0", "-1", "1.5", "lots"]) expect(() => loadConfig({ ...good, SANDBOX_CONCURRENCY: bad }), bad).toThrow(/SANDBOX_CONCURRENCY/);

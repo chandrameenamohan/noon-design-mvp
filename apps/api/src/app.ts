@@ -21,8 +21,12 @@ import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
 import type { SessionConfig } from "./config.ts";
 import type { Identify } from "./identity.ts";
+import { readPush, signatureMatches } from "./webhook.ts";
 
 const MAX_BODY_BYTES = 64 * 1024;
+/** Gitea's push body carries the commit list: bigger than anything a person sends, still capped before it is read. */
+const MAX_WEBHOOK_BYTES = 1024 * 1024;
+const WEBHOOK_PATH = "/webhooks/gitea";
 
 type ErrorCode = ErrorBody["error"];
 const fail = (c: Context, status: 400 | 401 | 404 | 409 | 413 | 415 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
@@ -76,6 +80,8 @@ export type AppDeps = {
   enqueue: (ref: JobRef) => Promise<void>;
   /** PREVIEW_PUBLIC_URL: the canvas's public origin, which carries previews as /preview/... (noon-l96). */
   previewOrigin?: string | undefined;
+  /** GITEA_WEBHOOK_SECRET. Unset: the webhook is a 404, and the git peer's reconcile alone notices pushes. */
+  webhookSecret?: string | undefined;
 };
 
 /**
@@ -89,7 +95,7 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, previewOrigin }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, previewOrigin, webhookSecret }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
 
   app.use(async (c, next) => {
@@ -98,7 +104,10 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin }: App
     c.header("cache-control", "no-store");
     c.header("x-content-type-options", "nosniff");
   });
-  app.use(bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => fail(c, 413, "payload_too_large") }));
+  // Both limits refuse by Content-Length before a byte is read, and count the bytes of a body sent without one.
+  const smallBodies = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => fail(c, 413, "payload_too_large") });
+  const webhookBodies = bodyLimit({ maxSize: MAX_WEBHOOK_BYTES, onError: (c) => fail(c, 413, "payload_too_large") });
+  app.use((c, next) => (c.req.path === WEBHOOK_PATH ? webhookBodies : smallBodies)(c, next));
 
   // Liveness: "this process is up". It must not depend on the database, or a database outage
   // would make the orchestrator kill a process that is otherwise able to report the outage.
@@ -117,7 +126,7 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin }: App
   // Identity fails CLOSED: every route needs a caller unless it is listed here. A new top-level
   // route (E1.5's POST /documents/:id/session, for one) is protected without anyone remembering to.
   // createMiddleware carries the Variables type, so `c.var.user` is typed (not `any`) downstream.
-  const PUBLIC_PATHS = new Set(["/health", "/ready"]);
+  const PUBLIC_PATHS = new Set(["/health", "/ready", WEBHOOK_PATH]);
   const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
     if (PUBLIC_PATHS.has(c.req.path)) return next();
     const user = await identify(c, db);
@@ -126,6 +135,25 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin }: App
     await next();
   });
   app.use("*", requireUser);
+
+  // E5.3a: Gitea's push webhook, public (Gitea has no user to send). The HMAC over the RAW bytes is the only
+  // authentication, and nothing in the body is read before it passes. One push is one row: the delivery id
+  // and (branch, commit) are both unique keys in Postgres, so a redelivery, a replay and a reconcile that got
+  // there first all end as `duplicate`. The git peer does the work; this answers Gitea within its 5 s.
+  app.post(WEBHOOK_PATH, async (c) => {
+    if (webhookSecret === undefined) return notFound(c);
+    const raw = Buffer.from(await c.req.arrayBuffer());
+    if (!signatureMatches(raw, c.req.header("x-gitea-signature"), webhookSecret)) return fail(c, 401, "unauthenticated");
+    // Not covered by the signature: a replayed body under a made-up id still meets the (branch, commit) key.
+    const delivery = c.req.header("x-gitea-delivery");
+    if (delivery === undefined || !/^[\x21-\x7e]{1,100}$/.test(delivery)) return fail(c, 400, "invalid_body", [{ field: "x-gitea-delivery", message: "required: 1 to 100 printable characters" }]);
+    if (c.req.header("x-gitea-event") !== "push") return c.json({ result: "ignored", reason: "not_a_push" });
+    const push = readPush(raw);
+    if (push.kind === "invalid") return fail(c, 400, push.error);
+    if (push.kind === "ignored") return c.json({ result: "ignored", reason: push.reason });
+    const recorded = await db.gitStore().record({ ref: push.ref, before: push.before, after: push.after, deliveryId: delivery });
+    return recorded ? c.json({ result: "recorded" }, 202) : c.json({ result: "duplicate" });
+  });
 
   app.post("/orgs", async (c) => {
     const { name } = await body(c, CreateOrgBody);
@@ -194,6 +222,11 @@ export function buildApp({ db, identify, sessions, enqueue, previewOrigin }: App
   app.post("/documents/:id/session", async (c) => {
     const doc = await db.getDocumentForMember(c.req.param("id"), c.var.user.id);
     if (!doc) return notFound(c);
+    // E5.3a: a document is opening, so the git peer looks at Gitea now: a push whose delivery was lost reaches
+    // the canvas at once, not on the next timer. Best effort: a session is never refused over it.
+    await db.gitStore().requestReconcile().catch((err: unknown) => {
+      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `reconcile not requested: ${describeError(err)}` })}\n`);
+    });
     const now = Math.floor(Date.now() / 1000);
     const token = signSessionToken({ userId: c.var.user.id, name: c.var.user.name, orgId: doc.orgId, documentId: doc.id, secret: sessions.secret, ttlSeconds: sessions.ttlSeconds, now });
     return c.json({

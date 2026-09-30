@@ -31,13 +31,20 @@ const Env = z.object({
       return ["http:", "https:"].includes(url.protocol) && url.pathname === "/" && url.search === "" && url.hash === "" && url.username === "" && url.password === "";
     }, "PREVIEW_PUBLIC_URL must be an http(s) origin, like https://noon.example.com")
     .transform((value) => (value === undefined ? undefined : new URL(value).origin)),
+  // E5.3a: the secret Gitea signs push deliveries with (init.sh writes it to .env and into the hook). Unset: the
+  // webhook answers 404 to everyone, and the git peer's reconcile alone notices pushes.
+  GITEA_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => (value === "" ? undefined : value))
+    .refine((value) => value === undefined || value.length >= 32, "GITEA_WEBHOOK_SECRET must be at least 32 characters"),
   // Unset means production: the safe side. Anything that relaxes security must be asked for by name.
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
   PORT: port(3000),
 });
 
 export type SessionConfig = { secret: string; syncUrl: string; ttlSeconds: number };
-type Config = { databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; previewOrigin: string | undefined };
+type Config = { databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; previewOrigin: string | undefined; webhookSecret: string | undefined };
 
 // Long enough to open a socket, short enough that a leaked token is useless almost at once.
 const SESSION_TTL_SECONDS = 60;
@@ -51,5 +58,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     nodeEnv: parsed.NODE_ENV,
     sessions: { secret: parsed.SESSION_TOKEN_SECRET, syncUrl: parsed.SYNC_PUBLIC_URL, ttlSeconds: SESSION_TTL_SECONDS },
     previewOrigin: parsed.PREVIEW_PUBLIC_URL,
+    webhookSecret: parsed.GITEA_WEBHOOK_SECRET,
   };
 }
