@@ -35,6 +35,7 @@ function memoryDb() {
     },
     endSession: (tokenHash: Buffer) => { sessions.delete(tokenHash.toString("hex")); return Promise.resolve(); },
     listOrgsFor: () => Promise.resolve({ items: [], nextCursor: null }),
+    take: () => Promise.resolve({ ok: true }), // the limits themselves: http-limits.test.ts
   };
   return { db: db as unknown as Db, sessions, calls };
 }
@@ -170,14 +171,15 @@ test("a session past its lifetime no longer authenticates", async () => {
   expect((await get("/orgs", { cookie })).status).toBe(401);
 });
 
-test("the rate-limit seam is asked with the route and the email; a no is 429 before any hash or lookup", async () => {
+test("the rate-limit seam is asked with the route and the email; a no is 429 with its wait, before any hash or lookup", async () => {
   const asked: string[] = [];
-  const { post, store } = app({ allowAttempt: (key) => { asked.push(key); return Promise.resolve(false); } });
+  const { post, store } = app({ allowAttempt: (key) => { asked.push(key); return Promise.resolve({ ok: false, retryAfterSeconds: 42 }); } });
   const up = await post("/auth/signup", ann);
   const into = await post("/auth/signin", { email: ann.email, password: ann.password });
   for (const res of [up, into]) {
     expect(res.status).toBe(429);
-    expect(ErrorBody.parse(await res.json())).toEqual({ error: "too_many_attempts" });
+    expect(res.headers.get("retry-after")).toBe("42");
+    expect(ErrorBody.parse(await res.json())).toEqual({ error: "too_many_attempts", retryAfterSeconds: 42 });
   }
   expect(asked).toEqual(["signup:ann@example.com", "signin:ann@example.com"]);
   expect(store.calls).toEqual([]);

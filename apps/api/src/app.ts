@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -32,7 +34,8 @@ import type { Db, Rule } from "@noon/db";
 import { syncRouter, type Holder } from "@noon/lease";
 import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
-import { AI_RUN_LIMIT, SIGN_IN_TTL_SECONDS, type SessionConfig } from "./config.ts";
+import { clientAddress, trustedProxies, type Trusted } from "./client-address.ts";
+import { AI_RUN_LIMIT, HTTP_LIMITS, SIGN_IN_TTL_SECONDS, type HttpLimits, type SessionConfig } from "./config.ts";
 import { SESSION_COOKIE, type Identify } from "./identity.ts";
 import { dummyHash, hashPassword, hashToken, isSessionToken, newSessionToken, verifyPassword } from "./password.ts";
 import { readPush, signatureMatches } from "./webhook.ts";
@@ -47,10 +50,13 @@ const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
 /** F31: over a rate limit. The wait is in the Retry-After header (RFC 9110, whole seconds) and, the same number, in the body. */
-const limited = (c: Context, retryAfterSeconds: number) => {
+const limited = (c: Context, retryAfterSeconds: number, error: "rate_limited" | "too_many_attempts" = "rate_limited") => {
   c.header("retry-after", String(retryAfterSeconds));
-  return c.json({ error: "rate_limited", retryAfterSeconds } satisfies ErrorBody, 429);
+  return c.json({ error, retryAfterSeconds } satisfies ErrorBody, 429);
 };
+type Verdict = Awaited<ReturnType<Db["take"]>>;
+/** The TCP peer, from @hono/node-server's `incoming`; none for a request made in-process (app.request, in tests). */
+const peerOf = (c: Context): string | undefined => (c.env as { incoming?: IncomingMessage } | undefined)?.incoming?.socket.remoteAddress;
 
 /** Every guard `need` made, and the role it asks for: how app.test.ts finds a route that declares none. */
 export const GUARDS = new WeakMap<object, Role>();
@@ -133,10 +139,15 @@ export type AppDeps = {
   /** E8.1: how long a sign-in lasts, and whether its cookie is Secure (everywhere but development, which is plain http). */
   signIn?: { ttlSeconds: number; secureCookie: boolean };
   /**
-   * E8.1: may this sign-up or sign-in go ahead? `key` names the route and the email. False is 429. The seam for
-   * E9.6's limiter. ponytail: allows everything until then; ceiling: an online guesser pays only scrypt's cost per try.
+   * E8.1: may this sign-up or sign-in go ahead? `key` names the route and the email; refused is 429 with its wait.
+   * Default (E9.6): `limits.attempt` per key, counted in Postgres under the key's SHA-256 (an email may outgrow a
+   * rate_limits key, and the table need not hold addresses).
    */
-  allowAttempt?: (key: string) => Promise<boolean>;
+  allowAttempt?: (key: string) => Promise<Verdict>;
+  /** E9.6 (F31): the per-user, per-address, session-minting and sign-in limits (config.ts HTTP_LIMITS). */
+  limits?: HttpLimits;
+  /** E9.6: the peers whose X-Forwarded-For names the client (TRUST_PROXY). Default: loopback only. */
+  trustProxy?: Trusted;
   /** F31: how many AI runs an org may start per window (AI_RUNS_PER_HOUR). Counted in Postgres: every api instance shares it. */
   aiRunLimit?: Rule;
   /**
@@ -158,7 +169,7 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true), aiRunLimit = AI_RUN_LIMIT, accessChanged = () => Promise.resolve() }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt, limits = HTTP_LIMITS, trustProxy = trustedProxies("loopback"), aiRunLimit = AI_RUN_LIMIT, accessChanged = () => Promise.resolve() }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
   const route = syncRouter({ nodes: sessions.sync, owner, alive });
   // ponytail: announced once, best effort; ceiling: with Redis away here (but not at the sync nodes, which re-read
@@ -170,6 +181,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
       process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `access change not announced: ${describeError(err)}` })}\n`);
     });
   };
+  const attempt = allowAttempt ?? ((key: string) => db.take(`attempt:${createHash("sha256").update(key).digest("hex")}`, limits.attempt));
   // Paid for now, not by the first sign-in with an unknown email (whose extra hash would be a timing tell).
   dummyHash().catch(() => undefined);
 
@@ -201,10 +213,27 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // Identity fails CLOSED: every route needs a caller unless it is listed here. A new top-level
   // route (E1.5's POST /documents/:id/session, for one) is protected without anyone remembering to.
   // createMiddleware carries the Variables type, so `c.var.user` is typed (not `any`) downstream.
+  //
+  // E9.6 (F31): and every route is rate limited but the probes (an orchestrator refused a probe kills a healthy
+  // process) and Gitea's webhook (the HMAC is its gate, and a refused delivery would only be lost to the reconcile).
+  // A known caller is counted per user; a public route, or a caller nobody recognises, per client address
+  // (client-address.ts: X-Forwarded-For only from a trusted proxy). Db.take is one upsert, so every api instance
+  // shares the count. ponytail: one Postgres write per request (and a hot row per user, held for one statement);
+  // ceiling: a few thousand requests a second on one primary; upgrade: Redis INCR, failing open. With Postgres away the
+  // take throws and the answer is 500, closed: every one of these routes needs the database anyway.
+  const UNLIMITED = new Set(["/health", "/ready", WEBHOOK_PATH]);
   const PUBLIC_PATHS = new Set(["/health", "/ready", WEBHOOK_PATH, "/auth/signup", "/auth/signin", "/auth/signout", "/auth/me"]);
+  // ponytail: an IPv6 address is its own key; ceiling: a client with a /64 has 2^64 of them; upgrade: key IPv6 by /64.
+  const byAddress = (c: Context) => db.take(`address:${clientAddress(peerOf(c), c.req.header("x-forwarded-for"), trustProxy) ?? "unknown"}`, limits.address);
   const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
-    if (PUBLIC_PATHS.has(c.req.path)) return next();
+    if (UNLIMITED.has(c.req.path)) return next();
+    if (PUBLIC_PATHS.has(c.req.path)) {
+      const verdict = await byAddress(c);
+      return verdict.ok ? next() : limited(c, verdict.retryAfterSeconds);
+    }
     const user = await identify(c, db);
+    const verdict = await (user ? db.take(`user:${user.id}`, limits.user) : byAddress(c));
+    if (!verdict.ok) return limited(c, verdict.retryAfterSeconds);
     if (!user) return fail(c, 401, "unauthenticated");
     c.set("user", user);
     await next();
@@ -245,14 +274,16 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // still create the account. That is the one place an account's existence shows, and it is rate limited.
   app.post("/auth/signup", async (c) => {
     const { email, name, password } = await body(c, SignUpBody);
-    if (!(await allowAttempt(`signup:${email.toLowerCase()}`))) return fail(c, 429, "too_many_attempts");
+    const allowed = await attempt(`signup:${email.toLowerCase()}`);
+    if (!allowed.ok) return limited(c, allowed.retryAfterSeconds, "too_many_attempts");
     const user = await db.signUp({ email, name, passwordHash: await hashPassword(password) });
     return user === "taken" ? fail(c, 409, "email_taken") : signedIn(c, user, 201);
   });
   // No such email and the wrong password are one answer, in one time: both cost exactly one scrypt.
   app.post("/auth/signin", async (c) => {
     const { email, password } = await body(c, SignInBody);
-    if (!(await allowAttempt(`signin:${email.toLowerCase()}`))) return fail(c, 429, "too_many_attempts");
+    const allowed = await attempt(`signin:${email.toLowerCase()}`);
+    if (!allowed.ok) return limited(c, allowed.retryAfterSeconds, "too_many_attempts");
     const found = await db.credentialsFor(email);
     const matches = await verifyPassword(password, found?.passwordHash ?? (await dummyHash()));
     return found && matches ? signedIn(c, found.user, 200) : fail(c, 401, "invalid_credentials");
@@ -352,6 +383,15 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // Everything under /documents/:id: the path names no org, so the lookup itself is access-filtered (a member of the
   // org, or someone the document is shared with, E8.3), and the same row carries the caller's role for each route's
   // `need` (E8.2). Neither: 404, as for an org. So a revoked share's next /session is a 404, and its peer gives up.
+  // E9.6: minting a sync session has its own, tighter limit per user, taken BEFORE the document is looked up. A
+  // collaborator whose share was revoked gets 404 here; a peer that keeps asking regardless is soon refused with a
+  // Retry-After (and a real client backs off), on top of its per-user limit.
+  app.use("/documents/:id/session", createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
+    if (c.req.method !== "POST") return next();
+    const verdict = await db.take(`mint:${c.var.user.id}`, limits.mint);
+    return verdict.ok ? next() : limited(c, verdict.retryAfterSeconds);
+  }));
+
   const document = new Hono<{ Variables: { user: User; doc: Document; role: Role } }>();
   document.use(async (c, next) => {
     const found = await db.getDocumentForMember(c.req.param("id") ?? "", c.var.user.id);

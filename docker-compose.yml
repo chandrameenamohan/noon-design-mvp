@@ -125,6 +125,11 @@ services:
       REDIS_URL: "redis://:${REDIS_PASSWORD:?run ./init.sh}@redis:6379"
       # E5.3a: Gitea signs every push delivery to /webhooks/gitea with this (init.sh put it into the hook).
       GITEA_WEBHOOK_SECRET: "${GITEA_WEBHOOK_SECRET:-}"
+      # E9.6: whose X-Forwarded-For names the client, for the per-address rate limit (apps/api/src/client-address.ts).
+      # The host's Vite proxy (and the ngrok agent behind it) reaches this container through Docker's gateway, a
+      # private address; the port below is bound to 127.0.0.1 and the sandboxes have their own network, so a private
+      # peer is the host or one of these services. The api run on the host needs only the default, loopback.
+      TRUST_PROXY: "loopback,private"
     ports: ["127.0.0.1:${API_PORT:-3000}:3000"]
     depends_on:
       migrate: { condition: service_completed_successfully }

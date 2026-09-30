@@ -3,6 +3,7 @@ import { syncNodesField, type SyncNodes } from "@noon/lease";
 import { DatabaseUrl, parseEnv, port } from "@noon/process/env";
 import type { Rule } from "@noon/db";
 import { RedisUrl } from "@noon/queue";
+import { trustedProxies, type Trusted } from "./client-address.ts";
 
 const Env = z.object({
   DATABASE_URL: DatabaseUrl,
@@ -42,10 +43,22 @@ const Env = z.object({
     .optional()
     .transform((value) => (value === undefined || value === "" ? "60" : value))
     .pipe(z.string().regex(/^\d+$/, "AI_RUNS_PER_HOUR must be decimal digits").transform(Number).pipe(z.number().int().min(1).max(100_000))),
+  // E9.6: the peers whose X-Forwarded-For names the client (client-address.ts). Unset or empty: loopback only.
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      try {
+        return trustedProxies(value === undefined || value === "" ? "loopback" : value);
+      } catch (err) {
+        ctx.addIssue({ code: "custom", message: `TRUST_PROXY: ${(err as Error).message}` });
+        return z.NEVER;
+      }
+    }),
 });
 
 export type SessionConfig = { secret: string; sync: SyncNodes; ttlSeconds: number };
-type Config = { aiRunLimit: Rule; databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; signIn: { ttlSeconds: number; secureCookie: boolean }; previewOrigin: string | undefined; webhookSecret: string | undefined };
+type Config = { aiRunLimit: Rule; trustProxy: Trusted; databaseUrl: string; redisUrl: string; port: number; nodeEnv: "development" | "test" | "production"; sessions: SessionConfig; signIn: { ttlSeconds: number; secureCookie: boolean }; previewOrigin: string | undefined; webhookSecret: string | undefined };
 
 // Long enough to open a socket, short enough that a leaked token is useless almost at once.
 const SESSION_TTL_SECONDS = 60;
@@ -53,11 +66,27 @@ const SESSION_TTL_SECONDS = 60;
 export const SIGN_IN_TTL_SECONDS = 7 * 24 * 60 * 60;
 /** F31: the default AI run limit, per org. ponytail: one limit for every org; upgrade: a column on orgs when plans differ. */
 export const AI_RUN_LIMIT: Rule = { limit: 60, windowSeconds: 3600 };
+/**
+ * E9.6 (F31): every HTTP route but the probes and Gitea's webhook. `user`: any request a caller is known for (an open
+ * editor polls about 3 a second). `address`: the routes that name no user (sign-up, sign-in, sign-out, /auth/me) and
+ * any request whose caller is not recognised, per client address. `mint`: POST /documents/:id/session, per user,
+ * tighter than `user` and counted before the document is looked up, so a revoked collaborator's peer that keeps
+ * asking is refused cheaply. `attempt`: sign-up and sign-in per email, so an online guesser gets 10 tries per 5 minutes
+ * on one account whatever address they come from. ponytail: constants, one for everyone; upgrade: env or a plan column.
+ */
+export const HTTP_LIMITS = {
+  user: { limit: 600, windowSeconds: 60 },
+  address: { limit: 300, windowSeconds: 60 },
+  mint: { limit: 60, windowSeconds: 60 },
+  attempt: { limit: 10, windowSeconds: 300 },
+} satisfies Record<string, Rule>;
+export type HttpLimits = typeof HTTP_LIMITS;
 
 export function loadConfig(env: Record<string, string | undefined>): Config {
   const parsed = parseEnv(Env, env);
   return {
     aiRunLimit: { limit: parsed.AI_RUNS_PER_HOUR, windowSeconds: AI_RUN_LIMIT.windowSeconds },
+    trustProxy: parsed.TRUST_PROXY,
     databaseUrl: parsed.DATABASE_URL,
     redisUrl: parsed.REDIS_URL,
     port: parsed.PORT,

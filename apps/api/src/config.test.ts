@@ -80,3 +80,14 @@ test("F31: AI runs per org per hour, decimal digits only, 60 when unset or empty
     expect(() => loadConfig({ ...rest, DATABASE_URL: url, AI_RUNS_PER_HOUR: bad }), bad).toThrow(/AI_RUNS_PER_HOUR/);
   }
 });
+
+test("TRUST_PROXY: loopback by default (empty = unset), a list of names, addresses and CIDRs, and a typo refuses to start", () => {
+  const trust = (TRUST_PROXY?: string) => loadConfig({ ...rest, DATABASE_URL: url, TRUST_PROXY }).trustProxy;
+  for (const unset of [undefined, ""]) {
+    expect(trust(unset)("127.0.0.1")).toBe(true);
+    expect(trust(unset)("172.18.0.1")).toBe(false);
+  }
+  expect(trust("loopback,private")("172.18.0.1")).toBe(true);
+  expect(trust("192.168.65.1")("192.168.65.1")).toBe(true);
+  for (const bad of ["*", "all", "10.0.0.0/40"]) expect(() => trust(bad), bad).toThrow(/TRUST_PROXY/);
+});

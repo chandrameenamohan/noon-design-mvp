@@ -18,7 +18,7 @@ if (config.nodeEnv === "development") {
   // A misconfigured deployment should at least be unmissable in its own logs.
   process.stderr.write("DEV IDENTITY: the x-dev-user header authenticates any caller without a session. Never run this outside development.\n");
 }
-const server = await startServer({ port: config.port, db, identify, sessions: config.sessions, signIn: config.signIn, aiRunLimit: config.aiRunLimit, previewOrigin: config.previewOrigin, webhookSecret: config.webhookSecret, enqueue: producer.enqueue, accessChanged: (change) => access.publish(change), ...(leases ? { owner: (documentId: string) => leases.owner(documentId), alive: (nodeIds: readonly string[]) => leases.alive(nodeIds) } : {}) });
+const server = await startServer({ port: config.port, db, identify, sessions: config.sessions, signIn: config.signIn, aiRunLimit: config.aiRunLimit, trustProxy: config.trustProxy, previewOrigin: config.previewOrigin, webhookSecret: config.webhookSecret, enqueue: producer.enqueue, accessChanged: (change) => access.publish(change), ...(leases ? { owner: (documentId: string) => leases.owner(documentId), alive: (nodeIds: readonly string[]) => leases.alive(nodeIds) } : {}) });
 process.stdout.write(`api listening on ${server.url} (${config.nodeEnv})\n`);
 
 // SIGTERM is `docker stop`; SIGINT is Ctrl-C. Stop taking requests, then close the pool.
