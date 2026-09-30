@@ -72,5 +72,6 @@ test("a run the provider refuses fails fast with its reason in words, and the pa
   await page.getByRole("button", { name: "Ask the AI", exact: true }).click();
   await expect(page.locator("#ai-status")).toHaveAttribute("data-run-status", "failed", { timeout: 10_000 });
   await expect(page.locator("#ai-status")).toContainText("limiting requests");
-  await expect(page.locator("[data-node-id]")).toHaveCount(1); // only the page itself
+  // On the canvas (the Layers tree marks its rows with data-node-id too), only the page itself.
+  await expect(page.getByRole("region", { name: "Canvas" }).locator("[data-node-id]")).toHaveCount(1);
 });
