@@ -16,20 +16,20 @@ test("each browser sees the other's name, pointer and selection, and forgets a c
   await expect(here).toHaveCount(1); // the other browser, known from the moment it joined
   await expect(here).toContainText("e2e-"); // the name the API vouches for, not one the client chose
 
-  // The other browser selects the card, then rests its pointer in the middle of its canvas
+  // The other browser selects the card, then rests its pointer in the middle of the card on ITS canvas
   // (in that order: the click itself moves the pointer to the button).
   await other.getByRole("treeitem", { name: "Card 1", exact: true }).click();
-  const box = await other.getByRole("region", { name: "Canvas" }).boundingBox();
-  if (!box) throw new Error("no canvas");
-  await other.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const theirCard = await other.locator("[data-node-id][data-component=Card] > :first-child").boundingBox();
+  if (!theirCard) throw new Error("no card");
+  await other.mouse.move(theirCard.x + theirCard.width / 2, theirCard.y + theirCard.height / 2);
 
   const cursor = page.locator("[data-presence-cursor]");
   await expect(cursor).toHaveCount(1);
   await expect(page.locator("[data-component=Card][data-selected-by]")).toHaveCount(1);
-  // The pointer is shown at the same FRACTION of this canvas (the two windows need not be the same size).
-  const mine = await page.getByRole("region", { name: "Canvas" }).boundingBox();
-  if (!mine) throw new Error("no canvas");
-  await expect.poll(async () => { const dot = await cursor.boundingBox(); return dot ? Math.abs((dot.x - mine.x) / mine.width - 0.5) : 1; }).toBeLessThan(0.05);
+  // The pointer travels in the frame's own coordinates (E10.6), so here it is drawn on OUR card, whatever the window sizes.
+  const myCard = await page.locator("[data-node-id][data-component=Card] > :first-child").boundingBox();
+  if (!myCard) throw new Error("no card");
+  await expect.poll(async () => { const tip = await cursor.boundingBox(); return tip !== null && tip.x > myCard.x && tip.x < myCard.x + myCard.width && tip.y > myCard.y && tip.y < myCard.y + myCard.height; }).toBe(true);
 
   // Nothing of this is part of the document.
   await expect(page.getByText("saved", { exact: true })).toBeVisible();

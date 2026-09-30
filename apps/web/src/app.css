@@ -56,6 +56,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* The frame keeps the sample app's own look (its stylesheet is scoped to it, designSystem.ts) in both editor themes, like a white sheet on a dark desk.
    ponytail: one desktop width; E10.7 brings device frames. */
 .page-frame { box-sizing: border-box; width: 960px; min-height: 600px; box-shadow: var(--frame-shadow); color-scheme: light; }
+/* The editor's own control rules (`input`, `button` above) reach into the frame and the tiles too; there they resolve to
+   the design system's palette, so a field on the canvas is the sample app's field in the dark theme as well. */
+.page-frame, .library .thumb-frame { --surface: var(--ds-surface); --surface-2: var(--ds-ground); --fg: var(--ds-ink); --fg-muted: var(--ds-muted); --border: var(--ds-line); --border-strong: var(--ds-line); }
 .node { display: contents; }
 /* An empty container would be 0 px tall (a Stack with no children): it gets room to be clicked and dropped into (E10.5), and a dashed edge to say so. */
 .node[data-empty-container] > * { min-height: 24px; outline: 1px dashed var(--canvas-dot); outline-offset: -1px; }
@@ -114,12 +117,26 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 /* What a container holds in its tile: two stand-in children, since the manifest knows none. */
 .thumb-block { display: block; height: 12px; min-width: 36px; border-radius: 4px; background: #c4cad3; }
 
-/* --- presence: names in the bar, cursors and selection tags on the canvas ---------------------------- */
-/* The person's colour is a DOT beside the name, not the name's colour: the palette reads on white, not on a dark surface. */
-.also-here { display: flex; flex-wrap: wrap; gap: var(--space-3); list-style: none; padding: 0; margin: 0; min-height: 1.5rem; align-items: center; font-weight: 600; }
-.also-here li { display: inline-flex; align-items: center; gap: var(--space-1); }
-.also-here li::before { content: ""; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--peer-colour); }
-.presence-cursor { position: absolute; pointer-events: none; transform: translate(4px, 4px); padding: 0 var(--space-1); border-radius: 0 6px 6px 6px; color: #fff; font-size: var(--text-xs); white-space: nowrap; }
+/* --- presence (E10.6): avatars in the bar; cursors on the sheet, in world coordinates, drawn unscaled ------ */
+/* The person's colour is the AVATAR's fill with white initials, never the name's colour: the palette (colour.ts) is
+   checked to carry white text, not to read as text on a dark surface. */
+.also-here { display: flex; flex-wrap: wrap; gap: var(--space-1); list-style: none; padding: 0; margin: 0; min-height: 1.5rem; align-items: center; }
+.also-here li { display: inline-flex; }
+.avatar-button { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px var(--space-2) 2px 2px; border-color: transparent; background: transparent; font-weight: 600; }
+.avatar-button:hover:not(:disabled) { background: var(--surface-2); }
+/* Nothing to jump to yet: still a person here, so it keeps its colour and takes no pointer of its own. */
+.avatar-button:disabled { color: inherit; cursor: default; }
+.avatar { display: inline-grid; place-items: center; width: 1.25rem; height: 1.25rem; border-radius: 50%; background: var(--peer-colour); color: #fff; font-size: 0.625rem; font-weight: 700; line-height: 1; }
+/* A cursor sits in .world at its world point and divides by --zoom like the labels, so the arrow and the tag keep their
+   screen size at every zoom; the tip of the arrow is the element's corner, the point itself. Still for 5 s: it fades. */
+.presence-cursor { position: absolute; pointer-events: none; transform-origin: 0 0; transform: scale(calc(1 / var(--zoom))); transition: opacity 600ms ease; }
+.presence-cursor[data-idle] { opacity: 0; }
+/* A white edge on the glyph: the fill reads on the light sheet, the edge on the dark one. */
+.cursor-glyph { display: block; fill: var(--peer-colour); stroke: #fff; stroke-width: 1.25; stroke-linejoin: round; }
+.cursor-tag { position: absolute; left: 11px; top: 13px; padding: 1px var(--space-2); border-radius: 0 6px 6px 6px; background: var(--peer-colour); color: #fff; font-size: var(--text-xs); font-weight: 600; line-height: 1.5; white-space: nowrap; }
+/* The AI has no pointer: a spark a little inside the corner of the node it last touched, where a pointer would not be. */
+.presence-cursor[data-actor-kind="agent"] { transform: translate(calc(6px / var(--zoom)), calc(6px / var(--zoom))) scale(calc(1 / var(--zoom))); }
+.presence-cursor[data-actor-kind="agent"] .cursor-tag { border-radius: 6px; left: 14px; top: 8px; }
 
 /* --- the inspector (right pane, E10.4): three sections, one row per prop: name | control | reset ------- */
 .inspector { padding: 0 var(--space-3) var(--space-3); }

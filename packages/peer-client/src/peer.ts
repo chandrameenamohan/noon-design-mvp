@@ -1,4 +1,4 @@
-import { ServerMessage, type ClientMessage, type Doc, type Presence, type Manifest, type Op } from "@noon/contracts";
+import { ServerMessage, type ClientMessage, type Doc, type Presence, type Manifest, type Op, type SequencedOp } from "@noon/contracts";
 import { createReplica, type LocalResult, type Outcome, type Rejection } from "./replica.ts";
 
 export type { Outcome, Rejection };
@@ -19,6 +19,12 @@ export type PeerOptions = {
   onChange?: () => void;
   /** An edit of ours that will not happen: refused by the server, or still unsent when the peer ended for good ("connection_closed"). */
   onRejected?: (rejection: Rejection) => void;
+  /**
+   * Every op the room has ORDERED, ours included, with the actor the room stamped on it, told after it is
+   * applied. A window onto who did what (E10.6: the AI's cursor sits on the node its last op touched); not
+   * a place to edit from, and nothing here depends on it being listened to.
+   */
+  onOp?: (message: SequencedOp) => void;
   onStatus?: (status: PeerStatus) => void;
   /** Node 24 and every browser have the same WebSocket built in, so one client serves both. Tests pass a saboteur. */
   WebSocketImpl?: typeof WebSocket;
@@ -32,7 +38,7 @@ export type PeerOptions = {
   presence?: { sendEveryMs: number; refreshMs: number; forgetAfterMs: number };
 };
 
-/** What we show of ourselves: where the pointer is (a fraction of the canvas) and what is selected. */
+/** What we show of ourselves: where the pointer is (in the canvas's world coordinates) and what is selected. */
 type OwnPresence = Pick<Presence, "cursor" | "selection">;
 
 // Close codes that reconnecting cannot cure (apps/sync/src/server.ts): a message the server could
@@ -45,7 +51,7 @@ const KNOWN_TYPES: ReadonlySet<unknown> = new Set(ServerMessage.options.map((opt
  * all edit through this. The thinking is in replica.ts; this file is only the wire: connect, wait
  * for the welcome, send, reconnect.
  */
-export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, mintOpId, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
+export function connectPeer({ manifest, session, onChange, onRejected, onOp, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, mintOpId, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
   const replica = createReplica({ manifest, ...(maxPending === undefined ? {} : { maxPending }), ...(mintOpId === undefined ? {} : { mintOpId }) });
   let status: PeerStatus = "closed"; // until open() below, a line from now; this way the first onStatus is "connecting"
   let closedBecause: string | undefined;
@@ -201,6 +207,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onStatus,
     const effects = replica.receive(message);
     for (const { opId, outcome } of effects.settled) settle(opId, outcome); // BEFORE a fatal end: these ops have left `pending`, so abandon() could not report them
     if (effects.fatal) { finish(effects.fatal); return; }
+    if (message.type === "op") onOp?.(message);
     if (message.type === "welcome") {
       readOnly = message.readOnly ?? false;
       if (message.you !== undefined) mine.add(message.you);

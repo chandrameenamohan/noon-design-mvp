@@ -52,12 +52,12 @@ export function controlFor(prop: Prop): Control {
  * are not here. ponytail: per-side padding lands here the day the manifest declares it.
  */
 export type LayoutName = "direction" | "gap" | "padding" | "align";
-export const LAYOUT_PROPS: Readonly<Record<LayoutName, Prop["type"]["kind"]>> = { direction: "enum", gap: "number", padding: "number", align: "enum" };
+const LAYOUT_PROPS: Readonly<Record<LayoutName, Prop["type"]["kind"]>> = { direction: "enum", gap: "number", padding: "number", align: "enum" };
 /** The layout props that stand for a SPACE the canvas can shade while their control is hovered or focused. */
 export type Space = Extract<LayoutName, "gap" | "padding">;
 
 const isLayoutName = (name: string): name is LayoutName => Object.hasOwn(LAYOUT_PROPS, name);
-export const layoutNameOf = (prop: Prop): LayoutName | undefined => (isLayoutName(prop.name) && LAYOUT_PROPS[prop.name] === prop.type.kind ? prop.name : undefined);
+const layoutNameOf = (prop: Prop): LayoutName | undefined => (isLayoutName(prop.name) && LAYOUT_PROPS[prop.name] === prop.type.kind ? prop.name : undefined);
 export const isLayoutProp = (prop: Prop): boolean => layoutNameOf(prop) !== undefined;
 export const spaceOf = (prop: Prop): Space | undefined => { const name = layoutNameOf(prop); return name === "gap" || name === "padding" ? name : undefined; };
 

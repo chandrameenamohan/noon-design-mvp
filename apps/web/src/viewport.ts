@@ -47,4 +47,7 @@ export function fit(view: Size, content: Size, padding = 32): Viewport {
   return { zoom, x: (view.width - content.width * zoom) / 2, y: (view.height - content.height * zoom) / 2 };
 }
 
+/** The viewport that shows `world` in the middle of the view, at the zoom it has (E10.6: jumping to someone's selection). */
+export const centreOn = (v: Viewport, view: Size, world: Point): Viewport => ({ zoom: v.zoom, x: view.width / 2 - world.x * v.zoom, y: view.height / 2 - world.y * v.zoom });
+
 export const percent = (zoom: number): string => `${String(Math.round(zoom * 100))}%`;

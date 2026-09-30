@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { clampZoom, fit, MAX_ZOOM, MIN_ZOOM, panBy, percent, toScreen, toWorld, wheelZoom, zoomAt, zoomStep, type Viewport } from "./viewport.ts";
+import { centreOn, clampZoom, fit, MAX_ZOOM, MIN_ZOOM, panBy, percent, toScreen, toWorld, wheelZoom, zoomAt, zoomStep, type Viewport } from "./viewport.ts";
 
 // unit:viewport-math (E10.2)
 
@@ -76,4 +76,13 @@ test("the readout is a whole percentage", () => {
   expect(percent(0.1)).toBe("10%");
   expect(percent(436 / 600)).toBe("73%");
   expect(percent(MAX_ZOOM)).toBe("400%");
+});
+
+test("centring on a world point (E10.6: an avatar jumps to that person's selection) puts it in the middle of the view, at the same zoom", () => {
+  const view = { width: 1000, height: 500 };
+  for (const world of [{ x: 0, y: 0 }, { x: 480, y: 300 }, { x: -2000, y: 7.5 }]) {
+    const centred = centreOn(v, view, world);
+    expect(centred.zoom).toBe(v.zoom);
+    close(toScreen(centred, world), { x: 500, y: 250 });
+  }
 });

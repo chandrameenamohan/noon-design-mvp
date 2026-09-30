@@ -1,13 +1,14 @@
-import { createElement, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createElement, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Doc, DocNode, Presence } from "@noon/contracts";
 import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
+import { nameOf } from "./cursors.ts";
 import { components, FRAME, frameStylesheet } from "./designSystem.ts";
 import type { Hint } from "./Inspector.tsx";
 import { indexAlong, insertLineAt, slotOnCanvas, type Axis, type Slot } from "./library-adds.ts";
 import { hitTest, step, type Box, type Step } from "./selection.ts";
 import { gapsBetween, paddingRing, type Rect, type Sides } from "./spaces.ts";
-import { fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Point, type Viewport } from "./viewport.ts";
+import { centreOn, fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Point, type Viewport } from "./viewport.ts";
 
 /**
  * The canvas (E10.2): the document's REAL components in a page frame on a dotted infinite sheet, with an
@@ -31,6 +32,13 @@ import { fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Point, 
  * `insertion` (E10.5): a component is being carried from the library over the canvas, and the slot it would
  * take is shown: a box round the parent and a line where the new node lands among its children. The library
  * finds the slot with `slotUnder` below, the one place that reads the canvas's boxes for it.
+ *
+ * `cursors` (E10.6): the others' pointers, in WORLD coordinates, so they sit in `.world` like the outlines
+ * and this window's zoom and pan move them by CSS alone; each divides by --zoom so the arrow and the tag
+ * keep their screen size. The AI has no pointer: its mark is anchored to a NODE, and the same measuring pass
+ * that finds the outlines' boxes finds where that node is. `reveal` pans the view so a node sits in the
+ * middle (the top bar's avatars). The marks live in the editor layer, which is aria-hidden: who is here is
+ * said in the top bar, not by decoration.
  */
 type Props = {
   doc: Doc;
@@ -45,11 +53,17 @@ type Props = {
   /** The space to shade, if a layout control is hovered or focused. */
   hint: Hint | null;
   onSelect: (id: string) => void;
-  /** Where this person's pointer is, as a fraction of the canvas (SPEC F7), or null when it left. */
+  /** Where this person's pointer is, in world coordinates (SPEC F7, E10.6), or null when it left the canvas. */
   onPoint: (cursor: Presence["cursor"]) => void;
-  /** Drawn over the sheet, unscaled: the others' cursors. */
-  children?: ReactNode;
+  /** The others' cursors: a person's at a world point, the AI's on a node. */
+  cursors: readonly CursorMark[];
+  /** A node to bring to the middle of the view; a new `nonce` each time, so the same node can be revealed twice. */
+  reveal: Reveal | null;
 };
+
+/** Another's cursor on the sheet: `at` is a world point (a pointer) or a node (a peer without one, the AI). `idle`: still for a while, so it fades. */
+export type CursorMark = { peerId: string; kind: Presence["actor"]["kind"]; label: string; colour: string; idle: boolean; at: Point | { nodeId: string } };
+export type Reveal = { nodeId: string; nonce: number };
 
 type Outline = { id: string; kind: "selected" | "hovered" | "peer" | "shade" | "insert" | "insert-line"; label: string; colour?: string; x: number; y: number; width: number; height: number };
 type Drag = { kind: "pan" | "click"; x: number; y: number };
@@ -139,15 +153,34 @@ function insertionRects(wrapper: Element, index: number, zoom: number): { box: R
   return { box, line: insertLineAt(innerOf(box, paddingOf(own, zoom)), childRects(wrapper), axisOf(own), index) };
 }
 const hundredths = (n: number): number => Math.round(n * 100) / 100;
-const fraction = (n: number): number => Math.min(1, Math.max(0, n));
+const isAnchored = (at: CursorMark["at"]): at is { nodeId: string } => "nodeId" in at;
 
-export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, insertion, onSelect, onPoint, children }: Props) {
+/**
+ * One cursor. The arrow's tip is the element's top-left corner, the point itself; the tag hangs off it. The AI
+ * has no pointer, so its mark is a spark set a little inside the node's corner, where a pointer would not be.
+ */
+function CursorView({ mark, at }: { mark: CursorMark; at: Point }) {
+  return (
+    <div data-presence-cursor data-actor-kind={mark.kind} data-idle={mark.idle ? "" : undefined} {...(isAnchored(mark.at) ? { "data-node": mark.at.nodeId } : {})} className="presence-cursor" style={{ left: at.x, top: at.y, "--peer-colour": mark.colour } as CSSProperties}>
+      <svg className="cursor-glyph" viewBox="0 0 16 16" width="16" height="16">
+        {mark.kind === "agent" ? <path d="M8 0.5 L10 6 L15.5 8 L10 10 L8 15.5 L6 10 L0.5 8 L6 6 Z" /> : <path d="M0.5 0.5 L15 7 L8.5 8.5 L6.5 15.5 Z" />}
+      </svg>
+      <span className="cursor-tag">{mark.label}</span>
+    </div>
+  );
+}
+
+export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, insertion, onSelect, onPoint, cursors, reveal }: Props) {
   const view = useRef<HTMLElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const hintId = useId();
   const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
   const [hovered, setHovered] = useState<string | null>(null);
   const [outlines, setOutlines] = useState<Outline[]>([]);
+  // Where the node-anchored cursors sit (node id -> world point), measured with the outlines.
+  const [anchored, setAnchored] = useState<Record<string, Point>>({});
+  // The last reveal answered: the effect below runs every render, and must pan once per request.
+  const revealed = useRef<number | null>(null);
   // Space held: the next drag pans instead of selecting. Panning: a pan drag is under way.
   const [panMode, setPanMode] = useState(false);
   const [panning, setPanning] = useState(false);
@@ -196,7 +229,7 @@ export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, 
     const wanted: Pick<Outline, "id" | "kind" | "label" | "colour">[] = [
       { id: selected, kind: "selected", label: labels.get(selected) ?? "" },
       ...(hovered !== null && hovered !== selected ? [{ id: hovered, kind: "hovered" as const, label: labels.get(hovered) ?? "" }] : []),
-      ...[...selectedBy].flatMap(([id, peers]) => peers.map((p) => ({ id, kind: "peer" as const, label: p.name === "" ? p.actor.kind : p.name, colour: colourOf(p.peerId) }))),
+      ...[...selectedBy].flatMap(([id, peers]) => peers.map((p) => ({ id, kind: "peer" as const, label: nameOf(p), colour: colourOf(p.peerId) }))),
     ];
     const toOutline = (w: Pick<Outline, "id" | "kind" | "label" | "colour">, rect: Rect): Outline => {
       const at = toWorld(viewport, { x: rect.left - box.left, y: rect.top - box.top });
@@ -214,6 +247,27 @@ export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, 
     const rects = insertion && into ? insertionRects(into, insertion.index, viewport.zoom) : null;
     if (insertion && rects) next.push(toOutline({ id: insertion.parentId, kind: "insert", label: labels.get(insertion.parentId) ?? "" }, rects.box), toOutline({ id: insertion.parentId, kind: "insert-line", label: "" }, rects.line));
     setOutlines((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
+    // The node-anchored cursors (the AI): the top-left corner of the node's box, in world coordinates.
+    const seats: Record<string, Point> = {};
+    for (const mark of cursors) {
+      if (!isAnchored(mark.at)) continue;
+      const wrapper = wrapperOf(mark.at.nodeId);
+      const rect = wrapper ? rectOf(wrapper) : undefined;
+      if (rect) { const at = toWorld(viewport, { x: rect.left - box.left, y: rect.top - box.top }); seats[mark.at.nodeId] = { x: hundredths(at.x), y: hundredths(at.y) }; }
+    }
+    setAnchored((current) => (JSON.stringify(current) === JSON.stringify(seats) ? current : seats));
+  });
+
+  // An avatar was pressed (E10.6): the view pans so that person's selection sits in the middle, at this zoom.
+  useLayoutEffect(() => {
+    const el = view.current;
+    if (!reveal || reveal.nonce === revealed.current || !el) return;
+    revealed.current = reveal.nonce;
+    const wrapper = wrapperIn(el, reveal.nodeId);
+    const rect = wrapper ? rectOf(wrapper) : undefined;
+    if (!rect) return;
+    const box = el.getBoundingClientRect();
+    setViewport(centreOn(viewport, { width: el.clientWidth, height: el.clientHeight }, toWorld(viewport, { x: (rect.left + rect.right) / 2 - box.left, y: (rect.top + rect.bottom) / 2 - box.top })));
   });
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
@@ -235,8 +289,10 @@ export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, 
       return;
     }
     const box = event.currentTarget.getBoundingClientRect();
-    // A FRACTION of the canvas, not pixels: the other window is a different size (E10.6 moves this into world coordinates).
-    onPoint({ x: fraction((event.clientX - box.left) / box.width), y: fraction((event.clientY - box.top) / box.height) });
+    // In WORLD coordinates, not screen pixels or a fraction of the canvas: the other window has its own size, zoom
+    // and pan, and this way the pointer lands on the same component there. Hundredths: a sub-pixel is noise on the wire.
+    const at = toWorld(viewport, { x: event.clientX - box.left, y: event.clientY - box.top });
+    onPoint({ x: hundredths(at.x), y: hundredths(at.y) });
     setHovered(hitTest(boxesOf(event.currentTarget), { x: event.clientX, y: event.clientY }));
   };
   const onPointerUp = (event: ReactPointerEvent<HTMLElement>): void => {
@@ -295,9 +351,12 @@ export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, 
                 {o.label !== "" && <span className="outline-label">{o.label}</span>}
               </div>
             ))}
+            {cursors.map((mark) => {
+              const at = isAnchored(mark.at) ? anchored[mark.at.nodeId] : mark.at;
+              return at ? <CursorView key={mark.peerId} mark={mark} at={at} /> : null;
+            })}
           </div>
         </div>
-        {children}
         <p id={hintId} className="visually-hidden">Arrow keys move between neighbouring elements, Enter goes into an element, Shift and Enter goes to its parent, Escape selects the page. Plus and minus zoom, 0 fits the page. Hold Space and drag to pan.</p>
         <p aria-live="polite" className="visually-hidden">{labels.get(selected) ?? "Page"} selected</p>
       </section>

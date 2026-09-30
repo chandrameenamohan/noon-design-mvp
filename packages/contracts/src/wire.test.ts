@@ -47,10 +47,11 @@ test("a prop value is a string, a finite number or a boolean, and nothing else",
 });
 
 // --- presence (E2.6): never sequenced, never stored -----------------------------------------------
-test("presence from a client: a cursor inside the canvas (fractions 0..1) and a selection, both optional", () => {
-  expect(ClientMessage.safeParse({ type: "presence", cursor: { x: 0.25, y: 1 }, selection: "n1" }).success).toBe(true);
+test("presence from a client: a cursor in the canvas's world coordinates (any spot on the sheet, E10.6) and a selection, both optional", () => {
+  expect(ClientMessage.safeParse({ type: "presence", cursor: { x: 240.5, y: 100 }, selection: "n1" }).success).toBe(true);
+  expect(ClientMessage.safeParse({ type: "presence", cursor: { x: -40, y: 1200 }, selection: null }).success).toBe(true); // left of the frame is a place too
   expect(ClientMessage.safeParse({ type: "presence", cursor: null, selection: null }).success).toBe(true);
-  for (const bad of [{ x: 1.5, y: 0 }, { x: -0.1, y: 0 }, { x: Number.NaN, y: 0 }, { x: 0 }]) expect(ClientMessage.safeParse({ type: "presence", cursor: bad, selection: null }).success).toBe(false);
+  for (const bad of [{ x: 1e7, y: 0 }, { x: 0, y: -1e7 }, { x: Number.NaN, y: 0 }, { x: Number.POSITIVE_INFINITY, y: 0 }, { x: 0 }, { x: "0", y: 0 }]) expect(ClientMessage.safeParse({ type: "presence", cursor: bad, selection: null }).success, JSON.stringify(bad)).toBe(false);
   // Who is speaking comes from the connection, never from the message.
   expect(ClientMessage.safeParse({ type: "presence", cursor: null, selection: null, name: "Mallory" }).success).toBe(false);
   expect(ClientMessage.safeParse({ type: "presence", cursor: null, selection: "__proto__" }).success).toBe(false);

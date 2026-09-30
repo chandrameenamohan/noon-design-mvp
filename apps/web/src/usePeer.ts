@@ -1,7 +1,7 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { manifest } from "@noon/design-system";
 import { connectPeer, type Rejection } from "@noon/peer-client";
-import type { Op } from "@noon/contracts";
+import type { Op, SequencedOp } from "@noon/contracts";
 import type { sentenceFor } from "./reasons.ts";
 
 type Reason = Parameters<typeof sentenceFor>[0];
@@ -9,10 +9,10 @@ type Reason = Parameters<typeof sentenceFor>[0];
 export type Refusal = { id: string; reason: Reason; op?: Op };
 import { openSession } from "./api.ts";
 
-function openStore(documentId: string, onRejected: (rejection: Rejection) => void) {
+function openStore(documentId: string, onRejected: (rejection: Rejection) => void, onOp: (message: SequencedOp) => void) {
   const listeners = new Set<() => void>();
   const tell = (): void => { for (const listener of listeners) listener(); };
-  const peer = connectPeer({ manifest, session: () => openSession(documentId), onChange: tell, onStatus: tell, onRejected });
+  const peer = connectPeer({ manifest, session: () => openSession(documentId), onChange: tell, onStatus: tell, onRejected, onOp });
   return {
     peer,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -32,14 +32,19 @@ const NOTHING = { subscribe: () => () => undefined, snapshot: () => "" };
  * It is opened in an EFFECT, never during render or in useMemo: opening a connection is a side
  * effect, and React may run a render twice and throw one away (StrictMode does so on purpose, in
  * development, to catch exactly this). An effect comes with a cleanup; a render does not.
+ *
+ * `onOp` (E10.6): every op the room orders, ours included, with its actor. Held in a ref, so the caller may
+ * pass a new function each render without the peer being opened again.
  */
-export function usePeer(documentId: string) {
+export function usePeer(documentId: string, onOp?: (message: SequencedOp) => void) {
   const [refusals, setRefusals] = useState<Refusal[]>([]);
   const [store, setStore] = useState<ReturnType<typeof openStore>>();
   const refuse = (reason: Reason, op?: Op): void => { setRefusals((before) => [...before, { id: crypto.randomUUID(), reason, ...(op === undefined ? {} : { op }) }]); };
+  const latestOnOp = useRef(onOp);
+  latestOnOp.current = onOp;
   useEffect(() => {
     // `quiet` (someone else removed the node first) is not news: the canvas already shows it (F5).
-    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason, rejection.op); });
+    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason, rejection.op); }, (message) => latestOnOp.current?.(message));
     setStore(opened);
     return () => { opened.peer.close(); };
   }, [documentId]);

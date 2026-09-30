@@ -418,8 +418,14 @@ export type SequencedOp = z.infer<typeof SequencedOp>;
 
 // --- Presence: who else is here, where they point, what they have selected ---------------------
 // Not an op: it is never put in order, never stored, and nothing about it survives a restart (F7).
-/** Where the pointer is, as a FRACTION of the canvas (0..1): two windows are never the same size. */
-const Cursor = z.strictObject({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) });
+/**
+ * Where the pointer is, in the canvas's WORLD coordinates (E10.6): CSS px of the page frame at 100 %, origin
+ * its top-left corner. Zoom and scroll are each window's own, so a cursor sent this way lands on the same
+ * component in every window. Any spot on the infinite sheet counts (negative: left of or above the frame);
+ * the bound only keeps a value that could never be a place on a page off the wire.
+ */
+const WORLD_LIMIT = 1_000_000;
+const Cursor = z.strictObject({ x: z.number().min(-WORLD_LIMIT).max(WORLD_LIMIT), y: z.number().min(-WORLD_LIMIT).max(WORLD_LIMIT) });
 const PresenceState = { cursor: Cursor.nullable(), selection: NodeId.nullable() };
 /**
  * One CONNECTION's presence (a user with two tabs is here twice). `peerId` is minted by the room for

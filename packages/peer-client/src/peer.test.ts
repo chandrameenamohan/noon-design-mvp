@@ -246,6 +246,18 @@ test("others: who the welcome says is here, then every presence message, until t
   peer.close();
 });
 
+test("onOp hears every op the room orders, with the actor the room stamped on it: what a view of who-did-what keys on (E10.6)", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [] }); });
+  const heard: { seq: number; actor: string; nodeId: string }[] = [];
+  const peer = connectPeer(options(net, { onOp: (message) => { heard.push({ seq: message.seq, actor: message.actor.kind, nodeId: message.op.nodeId }); } }));
+  await until(() => peer.status === "live", "live");
+  net.sockets[0]?.say({ type: "op", seq: 1, opId: crypto.randomUUID(), actor: { kind: "agent", id: "worker", runId: "r" }, op: add("card") });
+  net.sockets[0]?.say({ type: "op", seq: 2, opId: crypto.randomUUID(), actor: { kind: "user", id: "o" }, op: { type: "set_prop", nodeId: "card", key: "gap", value: 8 } });
+  expect(heard).toEqual([{ seq: 1, actor: "agent", nodeId: "card" }, { seq: 2, actor: "user", nodeId: "card" }]);
+  expect(peer.doc.nodes["card"]).toBeDefined(); // told AFTER the op is applied: a listener may read the document it changed
+  peer.close();
+});
+
 test("someone who goes silent is forgotten: a dead connection never says goodbye", async () => {
   const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [ada] }); });
   const peer = connectPeer(options(net, { presence: { sendEveryMs: 10, refreshMs: 40, forgetAfterMs: 120 } }));

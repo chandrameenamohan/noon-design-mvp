@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { Doc, DocNode, Manifest, Op, Presence } from "@noon/contracts";
+import type { Doc, DocNode, Manifest, Op, Presence, SequencedOp } from "@noon/contracts";
 import { manifest } from "@noon/design-system";
 import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
+import { aiAnchors, anchorFor, initialsOf, isIdle, nameOf, summaryOf, tagOf, trackCursors, type Tracked } from "./cursors.ts";
 import { AiPanel } from "./AiPanel.tsx";
 import { ConflictBanner } from "./ConflictBanner.tsx";
 import { Inspector, type Hint } from "./Inspector.tsx";
@@ -14,7 +15,7 @@ import { Preview } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
 import { ShipPanel } from "./ShipPanel.tsx";
-import { Surface } from "./Surface.tsx";
+import { Surface, type CursorMark, type Reveal } from "./Surface.tsx";
 import { usePeer } from "./usePeer.ts";
 
 type Component = Manifest["components"][number];
@@ -43,8 +44,26 @@ function layersOf(doc: Doc): Row[] {
 }
 
 export function Canvas({ documentId }: { documentId: string }) {
-  const { peer, refusals, refuse, dismiss } = usePeer(documentId);
+  // The AI's cursor (E10.6): per AI actor, the node its last op touched, from the ops the room orders. The
+  // same map comes back for anyone else's op, so React sees no change and renders nothing for it.
+  const [anchors, setAnchors] = useState<ReadonlyMap<string, string>>(new Map());
+  const { peer, refusals, refuse, dismiss } = usePeer(documentId, (message: SequencedOp) => { setAnchors((current) => aiAnchors(current, message)); });
   const [wanted, setSelected] = useState(ROOT_ID);
+  // An avatar was pressed: the canvas brings that person's selection to the middle (a new nonce each press).
+  const [reveal, setReveal] = useState<Reveal | null>(null);
+  // The others' cursors with the time each last moved, so a still one fades (E10.6). A ref, renewed on each
+  // render from what the peer says now: the moved-at times are the only thing remembered between renders.
+  const tracked = useRef<Map<string, Tracked>>(new Map());
+  const now = Date.now();
+  tracked.current = trackCursors(tracked.current, peer?.others ?? [], now);
+  // A cursor fades by the clock, not by an event: while any is shown, a tick a second re-reads the clock.
+  const [, setTick] = useState(0);
+  const anyCursor = tracked.current.size > 0;
+  useEffect(() => {
+    if (!anyCursor) return;
+    const timer = setInterval(() => { setTick((n) => n + 1); }, 1000);
+    return () => { clearInterval(timer); };
+  }, [anyCursor]);
   // The AI panel is open until the person closes it (the top bar's AI button); not remembered, a session's choice.
   const [aiOpen, setAiOpen] = useState(true);
   // A gap or padding control is hovered or focused in the inspector: the canvas shades that space (E10.4).
@@ -96,6 +115,20 @@ export function Canvas({ documentId }: { documentId: string }) {
     const nodeId = crypto.randomUUID();
     if (submit(addOpAt(slot, component, nodeId))) setSelected(nodeId);
   };
+  // The others on the sheet (E10.6): a person where their pointer is, in world coordinates; the AI on the node
+  // its last op touched (the page until it has touched one). Someone whose pointer has left the canvas has no mark.
+  const marks = peer.others.flatMap((p): CursorMark[] => {
+    const colour = colourOf(p.peerId);
+    if (p.actor.kind === "agent") return [{ peerId: p.peerId, kind: p.actor.kind, label: tagOf(p), colour, idle: false, at: { nodeId: anchorFor(anchors, p.actor.id, doc) } }];
+    const seen = tracked.current.get(p.peerId);
+    return seen ? [{ peerId: p.peerId, kind: p.actor.kind, label: tagOf(p), colour, idle: isIdle(seen, now), at: seen.at }] : [];
+  });
+  // An avatar in the bar jumps to that person's selection: ours becomes theirs, and the canvas centres on it.
+  const jumpTo = (p: Presence): void => {
+    if (p.selection === null || !doc.nodes[p.selection]) return;
+    setSelected(p.selection);
+    setReveal((last) => ({ nodeId: p.selection ?? ROOT_ID, nonce: (last?.nonce ?? 0) + 1 }));
+  };
 
   // The shell (E10.1): the top bar says how the document is doing and who is here, and holds Ship and AI;
   // layers left with the library under them (E10.3, E10.5), the canvas in the centre, the inspector right
@@ -108,9 +141,24 @@ export function Canvas({ documentId }: { documentId: string }) {
           <p className="doc-status">
             <span role="status" data-read-only={readOnly}>{readOnly ? "read-only" : peer.status}</span> · <span>{peer.pendingCount === 0 ? "saved" : `${readOnly ? "waiting to save" : "saving"} ${String(peer.pendingCount)}…`}</span>
           </p>
+          {/* Who is here, for everyone: an avatar per connection that jumps to their selection (disabled while they have none), and
+              one sentence a screen reader hears when the list changes. The cursors on the sheet are decoration; this is the record. */}
           <ul aria-label="Also here" className="also-here">
-            {peer.others.map((p) => <li key={p.peerId} style={{ "--peer-colour": colourOf(p.peerId) } as CSSProperties}>{p.name === "" ? p.actor.kind : p.name}</li>)}
+            {peer.others.map((p) => {
+              const name = nameOf(p);
+              const on = p.selection !== null && doc.nodes[p.selection] ? labels.get(p.selection) : undefined;
+              return (
+                <li key={p.peerId} style={{ "--peer-colour": colourOf(p.peerId) } as CSSProperties}>
+                  <button type="button" className="avatar-button" disabled={on === undefined} onClick={() => { jumpTo(p); }}>
+                    <span className="avatar" aria-hidden="true">{initialsOf(tagOf(p))}</span>
+                    {name}
+                    <span className="visually-hidden">{on === undefined ? ", nothing selected" : `, go to their selection, ${on}`}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
+          <p aria-live="polite" className="visually-hidden">{summaryOf(peer.others)}</p>
           <div className="top-bar-actions">
             <ShipPanel documentId={documentId} />
             <button type="button" aria-pressed={aiOpen} aria-controls="ai-panel" onClick={() => { setAiOpen((open) => !open); }}>AI</button>
@@ -145,11 +193,7 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       centre={
         <>
-          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} isContainer={isContainer} insertion={carry?.kind === "canvas" ? carry.slot : null} onSelect={setSelected} onPoint={point}>
-            {peer.others.map((p) => p.cursor && (
-              <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
-            ))}
-          </Surface>
+          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} isContainer={isContainer} insertion={carry?.kind === "canvas" ? carry.slot : null} onSelect={setSelected} onPoint={point} cursors={marks} reveal={reveal} />
           <Preview documentId={documentId} />
         </>
       }
