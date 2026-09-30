@@ -9,8 +9,9 @@
 //                                          else is `undefined`, never `invalid`: a strange name is not a reason
 //                                          to lose the push. The body is a stranger's until the HMAC says
 //                                          otherwise, and a login becomes a row and a line on a screen.
-//   2. packages/db/migrations/0012_pusher.sql   `pusher text` on git_events AND document_conflicts, nullable,
-//                                          with the same check the api applies: the database holds the rule too.
+//   2. packages/db/migrations/NNNN_pusher.sql   (NNNN: the next free number) `pusher text` on git_events AND
+//                                          document_conflicts, nullable, with the same check the api applies: the
+//                                          database holds the rule too.
 //   3. packages/db/src/index.ts            GitEvent and GitStore.record carry it (GitEventInput, GitEventRow, the
 //                                          insert); recordConflict writes it and ConflictRow reads it.
 //   4. packages/contracts/src/index.ts     Conflict gains `pusher: z.string().nullable()`. It is a strictObject:
