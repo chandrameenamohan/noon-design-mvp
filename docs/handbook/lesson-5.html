@@ -105,7 +105,7 @@ h2 { scroll-margin-top: 24px; }
   </div>
 
   <div class="aside">
-    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">48ac4f6</span>, so what you read is what is committed. It is long: one section a day is a fine pace. Sections 3, 5, 6 and 8 are the ones an architect interview will dig into; section 2 is the one a security review will.</p>
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">94222ab</span>, so what you read is what is committed. It is long: one section a day is a fine pace. Sections 3, 5, 6 and 8 are the ones an architect interview will dig into; section 2 is the one a security review will.</p>
     <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now also Gitea on 127.0.0.1:3002, worker-git, worker-ship; the seed pushed, the hook installed<br>pnpm exec vitest run packages/codegen apps/api/src/webhook.test.ts apps/worker/src/push-ops.test.ts&nbsp;&nbsp;# the pure halves: parse, the signature, the three-way diff<br>docker compose logs -f worker-git&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# one JSON line per page a push touched: applied, conflict, or skipped</p>
     <p>Try it, once the stack is up: section 10 walks the loop by hand, push to canvas and Ship to pull request, with the exact commands and what each should show.</p>
   </div>
@@ -169,7 +169,15 @@ export async function pushSeed(remote: string, auth?: { user: string; token: str
   await api(&quot;POST&quot;, &quot;/user/repos&quot;, { name: setup.repo, private: true, default_branch: &quot;main&quot; });
   // Only an EMPTY repo gets the seed: after the first run it holds the owner&#x27;s commits, never overwritten.
   const { empty } = (await (await api(&quot;GET&quot;, repo)).json()) as { empty?: unknown };
-  if (empty === true) await pushSeed(`${setup.url}/${setup.user}/${setup.repo}.git`, { user: setup.user, token: setup.token });
+  if (empty === true) {
+    await pushSeed(`${setup.url}/${setup.user}/${setup.repo}.git`, { user: setup.user, token: setup.token });
+    // Gitea marks the repo non-empty from a queue after the push returns (measured ~2 s); until then its API
+    // answers `/branches/main` with a 500 panic. Return only once main is readable, so no caller races it.
+    for (const deadline = Date.now() + 30_000; ; await new Promise((wake) =&gt; setTimeout(wake, 100))) {
+      if (((await (await api(&quot;GET&quot;, repo)).json()) as { empty?: unknown }).empty === false) break;
+      if (Date.now() &gt; deadline) throw new Error(`Gitea ${repo}: still empty 30 s after the seed push`);
+    }
+  }
   // One hook per URL, its secret kept in step with .env: updated when it exists, made when it does not.
   const hook = { active: true, events: [&quot;push&quot;], config: { url: setup.webhook.url, content_type: &quot;json&quot;, secret: setup.webhook.secret } };
   const hooks = (await (await api(&quot;GET&quot;, `${repo}/hooks`)).json()) as Hook[];
@@ -369,24 +377,14 @@ test(&quot;a preflight for the preview is the sandbox&#x27;s to answer, not the 
   const res = await fetch(`${canvas}${path}`, { method: &quot;OPTIONS&quot;, headers: { origin: &quot;null&quot;, &quot;access-control-request-method&quot;: &quot;GET&quot;, &quot;access-control-request-headers&quot;: &quot;x-tunnel&quot; } });
   expect(res.headers.get(&quot;access-control-allow-origin&quot;)).toBe(&quot;null&quot;);
   expect(seen.at(-1)).toEqual({ url: path, upgrade: false });
-});</code></pre></div></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The 401s on the preview's module requests were the tunnel's basic auth, not ours.</strong></p><p>With basic auth on the tunnel, the canvas loaded (the browser had the credentials) and the preview's module requests failed with 401: requests from inside a sandboxed frame carry no credentials. Nothing in this repository was wrong, and the fix was in the tunnel's policy. The lesson is about debugging across boundaries: when a request fails, first establish <em>which hop</em> answered. The response's headers name the server; a 401 with the tunnel's realm is not your 401.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The per-org preview cap became exact, and lesson 4's third drill question got a new ending.</strong></p><p>Lesson 4 declined to make "at most four previews per org" exact, and named the upgrade: an advisory lock per org. The noon-9gz security review asked for it, and it is eight lines: the <code>INSERT ... SELECT</code> runs in a transaction that first takes <code>pg_advisory_xact_lock(hashtext('noon:preview:' || org))</code>, so opens of one org take turns and the count inside the statement is the truth. The ponytail comment named a ceiling and an upgrade path; the review called the upgrade; the shape of the code did not have to change to take it.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /** One statement, returning ids, in a transaction that holds the org&#x27;s advisory lock: one at a time per org. */
-  async function inOrgTurn(orgId: string, sql: string, params: unknown[]): Promise&lt;{ id: string }[]&gt; {
-    const client = await pool.connect();
-    let broken: Error | undefined;
-    try {
-      await client.query(&quot;begin&quot;);
-      await client.query(&quot;select pg_advisory_xact_lock(hashtext(&#x27;noon:preview:&#x27; || $1))&quot;, [orgId]);
-      const result = (await client.query&lt;QueryResultRow&gt;(sql, params)).rows.map((row) =&gt; z.object({ id: z.string() }).parse(row));
-      await client.query(&quot;commit&quot;);
-      return result;
-    } catch (err) {
-      await client.query(&quot;rollback&quot;).catch(() =&gt; undefined);
-      broken = err instanceof Error ? err : new Error(String(err));
-      throw err;
-    } finally {
-      client.release(broken); // after a failure the connection&#x27;s transaction state is unknown: destroyed
-    }
-  }</code></pre></div></div><p class="note"><strong>What noon-9gz did not do, and says so:</strong> the Docker socket the sandbox worker holds stays raw. A socket proxy that filters by API section still allows <code>create</code> and <code>exec</code>, which is root; an authorization plugin is the real fix, and it is written down as such. A security review that ends with "here is what is still open" is worth more than one that ends with "done".</p></section><section id="parse"><h2>3 · Reading the file back: parse is the inverse of generate</h2><p>Keystone 8 has two directions. <code>generate</code> (lesson 4) takes a tree to one file of a fixed shape. <code>parse</code> takes a file back to a tree, <em>only while it still has that shape</em>, and every way out of the shape has a name and a line number, because that is what the conflict banner shows. The file is untrusted input: anyone who can push wrote it.</p><p class="label">From <span class="mono">packages/codegen/src/parse.ts</span></p><div class="scroll"><pre><code>/**
+});</code></pre></div></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The 401s on the preview's module requests were the tunnel's basic auth, not ours.</strong></p><p>With basic auth on the tunnel, the canvas loaded (the browser had the credentials) and the preview's module requests failed with 401: requests from inside a sandboxed frame carry no credentials. Nothing in this repository was wrong, and the fix was in the tunnel's policy. The lesson is about debugging across boundaries: when a request fails, first establish <em>which hop</em> answered. The response's headers name the server; a 401 with the tunnel's realm is not your 401.</p></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>The per-org preview cap became exact, and lesson 4's third drill question got a new ending.</strong></p><p>Lesson 4 declined to make "at most four previews per org" exact, and named the upgrade: an advisory lock per org. The noon-9gz security review asked for it, and it is a few lines: the <code>INSERT ... SELECT</code> runs in a transaction that first takes <code>pg_advisory_xact_lock</code> on the org's lock name (<code>noon:preview:</code> and the org id), so opens of one org take turns and the count inside the statement is the truth. The ponytail comment named a ceiling and an upgrade path; the review called the upgrade; the shape of the code did not have to change to take it.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /** `work` in one transaction that holds the advisory lock named `lock`: whatever else takes that lock waits its turn. */
+  const inTurn = &lt;T&gt;(lock: string, work: (client: PoolClient) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; =&gt;
+    inTx(async (client) =&gt; {
+      await client.query(&quot;select pg_advisory_xact_lock(hashtext($1))&quot;, [lock]);
+      return work(client);
+    });</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /** One statement, returning ids, holding the org&#x27;s preview lock: one at a time per org. */
+  const inOrgTurn = (orgId: string, sql: string, params: unknown[]): Promise&lt;{ id: string }[]&gt; =&gt;
+    inTurn(`noon:preview:${orgId}`, async (client) =&gt; (await client.query&lt;QueryResultRow&gt;(sql, params)).rows.map((row) =&gt; z.object({ id: z.string() }).parse(row)));</code></pre></div></div><p class="note"><strong>What noon-9gz did not do, and says so:</strong> the Docker socket the sandbox worker holds stays raw. A socket proxy that filters by API section still allows <code>create</code> and <code>exec</code>, which is root; an authorization plugin is the real fix, and it is written down as such. A security review that ends with "here is what is still open" is worth more than one that ends with "done".</p></section><section id="parse"><h2>3 · Reading the file back: parse is the inverse of generate</h2><p>Keystone 8 has two directions. <code>generate</code> (lesson 4) takes a tree to one file of a fixed shape. <code>parse</code> takes a file back to a tree, <em>only while it still has that shape</em>, and every way out of the shape has a name and a line number, because that is what the conflict banner shows. The file is untrusted input: anyone who can push wrote it.</p><p class="label">From <span class="mono">packages/codegen/src/parse.ts</span></p><div class="scroll"><pre><code>/**
  * Keystone 8, the way back: a generated file that an engineer edited and pushed becomes a document
  * again, but ONLY while it still has the shape `generate()` writes. Everything else is a conflict
  * (F16b), and the conflict must say why, so every way out of the shape has its own reason.
@@ -438,7 +436,9 @@ class OutOfShape extends Error {
 export function parse(tsx: string, manifest: Manifest): Parsed {
   try {
     if (typeof tsx !== &quot;string&quot;) return { ok: false, reason: &quot;malformed_doc&quot;, detail: &quot;the file is not text&quot; };
-    if (tsx.length &gt; MAX_BYTES) return { ok: false, reason: &quot;too_large&quot;, detail: `larger than ${String(MAX_BYTES)} bytes` };
+    // Bytes, as git.ts counts the blob: a CJK character is 1 UTF-16 unit and 3 bytes. A UTF-8 string is
+    // never shorter in bytes than in units, so the cheap length check first spares encoding a huge file.
+    if (tsx.length &gt; MAX_BYTES || new TextEncoder().encode(tsx).length &gt; MAX_BYTES) return { ok: false, reason: &quot;too_large&quot;, detail: `larger than ${String(MAX_BYTES)} bytes` };
     const doc = read(tsx);
     // The contract is the trust boundary for everything a document may hold: node ids, prop values
     // (control characters, -0), sizes. What the room would refuse from an op is refused here too.
@@ -653,12 +653,28 @@ insert into git_reconcile default values;</code></pre></div><p>Read it as a stat
           &quot;select distinct on (ref) ref, after_sha from git_events order by ref, created_at desc, id desc&quot;,
           [],
         )),
-      // `skip locked`: two peers never claim one event, and neither waits for the other.
-      claim: () =&gt;
-        one(GitEventRow, &quot;update git_events set status = &#x27;running&#x27; where id = (select id from git_events where status = &#x27;pending&#x27; order by created_at, id limit 1 for update skip locked) returning *&quot;, []),
-      async finish(id, status) {
+      lastDone: async (ref) =&gt;
+        (await one(z.object({ after_sha: z.string() }), &quot;select after_sha from git_events where ref = $1 and status = &#x27;done&#x27; order by created_at desc, id desc limit 1&quot;, [ref]))?.after_sha,
+      async claim(staleMs, maxResumes) {
+        // coalesce(heartbeat_at, created_at): a row left running by a peer from before heartbeats (0021) is stale too.
+        const stale = &quot;status = &#x27;running&#x27; and coalesce(heartbeat_at, created_at) &lt; now() - make_interval(secs =&gt; $1::float8 / 1000)&quot;;
+        // An event that took its peer down every time must end, or it would take every peer down in turn.
+        await pool.query(`update git_events set status = &#x27;failed&#x27;, finished_at = now() where ${stale} and resumes &gt;= $2`, [staleMs, maxResumes]);
+        // ONE statement, `skip locked`: two peers never claim one event, and neither waits for the other. The row is
+        // locked and its WHERE checked again on the newest version (read committed), so a stale event another peer
+        // has just resumed (fresh heartbeat) is skipped, never resumed twice. `status` on the right is the OLD one.
+        return one(
+          GitEventRow,
+          `update git_events set status = &#x27;running&#x27;, heartbeat_at = now(), attempts = attempts + 1, resumes = resumes + (status = &#x27;running&#x27;)::int
+           where id = (select id from git_events where status = &#x27;pending&#x27; or (${stale} and resumes &lt; $2) order by created_at, id limit 1 for update skip locked) returning *`,
+          [staleMs, maxResumes],
+        );
+      },
+      heartbeat: async ({ id, attempt }) =&gt;
+        isId(id) &amp;&amp; (await pool.query(&quot;update git_events set heartbeat_at = now() where id = $1 and status = &#x27;running&#x27; and attempts = $2&quot;, [id, attempt])).rowCount === 1,
+      async finish({ id, attempt }, status) {
         if (!isId(id)) return;
-        await pool.query(&quot;update git_events set status = $2, finished_at = case when $2 = &#x27;pending&#x27; then null else now() end where id = $1 and status = &#x27;running&#x27;&quot;, [id, status]);
+        await pool.query(&quot;update git_events set status = $2, finished_at = case when $2 = &#x27;pending&#x27; then null else now() end where id = $1 and status = &#x27;running&#x27; and attempts = $3&quot;, [id, status, attempt]);
       },
       async requestReconcile() {
         await pool.query(&quot;update git_reconcile set requested = true where not requested&quot;); // no write, no row lock, when it is already asked for
@@ -674,22 +690,29 @@ insert into git_reconcile default values;</code></pre></div><p>Read it as a stat
 export function moved(mirror: ReadonlyMap&lt;string, string&gt;, recorded: ReadonlyMap&lt;string, string&gt;): Moved[] {
   return [...mirror].filter(([ref, sha]) =&gt; recorded.get(ref) !== sha).map(([ref, after]) =&gt; ({ ref, before: recorded.get(ref) ?? &quot;0&quot;.repeat(after.length), after }));
 }</code></pre></div><p class="label">From <span class="mono">apps/worker/src/git.ts</span></p><div class="scroll"><pre><code>  async function reconcile(): Promise&lt;number&gt; {
+    // Read BEFORE the fetch: a head recorded by then is at or behind the mirror. After it, a webhook landing
+    // in between would be ahead of the mirror, and the &quot;move&quot; back to the mirror&#x27;s tip recorded backwards.
+    const recordedHeads = await store.heads();
     await fetch();
     const heads = parseHeads(await git(&quot;-C&quot;, mirror, &quot;for-each-ref&quot;, &quot;--format=%(refname) %(objectname)&quot;, &quot;refs/heads/&quot;));
     let recorded = 0;
-    for (const event of moved(heads, await store.heads())) if (await store.record(event)) recorded += 1;
+    for (const event of moved(heads, recordedHeads)) if (await store.record(event)) recorded += 1;
     return recorded;
   }</code></pre></div><p>The reconcile is the second door: fetch the mirror, list its branches, and record every branch whose commit is not the newest one recorded, a new branch from zeros. It runs on a 30 s timer and <em>when a document is opened</em>: <code>POST /documents/:id/session</code> sets the flag, and the peer takes it <strong>before</strong> fetching, so an open that arrives during a fetch sets it again and is not lost. A new branch, which the webhook cannot tell from the registration push, is caught this way, and the e2e tests lean on it: they open the document to ask for a reconcile now.</p><p class="label">From <span class="mono">apps/worker/src/git.ts</span></p><div class="scroll"><pre><code>  async function processNext(): Promise&lt;boolean&gt; {
-    const event = await store.claim();
+    const event = await store.claim(staleMs, maxResumes);
     if (!event) return false;
     const worktree = join(worktrees, event.id);
+    const resumed = new AbortController(); // by another peer, after this one&#x27;s beats went unseen
+    const beat = setInterval(() =&gt; {
+      void store.heartbeat(event).then((alive) =&gt; { if (!alive) resumed.abort(); }, () =&gt; undefined); // a missed beat: the next one
+    }, Math.max(1, Math.floor(staleMs / 3)));
     try {
       if (!(await has(event.after))) {
         try {
           await fetch();
         } catch (err) {
           // Gitea is away: the event waits again rather than being lost (the reconcile would never re-record it).
-          await store.finish(event.id, &quot;pending&quot;);
+          await store.finish(event, &quot;pending&quot;);
           log(`fetch failed, ${event.ref} ${event.after} waits: ${describeError(err)}`);
           return false;
         }
@@ -698,13 +721,29 @@ export function moved(mirror: ReadonlyMap&lt;string, string&gt;, recorded: Reado
       }
       await mkdir(worktrees, { recursive: true });
       await git(&quot;-C&quot;, mirror, &quot;worktree&quot;, &quot;add&quot;, &quot;--quiet&quot;, &quot;--detach&quot;, worktree, event.after);
+      const from = await diffBase(event);
       let base: Promise&lt;string | undefined&gt; | undefined;
-      for (const page of await changedPages(event, worktree)) await apply(event, page, async () =&gt; pageBase(await (base ??= baseCommit(event)), page.path));
-      await store.finish(event.id, &quot;done&quot;);
+      for (const page of await changedPages(event, from, worktree)) {
+        if (resumed.signal.aborted) throw new Lost(`${event.ref} ${event.after}: another peer has resumed it`);
+        await apply(event, page, async () =&gt; pageBase(await (base ??= baseCommit(event, from)), page.path));
+      }
+      await store.finish(event, &quot;done&quot;);
     } catch (err) {
+      if (err instanceof Lost) {
+        log(err.message);
+        return true;
+      }
+      if (err instanceof WaitAgain) {
+        // ponytail: the whole event waits, pages already applied included (applying again is safe: push-ops takes
+        // the commit&#x27;s journaled adds as its own, noon-91u). Ceiling: one retry per poll tick while the room stays read-only.
+        await store.finish(event, &quot;pending&quot;);
+        log(`${event.ref} ${event.after} waits: ${err.message}`);
+        return false;
+      }
       log(`${event.ref} ${event.after} failed: ${describeError(err)}`);
-      await store.finish(event.id, &quot;failed&quot;);
+      await store.finish(event, &quot;failed&quot;);
     } finally {
+      clearInterval(beat);
       await removeWorktree(worktree);
     }
     return true;
@@ -775,6 +814,23 @@ async function readPage(file: string): Promise&lt;{ tsx: string } | { refused: &
   expect(await p.reconcile()).toBe(1);
   expect(await t.db.gitStore().record({ ref: &quot;refs/heads/main&quot;, before: first, after: second, deliveryId: &quot;d-2&quot; })).toBe(false);
   expect((await events()).filter((e) =&gt; e.after_sha === first || e.after_sha === second)).toHaveLength(2);
+});
+
+test(&quot;missed non-tip push is folded into the next event: its page still reaches apply (noon-wv8.3.1)&quot;, async () =&gt; {
+  const { seen, apply } = collect();
+  const { peer: p } = peer(apply);
+  await p.reconcile();
+  while (await p.processNext());
+  const lost = await commit({ [pagePath(DOC)]: &quot;v1\n&quot; }, &quot;its delivery was lost (the api was restarting)&quot;);
+  const delivered = await commit({ [pagePath(OTHER)]: &quot;w1\n&quot; }, &quot;its delivery arrived&quot;);
+  expect(await t.db.gitStore().record({ ref: &quot;refs/heads/main&quot;, before: lost, after: delivered, deliveryId: &quot;d-2&quot; })).toBe(true);
+  expect(await p.reconcile()).toBe(0); // the tip is recorded: the lost push never gets an event of its own
+  expect(await p.processNext()).toBe(true);
+  expect(seen.map((s) =&gt; s.page).sort((a, b) =&gt; a.documentId.localeCompare(b.documentId))).toEqual([
+    { documentId: DOC, path: pagePath(DOC), tsx: &quot;v1\n&quot; },
+    { documentId: OTHER, path: pagePath(OTHER), tsx: &quot;w1\n&quot; },
+  ]);
+  expect((await events()).map((e) =&gt; e.status)).toEqual([&quot;done&quot;, &quot;done&quot;]);
 });</code></pre></div><p class="label">From <span class="mono">apps/worker/src/git.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;while Gitea is away an event waits instead of being lost, and is worked on once it is back&quot;, async () =&gt; {
   const { seen, apply } = collect();
   const { peer: p, logs } = peer(apply);
@@ -790,6 +846,30 @@ async function readPage(file: string): Promise&lt;{ tsx: string } | { refused: &
   await exec(&quot;mv&quot;, [moved, origin]);
   expect(await p.processNext()).toBe(true);
   expect(seen.map((s) =&gt; s.page)).toEqual([{ documentId: DOC, path: pagePath(DOC), tsx: &quot;v2\n&quot; }]);
+});
+
+test(&quot;E6.1b: a page whose document is read-only waits instead of failing, and is worked on once the room can save&quot;, async () =&gt; {
+  let readOnly = true;
+  const seen: string[] = [];
+  const { peer: p, logs } = peer((_event, page) =&gt; {
+    if (readOnly) return Promise.reject(new WaitAgain(&quot;document_read_only&quot;));
+    seen.push(page.path);
+    return Promise.resolve();
+  });
+  await p.reconcile();
+  while (await p.processNext());
+  seen.length = 0;
+  readOnly = true;
+  await commit({ [pagePath(DOC)]: &quot;v2\n&quot; }, &quot;pushed while Postgres was away from the room&quot;);
+  await p.reconcile();
+  expect(await p.processNext()).toBe(false);
+  expect((await events()).at(-1)?.status).toBe(&quot;pending&quot;);
+  expect(logs.join(&quot;\n&quot;)).toMatch(/document_read_only/);
+  readOnly = false;
+  expect(await p.processNext()).toBe(true);
+  expect((await events()).at(-1)?.status).toBe(&quot;done&quot;);
+  expect(seen).toEqual([pagePath(DOC)]);
+  onlyTheMirror(await worktreesLeft());
 });</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td>two unique keys and <code>on conflict do nothing</code> as the dedupe</td><td>the same SQL; Spring Integration's <code>IdempotentReceiver</code> if you must</td><td>the same SQL</td></tr><tr><td><code>for update skip locked</code> to claim</td><td>the same, as a native query</td><td>the same</td></tr><tr><td>a one-row table: <code>id boolean primary key default true check (id)</code></td><td>the same trick; or a singleton row by convention</td><td>the same</td></tr><tr><td><code>running ??= tick().finally(...)</code></td><td>an <code>AtomicBoolean</code> guard, or a single-thread executor</td><td>an <code>asyncio.Lock</code>, or a task you check <code>done()</code> on</td></tr><tr><td><code>open(path, O_RDONLY | O_NOFOLLOW)</code> from <code>node:fs/promises</code></td><td><code>Files.newByteChannel(p, NOFOLLOW_LINKS)</code></td><td><code>os.open(p, os.O_RDONLY | os.O_NOFOLLOW)</code></td></tr><tr><td>a worktree per job, removed in <code>finally</code>, swept at start</td><td>a temp dir per job with a shutdown hook and a startup sweep</td><td>the same</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a learning test, or by a test that was written to refute a claim</p><p><strong>A pushed symlink named like a page could have read <code>/proc/self/environ</code>.</strong></p><p>The git peer reads each changed page from the job's worktree. A commit can contain a symlink at <code>src/pages/noon-&lt;id&gt;.tsx</code> pointing anywhere: <code>/proc/self/environ</code> holds the peer's own environment, including the Gitea token. A plain <code>readFile</code> would follow it. The page is opened with <code>O_NOFOLLOW</code>, which fails with <code>ELOOP</code> on a symlink; <code>stat().isFile()</code> refuses a directory (a submodule checks out as one); and the size is checked against parse's cap before the read. The refusal has a name the banner shows: <code>not_a_file</code>.</p><p class="label">From <span class="mono">apps/worker/src/git.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;a pushed symlink named like a page is refused, never followed out of the worktree&quot;, async () =&gt; {
   const { seen, apply } = collect();
   const { peer: p } = peer(apply);
@@ -823,21 +903,29 @@ export type PushOutcome =
   | { kind: &quot;conflict&quot;; reason: ConflictReason; detail: string }
   | { kind: &quot;applied&quot;; ops: number; refused: number };</code></pre></div><p class="label">From <span class="mono">apps/worker/src/push.ts</span></p><div class="scroll"><pre><code>    const peer = connectPeer({
       manifest,
+      // Named by the commit and the op itself: the same push applied again sends its ops under their first ids, and the
+      // room answers a repeat (a set_prop the canvas has changed since, included) with its first answer, not a second edit.
+      mintOpId: (op) =&gt; stableOpId(`${event.after}:${page.documentId}:${JSON.stringify(op)}`),
       ...(WebSocketImpl ? { WebSocketImpl } : {}),
       // `sub` must be a uuid: the event&#x27;s id. The commit rides as the run, so every op names the commit it came from.
-      session: () =&gt; Promise.resolve({
-        wsUrl: `${sessions.syncUrl}/documents/${page.documentId}`,
+      session: async () =&gt; ({
+        wsUrl: await roomUrl(sessions, page.documentId),
         token: signSessionToken({ userId: event.id, orgId, documentId: page.documentId, secret: sessions.secret, ttlSeconds: 60, actor: { kind: &quot;git&quot;, runId: event.after } }),
       }),
     });
     try {
       await whenLive(peer, connectTimeoutMs);
       // The CONFIRMED document: the base of the diff must be what the room holds, never a guess.
-      const result = pushOps({ base: baseDoc?.ok ? baseDoc.doc : undefined, target: parsed.doc, current: peer.confirmed, earlierIds: before.earlierIds });
+      // Asked once the room is live, so an add journaled before this peer joined is in the answer.
+      const alreadyAdded = await pushedNodeIds(page.documentId, event.after);
+      const result = pushOps({ base: baseDoc?.ok ? baseDoc.doc : undefined, target: parsed.doc, current: peer.confirmed, earlierIds: before.earlierIds, alreadyAdded });
       if (!result.ok) return { kind: &quot;conflict&quot;, reason: result.reason, detail: result.detail };
       const settled = [];
       for (const op of result.ops) {
         const submitted = peer.submit(op);
+        // E6.1b: the room cannot save. Not a conflict (the page is fine) and not a failure (the push would be
+        // lost): the event waits. Ops of this page already sent die with the peer below, unapplied.
+        if (!submitted.ok &amp;&amp; submitted.reason === &quot;read_only&quot;) throw new WaitAgain(&quot;document_read_only&quot;);
         // The replica refused it locally: the whole page was checked against this very document, so this is a bug; say so.
         if (!submitted.ok) throw new Error(`the git peer&#x27;s own op was refused: ${submitted.reason}`);
         settled.push(submitted.settled);
@@ -861,7 +949,7 @@ export type PushOutcome =
  * Each op is tried on a copy of the document as it is made. One that would change nothing there (its
  * node or its parent was removed on the canvas meanwhile, the value is already set, the move would make
  * a cycle) is not sent: the same result the room would reach, as keystone 4&#x27;s concurrent edits do.
- */</code></pre></div><p class="label">From <span class="mono">apps/worker/src/push-ops.ts</span></p><div class="scroll"><pre><code>export function pushOps({ base, target, current, earlierIds }: {
+ */</code></pre></div><p class="label">From <span class="mono">apps/worker/src/push-ops.ts</span></p><div class="scroll"><pre><code>export function pushOps({ base, target, current, earlierIds, alreadyAdded = new Set() }: {
   /** The page before the push, if it was there and in shape. Missing: the document is the base (the push is taken as the whole page). */
   base: Doc | undefined;
   target: Doc;
@@ -869,6 +957,12 @@ export type PushOutcome =
   current: Doc;
   /** Every node id the page has held in the repo&#x27;s history up to the base: an id that is gone from the base was removed. */
   earlierIds: ReadonlySet&lt;string&gt;;
+  /**
+   * noon-91u: the ids THIS push (its commit) already added to the document, from the journal: the push is being
+   * applied again (its git peer was killed halfway). Each is its own add, not a re-use: it is not refused and not
+   * added twice, and one the canvas removed since is not brought back.
+   */
+  alreadyAdded?: ReadonlySet&lt;string&gt;;
 }): PushOps {
   if (target.rootId !== current.rootId) return { ok: false, reason: &quot;root_mismatch&quot;, detail: `the file&#x27;s page is ${target.rootId}, the document&#x27;s is ${current.rootId}` };
   const from = base?.rootId === current.rootId ? base : current;
@@ -876,7 +970,7 @@ export type PushOutcome =
   // on the new one. A new id the document already holds is the same mistake, seen from the other side.
   for (const id of preorder(target)) {
     const was = nodeOf(from, id);
-    if (!was &amp;&amp; (earlierIds.has(id) || nodeOf(current, id))) return { ok: false, reason: &quot;reused_node_id&quot;, detail: `${id} was part of this document before` };
+    if (!was &amp;&amp; !alreadyAdded.has(id) &amp;&amp; (earlierIds.has(id) || nodeOf(current, id))) return { ok: false, reason: &quot;reused_node_id&quot;, detail: `${id} was part of this document before` };
     // No op changes what a node IS; a remove and an add would re-use its id.
     if (was &amp;&amp; was.component !== nodeOf(target, id)?.component) return { ok: false, reason: &quot;component_changed&quot;, detail: `${id} was a ${was.component}` };
   }</code></pre></div><p>Before any op is made, two whole-page refusals. <code>root_mismatch</code>: the file's page is another document's. <code>reused_node_id</code>: keystone 4 says an id that was removed is never added again, or an edit meant for the dead node lands on the new one; "removed" is decided against <em>every id the page ever held in the repo's history</em> (<code>earlierIds</code>, from <code>git log -p</code>) and against the document now. <code>component_changed</code>: no op changes what a node <em>is</em>; a remove and an add would re-use its id.</p><p class="label">From <span class="mono">apps/worker/src/push-ops.ts</span></p><div class="scroll"><pre><code>  const working = structuredClone(current);
@@ -896,8 +990,10 @@ export type PushOutcome =
     for (const id of children) {
       const node = nodeOf(target, id);
       if (!node) continue;
-      if (!nodeOf(from, id)) emit({ type: &quot;add_node&quot;, nodeId: id, parentId, index: after(parentId, id, anchor), component: node.component, props: { ...node.props } });
-      else if (!stays.has(id)) emit({ type: &quot;move_node&quot;, nodeId: id, newParentId: parentId, index: after(parentId, id, anchor) });
+      // Already added by this push: where it is now (and whatever the canvas did to it since) stands.
+      if (!nodeOf(from, id)) {
+        if (!alreadyAdded.has(id)) emit({ type: &quot;add_node&quot;, nodeId: id, parentId, index: after(parentId, id, anchor), component: node.component, props: { ...node.props } });
+      } else if (!stays.has(id)) emit({ type: &quot;move_node&quot;, nodeId: id, newParentId: parentId, index: after(parentId, id, anchor) });
       if (nodeOf(working, id)?.parentId === parentId) anchor = id;
     }
   }
@@ -987,7 +1083,8 @@ function inOrder(now: readonly string[], before: readonly string[], wasHere: (id
   const workspace = await t.db.forOrg(org.id).createWorkspace({ name: &quot;w&quot; });
   const document = await t.db.forOrg(org.id).createDocument({ workspaceId: workspace.id, title: &quot;d&quot; });
   await push(shipped, BRANCH, async (sha) =&gt; {
-    await t.rawQuery(&quot;insert into jobs (org_id, document_id, queue, status, started_at, input, output) values ($1, $2, &#x27;ship&#x27;, &#x27;running&#x27;, now(), &#x27;{}&#x27;, $3)&quot;, [org.id, document?.id, JSON.stringify({ commit: sha, pr: null })]);
+    const job = (await t.rawQuery(&quot;insert into jobs (org_id, document_id, queue, status, started_at, input) values ($1, $2, &#x27;ship&#x27;, &#x27;running&#x27;, now(), &#x27;{}&#x27;) returning id&quot;, [org.id, document?.id])) as { rows: [{ id: string }] };
+    await t.db.jobStore().report({ queue: &quot;ship&quot;, jobId: job.rows[0].id, orgId: org.id }, { commit: sha, pr: null }); // as ship.ts&#x27;s recordCommit does
   });
   expect(outcomes.at(-1)).toEqual({ kind: &quot;skipped&quot;, why: &quot;shipped&quot; });
   // Diffed, &quot;Before&quot; -&gt; &quot;Shipped&quot; would have been replayed onto the room: the racing edit, undone.
@@ -1006,9 +1103,13 @@ create table document_conflicts (
         if (!isId(documentId)) return;
         const c = ConflictInput.parse(input);
         // Selected from documents: a document deleted meanwhile inserts nothing instead of failing on the foreign key.
+        // The rejected push goes into the document&#x27;s org&#x27;s audit trail in the same statement (F26). ponytail: the actor
+        // is &quot;git&quot; and the commit, not the person who pushed; ceiling: the trail cannot name them; upgrade: keep the
+        // webhook&#x27;s pusher on git_events and copy it here.
         await pool.query(
-          &quot;insert into document_conflicts (document_id, commit_sha, file, reason, detail) select id, $2, $3, $4, $5 from documents where id = $1 &quot; +
-            &quot;on conflict (document_id) do update set commit_sha = excluded.commit_sha, file = excluded.file, reason = excluded.reason, detail = excluded.detail, created_at = now()&quot;,
+          &quot;with c as (insert into document_conflicts (document_id, commit_sha, file, reason, detail) select id, $2, $3, $4, $5 from documents where id = $1 &quot; +
+            &quot;on conflict (document_id) do update set commit_sha = excluded.commit_sha, file = excluded.file, reason = excluded.reason, detail = excluded.detail, created_at = now() returning document_id) &quot; +
+            `insert into audit_log ${AUDIT_COLUMNS} select d.org_id, &#x27;git&#x27;, null, null, &#x27;push_rejected&#x27;, d.id, jsonb_build_object(&#x27;commit&#x27;, $2::text, &#x27;file&#x27;, $3::text, &#x27;reason&#x27;, $4::text) from c join documents d on d.id = c.document_id`,
           [documentId, c.commit, c.file, c.reason, c.detail],
         );
       },</code></pre></div><p>One row per document, by primary key. <code>insert ... select ... from documents where id = $1</code> inserts nothing for a document deleted meanwhile, instead of failing on the foreign key. <code>on conflict (document_id) do update set ... = excluded.*</code> is Postgres's upsert: <code>excluded</code> is the row that <em>would</em> have been inserted. A later refused push replaces the conflict; a later applied one deletes it; a skipped one changes nothing.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// `detail` is parse&#x27;s words about a file an engineer wrote: capped here, not refused (the conflict must still be shown).
@@ -1114,7 +1215,7 @@ async function roomState(browser: Browser, url: string): Promise&lt;{ tree: stri
 function shipHandlers(): Handlers {
   return {
     ship: createShipHandler({
-      sessions: config.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
+      sessions: sync.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
       report: (job, output) =&gt; db.jobStore().report({ queue: &quot;ship&quot;, jobId: job.id, orgId: job.orgId }, output),
     }),
   };
@@ -1125,18 +1226,15 @@ function shipHandlers(): Handlers {
 -- request per branch), so only the waiting one is unique, and the database decides, not a look-then-insert.
 create unique index jobs_one_queued_ship_per_document on jobs (document_id) where queue = &#x27;ship&#x27; and status = &#x27;queued&#x27;;
 -- The git peer asks, for each push, &quot;did Ship make this commit?&quot; (jobs.output-&gt;&gt;&#x27;commit&#x27;).
-create index jobs_ship_commit on jobs ((output -&gt;&gt; &#x27;commit&#x27;)) where queue = &#x27;ship&#x27;;</code></pre></div><p><strong>Idempotence lives in Postgres.</strong> The <em>queued</em> ship is unique per document, so twenty presses at once make one job. Read why it is not "one unfinished ship": a press while one <em>runs</em> must queue the next, because the running one has already read the document and a press after an edit must ship that edit. Two ships running for one document are safe (below), so only the waiting one needs to be unique.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        startShip: async ({ documentId, createdBy }) =&gt; {
+create index jobs_ship_commit on jobs ((output -&gt;&gt; &#x27;commit&#x27;)) where queue = &#x27;ship&#x27;;</code></pre></div><p><strong>Idempotence lives in Postgres.</strong> The <em>queued</em> ship is unique per document, so twenty presses at once make one job. Read why it is not "one unfinished ship": a press while one <em>runs</em> must queue the next, because the running one has already read the document and a press after an edit must ship that edit. Two ships running for one document are safe (below), so only the waiting one needs to be unique.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        startShip: async ({ documentId, createdBy, idempotencyKey }) =&gt; {
           if (!orgExists || !isId(documentId) || (createdBy !== undefined &amp;&amp; !isId(createdBy))) return undefined;
-          // `on conflict do nothing`: a ship already waiting for this document is the answer (jobs_one_queued_ship_per_document).
-          const inserted = await one(
-            z.object({ id: z.string() }),
-            &quot;insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, &#x27;ship&#x27;, &#x27;{}&#x27;, $3 from documents d where d.org_id = $1 and d.id = $2 on conflict do nothing returning id&quot;,
-            [orgId, documentId, createdBy ?? null],
-          );
-          // A second statement, so it sees the winner&#x27;s commit. Not &quot;the queued one&quot;: it may have been claimed in
-          // between, and then it is running and has not read the document before this press. None: no such document.
-          const ship = await newestShip(documentId);
-          return ship &amp;&amp; { ship, created: inserted ? { queue: &quot;ship&quot; as const, jobId: inserted.id, orgId } : undefined };
+          if (idempotencyKey === undefined) return pressShip(documentId, createdBy, pool);
+          if (createdBy === undefined) throw new Error(&quot;an idempotency key needs the user it belongs to&quot;);
+          const keyed = await withKey(createdBy, idempotencyKey, { queue: &quot;ship&quot;, documentId, input: {} }, (via) =&gt; pressShip(documentId, createdBy, via), (started) =&gt; started?.ship.id);
+          if (keyed === &quot;key_reused&quot;) return keyed;
+          if (&quot;made&quot; in keyed) return keyed.made;
+          const ship = await one(ShipRow, &quot;select * from jobs where org_id = $1 and id = $2 and queue = &#x27;ship&#x27;&quot;, [orgId, keyed.replay]);
+          return ship &amp;&amp; { ship, created: undefined };
         },</code></pre></div><p>Lesson 3's lesson, applied again: the insert with <code>on conflict do nothing</code>, then a <em>second statement</em> to read the newest ship, because a CTE would share the write's snapshot and not see the winner's row. The api answers 201 when this press made the job and 200 when it joined one, and the canvas's panel polls while it runs and links the pull request (http(s) only, parsed with the contract before it goes near an <code>href</code>).</p><p class="label">From <span class="mono">apps/worker/src/ship.ts</span></p><div class="scroll"><pre><code>/**
  * The `ship` queue&#x27;s handler (F17, SPEC §8 step 9): the document&#x27;s page, generated afresh from the room&#x27;s
  * CONFIRMED document, becomes one commit on the document&#x27;s working branch (`noon/&lt;id&gt;`, the branch its sandbox
@@ -1268,7 +1366,7 @@ const active = (ship: Ship | null): ship is Ship =&gt; ship?.status === &quot;qu
   const doc = await shippable(&quot;ann@example.com&quot;);
   expect(await newest(&quot;ann@example.com&quot;, doc)).toBeNull();
   const answers = await Promise.all(Array.from({ length: 20 }, () =&gt; ship(&quot;ann@example.com&quot;, doc)));
-  expect(answers.map((a) =&gt; a.status).sort()).toEqual([201, ...Array&lt;number&gt;(19).fill(200)]);
+  expect(answers.map((a) =&gt; a.status).sort()).toEqual([...Array&lt;number&gt;(19).fill(200), 201]);
   const ships = await Promise.all(answers.map(async (a) =&gt; Ship.parse(await a.json())));
   const [job] = await shipJobs(doc);
   expect(await shipJobs(doc)).toEqual([{ id: job?.id, status: &quot;queued&quot; }]);
@@ -1302,10 +1400,10 @@ export const git = async (cwd: string, ...args: string[]): Promise&lt;string&gt;
 // e2e&#x27;s documents reading the compose sync. All four are stopped for the duration; teardown.ts starts them again.
 // If Playwright is KILLED (kill -9), teardown never runs: `docker compose start worker worker-sandbox worker-git worker-ship`.
 // ponytail: a database and a Redis of its own for e2e is the upgrade.</code></pre></div><p class="label">From <span class="mono">playwright.config.ts</span></p><div class="scroll"><pre><code>    // The REAL git peer (E5.3b), from source, against the dev stack&#x27;s Gitea, with a mirror of its own. setup.ts
-    // stops the compose one: both would drain the same inbox, and that one would edit through the compose sync.
-    { command: fromEnv(`WORKER_QUEUE=git SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git GIT_PEER_DIR=${join(tmpdir(), &quot;noon-e2e-git&quot;)} SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /git peer watching/u }, reuseExistingServer: false },
-    // The REAL ship worker (E5.5), from source, against the dev stack&#x27;s Gitea; setup.ts stops the compose one.
-    { command: fromEnv(`WORKER_QUEUE=ship SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git SYNC_URL=ws://localhost:${String(PORTS.sync)} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: ship/u }, reuseExistingServer: false },</code></pre></div><p><strong>Prove "nothing changed" with a hash, and "as git" with the frames.</strong> The conflict e2e asks the room for its document as a fresh joiner is welcomed with it, hashes it as canonical JSON (keys sorted: key order is not part of a page), and compares before and after the push, <code>seq</code> included. The push e2e records every WebSocket frame the canvas receives and asserts the op arrived stamped <code>actor.kind = "git"</code> with the commit as <code>runId</code>; and it plants a value on <code>window</code> before the push and reads it after, because a reload would lose it.</p><p class="label">From <span class="mono">e2e/gitea.ts</span></p><div class="scroll"><pre><code>// Both sides of an F16 test: the canvas&#x27;s document, and an engineer&#x27;s push to the dev stack&#x27;s REAL Gitea (one
+      // stops the compose one: both would drain the same inbox, and that one would edit through the compose sync.
+      { command: fromEnv(`WORKER_QUEUE=git SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git GIT_PEER_DIR=${join(tmpdir(), &quot;noon-e2e-git&quot;)} SYNC_URL=${syncNodes} node apps/worker/src/main.ts`), wait: { stdout: /git peer watching/u }, reuseExistingServer: false },
+      // The REAL ship worker (E5.5), from source, against the dev stack&#x27;s Gitea; setup.ts stops the compose one.
+      { command: fromEnv(`WORKER_QUEUE=ship SEED_REPO=http://127.0.0.1:\${GITEA_PORT:-3002}/noon/sample-app.git SYNC_URL=${syncNodes} node apps/worker/src/main.ts`), wait: { stdout: /worker draining queues: ship/u }, reuseExistingServer: false },</code></pre></div><p><strong>Prove "nothing changed" with a hash, and "as git" with the frames.</strong> The conflict e2e asks the room for its document as a fresh joiner is welcomed with it, hashes it as canonical JSON (keys sorted: key order is not part of a page), and compares before and after the push, <code>seq</code> included. The push e2e records every WebSocket frame the canvas receives and asserts the op arrived stamped <code>actor.kind = "git"</code> with the commit as <code>runId</code>; and it plants a value on <code>window</code> before the push and reads it after, because a reload would lose it.</p><p class="label">From <span class="mono">e2e/gitea.ts</span></p><div class="scroll"><pre><code>// Both sides of an F16 test: the canvas&#x27;s document, and an engineer&#x27;s push to the dev stack&#x27;s REAL Gitea (one
 // commit on the document&#x27;s branch, `noon/&lt;id&gt;`, that writes its generated page). Only the one key this needs
 // leaves .env, and it goes to git as a header, never into a URL or a log.
 const exec = promisify(execFile);
@@ -1337,7 +1435,7 @@ const gitEnv = {
     await pushed.remove();
   }
 });</code></pre></div><p class="label">From <span class="mono">e2e/ship.spec.ts</span></p><div class="scroll"><pre><code>    // An edit, and Ship again: the same pull request now holds the new page.
-    await page.getByRole(&quot;button&quot;, { name: &quot;Add Button&quot;, exact: true }).click();
+    await page.getByRole(&quot;option&quot;, { name: &quot;Button&quot;, exact: true }).click();
     await expect(page.locator(&quot;[data-component=Button]&quot;)).toHaveCount(2);
     await expect(page.getByText(&quot;saved&quot;, { exact: true })).toBeVisible();
     const final = pageOf((await welcomeOf(browser, page.url())).doc);
@@ -1383,7 +1481,7 @@ pnpm exec vitest run --config vitest.integration.config.ts apps/worker/src/gitea
                                              # the dev stack's Gitea: the bootstrap, and ship-once-twice-same-pr-byte-identical
 pnpm exec playwright test e2e/push.spec.ts e2e/conflict.spec.ts e2e/ship.spec.ts
                                              # the real canvas; stops the compose workers for the duration (see e2e/setup.ts)
-make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>48ac4f6</code>, and the code is right until a test says otherwise. Read the log line, find the section above that owns that line, and file the difference against the bead that owns the code. A chapter that disagrees with a running system is a bug report, whichever of them is wrong.</p></section><section id="limits"><h2>11 · What the type system could not see, epic 5 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>a sandbox on an internal network could not clone</td><td>Docker publishes no port for an internal-only container (measured)</td><td>the worker fetches; a bundle by <code>docker exec</code></td></tr><tr><td>ICC-off on one shared network cut the proxy off too</td><td>measured, not read</td><td>one network per document, the proxy joined to each</td></tr><tr><td>a document id alone opened any preview through the public URL</td><td>the URL was the only lock</td><td>a per-container token: nonce + HMAC, checked twice</td></tr><tr><td>Vite's 404 named the base</td><td>read in Vite's source, measured on a local run</td><td>a <code>pre</code> plugin answers a bare 404 first</td></tr><tr><td>a blank frame through the tunnel</td><td>Vite answers preflights before its proxy; origin "null" refused</td><td><code>preflightContinue</code> for <code>/preview/</code> only</td></tr><tr><td>401s on the preview's modules</td><td>the tunnel's basic auth; the frame carries no credentials</td><td>fixed in the tunnel; know which hop answered</td></tr><tr><td>a quoted attribute with <code>&amp;</code> would round-trip to another value</td><td>JSX decodes entities; the parser does not</td><td>refuse, and say how to write it</td></tr><tr><td>deep nesting overflowed TypeScript's parser</td><td>its walk recurses; ours does not</td><td><code>RangeError</code> is <code>too_deep</code></td></tr><tr><td><code>parseDiagnostics</code> is internal to TypeScript</td><td>the public route is a whole Program</td><td>cast through <code>unknown</code>; fail closed if it is gone</td></tr><tr><td>a replayed body under a fresh delivery id was a new event</td><td>the header is not signed</td><td>a second unique key on (branch, commit)</td></tr><tr><td>a push during a reconcile fetch could be lost</td><td>the flag was taken after the fetch</td><td>take the flag first</td></tr><tr><td>an event failed when Gitea was away</td><td>"failed" is terminal and the reconcile never re-records</td><td>back to <code>pending</code></td></tr><tr><td>a symlink named like a page read the worker's environment</td><td><code>readFile</code> follows links</td><td><code>O_NOFOLLOW</code>, <code>isFile()</code>, size first</td></tr><tr><td>a two-way diff reverted every canvas edit since the file was generated</td><td>the wrong base</td><td>three-way: base, target, current</td></tr><tr><td>a removed id came back as a new node</td><td>an id is a name, not a value</td><td><code>earlierIds</code> from <code>git log -p</code>; refuse whole</td></tr><tr><td>Ship's push came back as an engineer's edit and undid a racing canvas edit</td><td>the webhook cannot tell who pushed</td><td>record the commit BEFORE the push; skip it</td></tr><tr><td>a force-push A → B → A reads as known</td><td>keyed on (branch, commit)</td><td>named ponytail; key on before as well</td></tr><tr><td>two ships in one instant could both create a pull request</td><td>Gitea's uniqueness is a look-then-insert</td><td>one at a time per document; 409 → find by <code>head.ref</code></td></tr><tr><td>a press during a run folded into a ship that read the older document</td><td>"unfinished" was the wrong predicate</td><td>unique on <code>status = 'queued'</code></td></tr><tr><td>a CTE would not see the winner's row</td><td>one snapshot per statement</td><td>a second statement, again</td></tr><tr><td>a token could follow a redirect off Gitea</td><td>fetch follows redirects by default</td><td><code>redirect: "error"</code></td></tr><tr><td>forty duplicated lines across two suites</td><td>written bead by bead</td><td><code>jscpd</code> in the gate; <code>git-testing.ts</code>, <code>live.ts</code></td></tr><tr><td>the per-org cap could overshoot</td><td>a count is not an index (lesson 4)</td><td>an advisory lock per org: the named upgrade, taken</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lessons 2 to 4 said types prove shapes and say nothing about order, time, repetition, memory, who is speaking, what a subprocess does, or a browser boundary. Epic 5 adds: types cannot see <em>which delivery is the same event</em>, <em>which starting point a diff should use</em>, or <em>which side of a network a container is on</em>. Every one was answered the same way as before: a key chosen from what the operation reads, a measurement of the real thing, and a name for the failure.</p></section>
+make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>94222ab</code>, and the code is right until a test says otherwise. Read the log line, find the section above that owns that line, and file the difference against the bead that owns the code. A chapter that disagrees with a running system is a bug report, whichever of them is wrong.</p></section><section id="limits"><h2>11 · What the type system could not see, epic 5 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>a sandbox on an internal network could not clone</td><td>Docker publishes no port for an internal-only container (measured)</td><td>the worker fetches; a bundle by <code>docker exec</code></td></tr><tr><td>ICC-off on one shared network cut the proxy off too</td><td>measured, not read</td><td>one network per document, the proxy joined to each</td></tr><tr><td>a document id alone opened any preview through the public URL</td><td>the URL was the only lock</td><td>a per-container token: nonce + HMAC, checked twice</td></tr><tr><td>Vite's 404 named the base</td><td>read in Vite's source, measured on a local run</td><td>a <code>pre</code> plugin answers a bare 404 first</td></tr><tr><td>a blank frame through the tunnel</td><td>Vite answers preflights before its proxy; origin "null" refused</td><td><code>preflightContinue</code> for <code>/preview/</code> only</td></tr><tr><td>401s on the preview's modules</td><td>the tunnel's basic auth; the frame carries no credentials</td><td>fixed in the tunnel; know which hop answered</td></tr><tr><td>a quoted attribute with <code>&amp;</code> would round-trip to another value</td><td>JSX decodes entities; the parser does not</td><td>refuse, and say how to write it</td></tr><tr><td>deep nesting overflowed TypeScript's parser</td><td>its walk recurses; ours does not</td><td><code>RangeError</code> is <code>too_deep</code></td></tr><tr><td><code>parseDiagnostics</code> is internal to TypeScript</td><td>the public route is a whole Program</td><td>cast through <code>unknown</code>; fail closed if it is gone</td></tr><tr><td>a replayed body under a fresh delivery id was a new event</td><td>the header is not signed</td><td>a second unique key on (branch, commit)</td></tr><tr><td>a push during a reconcile fetch could be lost</td><td>the flag was taken after the fetch</td><td>take the flag first</td></tr><tr><td>an event failed when Gitea was away</td><td>"failed" is terminal and the reconcile never re-records</td><td>back to <code>pending</code></td></tr><tr><td>a symlink named like a page read the worker's environment</td><td><code>readFile</code> follows links</td><td><code>O_NOFOLLOW</code>, <code>isFile()</code>, size first</td></tr><tr><td>a two-way diff reverted every canvas edit since the file was generated</td><td>the wrong base</td><td>three-way: base, target, current</td></tr><tr><td>a removed id came back as a new node</td><td>an id is a name, not a value</td><td><code>earlierIds</code> from <code>git log -p</code>; refuse whole</td></tr><tr><td>Ship's push came back as an engineer's edit and undid a racing canvas edit</td><td>the webhook cannot tell who pushed</td><td>record the commit BEFORE the push; skip it</td></tr><tr><td>a force-push A → B → A reads as known</td><td>keyed on (branch, commit)</td><td>named ponytail; key on before as well</td></tr><tr><td>two ships in one instant could both create a pull request</td><td>Gitea's uniqueness is a look-then-insert</td><td>one at a time per document; 409 → find by <code>head.ref</code></td></tr><tr><td>a press during a run folded into a ship that read the older document</td><td>"unfinished" was the wrong predicate</td><td>unique on <code>status = 'queued'</code></td></tr><tr><td>a CTE would not see the winner's row</td><td>one snapshot per statement</td><td>a second statement, again</td></tr><tr><td>a token could follow a redirect off Gitea</td><td>fetch follows redirects by default</td><td><code>redirect: "error"</code></td></tr><tr><td>forty duplicated lines across two suites</td><td>written bead by bead</td><td><code>jscpd</code> in the gate; <code>git-testing.ts</code>, <code>live.ts</code></td></tr><tr><td>the per-org cap could overshoot</td><td>a count is not an index (lesson 4)</td><td>an advisory lock per org: the named upgrade, taken</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lessons 2 to 4 said types prove shapes and say nothing about order, time, repetition, memory, who is speaking, what a subprocess does, or a browser boundary. Epic 5 adds: types cannot see <em>which delivery is the same event</em>, <em>which starting point a diff should use</em>, or <em>which side of a network a container is on</em>. Every one was answered the same way as before: a key chosen from what the operation reads, a measurement of the real thing, and a name for the failure.</p></section>
 
   <section id="drills">
     <h2>Your turn: three drills</h2>
