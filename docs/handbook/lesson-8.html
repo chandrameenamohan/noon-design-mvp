@@ -105,7 +105,7 @@ h2 { scroll-margin-top: 24px; }
   </div>
 
   <div class="aside">
-    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">ad00176</span>, so what you read is what is committed. Sections 1, 2 and 4 are the ones a security-minded interview will dig into; section 5 is the one a compliance question turns on; section 6 is the comparison you will be asked to make.</p>
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">f21d6d2</span>, so what you read is what is committed. Sections 1, 2 and 4 are the ones a security-minded interview will dig into; section 5 is the one a compliance question turns on; section 6 is the comparison you will be asked to make.</p>
     <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# migrations 0015 to 0017: credentials, sessions, shares, the trail<br>pnpm exec vitest run apps/api/src/password.test.ts apps/api/src/auth.test.ts apps/api/src/app.test.ts apps/web/src/audit.test.ts&nbsp;&nbsp;# the pure halves<br>open http://localhost:5173/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the sign-in form; no ?user= anywhere</p>
     <p>Try it, once the stack is up: section 8 walks the sign-up, the demotion, the share and its revoke, and an attempt to edit the trail by hand, then the suites, with the exact commands and what each should show.</p>
   </div>
@@ -169,14 +169,16 @@ export const isSessionToken = (value: string | undefined): value is string =&gt;
   // still create the account. That is the one place an account&#x27;s existence shows, and it is rate limited.
   app.post(&quot;/auth/signup&quot;, async (c) =&gt; {
     const { email, name, password } = await body(c, SignUpBody);
-    if (!(await allowAttempt(`signup:${email.toLowerCase()}`))) return fail(c, 429, &quot;too_many_attempts&quot;);
+    const allowed = await attempt(`signup:${email.toLowerCase()}`);
+    if (!allowed.ok) return limited(c, allowed.retryAfterSeconds, &quot;too_many_attempts&quot;);
     const user = await db.signUp({ email, name, passwordHash: await hashPassword(password) });
     return user === &quot;taken&quot; ? fail(c, 409, &quot;email_taken&quot;) : signedIn(c, user, 201);
   });
   // No such email and the wrong password are one answer, in one time: both cost exactly one scrypt.
   app.post(&quot;/auth/signin&quot;, async (c) =&gt; {
     const { email, password } = await body(c, SignInBody);
-    if (!(await allowAttempt(`signin:${email.toLowerCase()}`))) return fail(c, 429, &quot;too_many_attempts&quot;);
+    const allowed = await attempt(`signin:${email.toLowerCase()}`);
+    if (!allowed.ok) return limited(c, allowed.retryAfterSeconds, &quot;too_many_attempts&quot;);
     const found = await db.credentialsFor(email);
     const matches = await verifyPassword(password, found?.passwordHash ?? (await dummyHash()));
     return found &amp;&amp; matches ? signedIn(c, found.user, 200) : fail(c, 401, &quot;invalid_credentials&quot;);
@@ -397,7 +399,13 @@ const RANK: Record&lt;Role, number&gt; = { viewer: 0, editor: 1, owner: 2 };
 /** Does `role` include everything `need` may do? The roles are nested: owner &gt; editor &gt; viewer. */
 export const includes = (role: Role, need: Role): boolean =&gt; RANK[role] &gt;= RANK[need];
 export const Member = z.object({ userId: Id, email: User.shape.email, name: Name, role: Role });
-export type Member = z.infer&lt;typeof Member&gt;;</code></pre></div><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>/** Every guard `need` made, and the role it asks for: how app.test.ts finds a route that declares none. */
+export type Member = z.infer&lt;typeof Member&gt;;
+/**
+ * E10.8: one page of GET /orgs/:orgId/members (every member, oldest first) or of GET /documents/:id/shares (the
+ * document&#x27;s shares, owners only: a share names someone outside the org). A share is a Member whose role is never owner.
+ */
+export const MemberPage = z.strictObject({ items: z.array(Member), nextCursor: z.string().nullable() });
+export type MemberPage = z.infer&lt;typeof MemberPage&gt;;</code></pre></div><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>/** Every guard `need` made, and the role it asks for: how app.test.ts finds a route that declares none. */
 export const GUARDS = new WeakMap&lt;object, Role&gt;();
 /**
  * E8.2 (F24): the route needs at least `role` in the org (the parent&#x27;s middleware put the caller&#x27;s role on the
@@ -424,6 +432,7 @@ test(&quot;every org and document route declares the role it needs, and they are
   }
   expect(Object.fromEntries(guarded)).toEqual({
     &quot;GET /orgs/:orgId&quot;: &quot;viewer&quot;,
+    &quot;GET /orgs/:orgId/members&quot;: &quot;viewer&quot;,
     &quot;PUT /orgs/:orgId/members&quot;: &quot;owner&quot;,
     &quot;POST /orgs/:orgId/workspaces&quot;: &quot;editor&quot;,
     &quot;GET /orgs/:orgId/workspaces&quot;: &quot;viewer&quot;,
@@ -434,11 +443,13 @@ test(&quot;every org and document route declares the role it needs, and they are
     &quot;GET /orgs/:orgId/usage&quot;: &quot;owner&quot;,
     &quot;GET /orgs/:orgId/audit&quot;: &quot;owner&quot;,
     &quot;POST /documents/:id/session&quot;: &quot;viewer&quot;,
+    &quot;GET /documents/:id/shares&quot;: &quot;owner&quot;,
     &quot;PUT /documents/:id/shares&quot;: &quot;owner&quot;,
     &quot;DELETE /documents/:id/shares/:userId&quot;: &quot;owner&quot;,
     &quot;POST /documents/:id/runs&quot;: &quot;editor&quot;,
     &quot;POST /documents/:id/runs/:runId/cancel&quot;: &quot;editor&quot;,
     &quot;GET /documents/:id/runs/:runId&quot;: &quot;viewer&quot;,
+    &quot;GET /documents/:id/run&quot;: &quot;viewer&quot;,
     &quot;POST /documents/:id/preview&quot;: &quot;viewer&quot;,
     &quot;GET /documents/:id/preview&quot;: &quot;viewer&quot;,
     &quot;GET /documents/:id/conflict&quot;: &quot;viewer&quot;,
@@ -465,6 +476,7 @@ test(&quot;every org and document route declares the role it needs, and they are
   // [method, path, body, least role]. Each write is one a viewer could do harm with; the stranger row is implied.
   const routes: [string, string, unknown, Role][] = [
     [&quot;GET&quot;, `/orgs/${org.id}`, undefined, &quot;viewer&quot;],
+    [&quot;GET&quot;, `/orgs/${org.id}/members`, undefined, &quot;viewer&quot;], // E10.8
     [&quot;GET&quot;, `/orgs/${org.id}/workspaces`, undefined, &quot;viewer&quot;],
     [&quot;GET&quot;, `/orgs/${org.id}/workspaces/${ws.id}`, undefined, &quot;viewer&quot;],
     [&quot;GET&quot;, `/orgs/${org.id}/workspaces/${ws.id}/documents`, undefined, &quot;viewer&quot;],
@@ -483,7 +495,8 @@ test(&quot;every org and document route declares the role it needs, and they are
     [&quot;GET&quot;, `/documents/${doc.id}/conflict`, undefined, &quot;viewer&quot;],
     [&quot;POST&quot;, `/documents/${doc.id}/ship`, undefined, &quot;editor&quot;],
     [&quot;GET&quot;, `/documents/${doc.id}/ship`, undefined, &quot;viewer&quot;],
-    // E8.3 (F25): the owner shares with the stranger (after every stranger row) and revokes it again.
+    // E8.3 (F25): the owner shares with the stranger (after every stranger row) and revokes it again. E10.8: and lists the shares.
+    [&quot;GET&quot;, `/documents/${doc.id}/shares`, undefined, &quot;owner&quot;],
     [&quot;PUT&quot;, `/documents/${doc.id}/shares`, { email: who.stranger, role: &quot;viewer&quot; }, &quot;owner&quot;],
     [&quot;DELETE&quot;, `/documents/${doc.id}/shares/${strangerId}`, undefined, &quot;owner&quot;],
   ];
@@ -514,20 +527,24 @@ test(&quot;every org and document route declares the role it needs, and they are
     const member = await c.var.scope.setMember({ ...(await body(c, SetMemberBody)), by: c.var.user.id });
     if (member === &quot;no_user&quot;) return notFound(c);
     if (member === &quot;last_owner&quot;) return fail(c, 409, &quot;last_owner&quot;);
+    if (member === &quot;forbidden&quot;) return fail(c, 403, &quot;forbidden&quot;); // demoted while this request waited for the lock
     await announce(c, { orgId: c.var.org.id, userId: member.userId });
     return c.json(member);
   });</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        setMember: async ({ email, role, by }) =&gt; {
           if (!orgExists || (by !== undefined &amp;&amp; !isId(by))) throw new Error(&quot;cannot set a member: invalid org or actor id&quot;);
           const input = { email: User.shape.email.parse(email), role: Role.parse(role) };
           // One change at a time per org: two owners demoting each other at once must not both see the other
-          // still an owner (under read committed, each statement would) and leave the org with none.
+          // still an owner (under read committed, each statement would) and leave the org with none. The actor&#x27;s own role
+          // is read again under the lock: the route&#x27;s check ran before it, and an owner demoted since must not act.
           return inTurn(`noon:members:${orgId}`, async (client) =&gt; {
-            const found = z.object({ id: z.string(), role: Role.nullable(), owners: count }).optional().parse((await client.query&lt;QueryResultRow&gt;(
-              &quot;select u.id, m.role, (select count(*) from memberships where org_id = $1 and role = &#x27;owner&#x27;) as owners &quot; +
+            const found = z.object({ id: z.string(), role: Role.nullable(), owners: count, actor: Role.nullable() }).optional().parse((await client.query&lt;QueryResultRow&gt;(
+              &quot;select u.id, m.role, (select count(*) from memberships where org_id = $1 and role = &#x27;owner&#x27;) as owners, &quot; +
+                &quot;(select role from memberships where org_id = $1 and user_id = $3) as actor &quot; +
                 &quot;from users u left join memberships m on m.user_id = u.id and m.org_id = $1 where u.email = lower($2)&quot;,
-              [orgId, input.email],
+              [orgId, input.email, by ?? null],
             )).rows[0]);
             if (!found) return &quot;no_user&quot;;
+            if (by !== undefined &amp;&amp; found.actor !== &quot;owner&quot;) return &quot;forbidden&quot;;
             if (found.role === &quot;owner&quot; &amp;&amp; input.role !== &quot;owner&quot; &amp;&amp; found.owners &lt;= 1) return &quot;last_owner&quot;;
             const member = MemberRow.parse((await client.query&lt;QueryResultRow&gt;(
               &quot;with m as (insert into memberships (org_id, user_id, role) values ($1, $2, $3) on conflict (org_id, user_id) do update set role = excluded.role returning user_id, role) &quot; +
@@ -543,15 +560,14 @@ test(&quot;every org and document route declares the role it needs, and they are
             }
             return member;
           });
-        },</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /** `work` in one transaction that holds the advisory lock named `lock`: whatever else takes that lock waits its turn. */
-  async function inTurn&lt;T&gt;(lock: string, work: (client: PoolClient) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; {
+        },</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>  /** `work` in one transaction, committed only when `keep` says so (rolled back otherwise, as on a throw). */
+  async function inTx&lt;T&gt;(work: (client: PoolClient) =&gt; Promise&lt;T&gt;, keep: (result: T) =&gt; boolean = () =&gt; true, begin = &quot;begin&quot;): Promise&lt;T&gt; {
     const client = await pool.connect();
     let broken: Error | undefined;
     try {
-      await client.query(&quot;begin&quot;);
-      await client.query(&quot;select pg_advisory_xact_lock(hashtext($1))&quot;, [lock]);
+      await client.query(begin);
       const result = await work(client);
-      await client.query(&quot;commit&quot;);
+      await client.query(keep(result) ? &quot;commit&quot; : &quot;rollback&quot;);
       return result;
     } catch (err) {
       await client.query(&quot;rollback&quot;).catch(() =&gt; undefined);
@@ -560,11 +576,28 @@ test(&quot;every org and document route declares the role it needs, and they are
     } finally {
       client.release(broken); // after a failure the connection&#x27;s transaction state is unknown: destroyed
     }
-  }</code></pre></div><p><code>setMember</code> is the one place in the epic that needs a transaction rather than a statement, and the reason is a race the types cannot see. Rule: the last owner cannot step down, or the org has nobody who can change roles. Check: count the owners, refuse if the caller is the last. Race: two owners demote <em>each other</em> at the same moment; under READ COMMITTED each statement sees the other still an owner, both checks pass, and the org ends with none. There is no single row to lock (the rule is about a <em>set</em> of rows), so the transaction takes a Postgres <em>advisory lock</em> named after the org: <code>pg_advisory_xact_lock(hashtext('noon:members:&lt;orgId&gt;'))</code>, held until commit, so the second change waits for the first and then sees its result. The integration test fires both demotions with <code>Promise.all</code> and asserts <code>[200, 409]</code>. The audit row is written in the same transaction, and only when the role really changed.</p><p class="label">From <span class="mono">apps/api/src/rbac.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;two owners demoting each other at the same moment: exactly one wins, and the org keeps an owner&quot;, async () =&gt; {
+  }
+  /** `work` in one transaction that holds the advisory lock named `lock`: whatever else takes that lock waits its turn. */
+  const inTurn = &lt;T&gt;(lock: string, work: (client: PoolClient) =&gt; Promise&lt;T&gt;): Promise&lt;T&gt; =&gt;
+    inTx(async (client) =&gt; {
+      await client.query(&quot;select pg_advisory_xact_lock(hashtext($1))&quot;, [lock]);
+      return work(client);
+    });</code></pre></div><p><code>setMember</code> is the one place in the epic that needs a transaction rather than a statement, and the reason is a race the types cannot see. Rule: the last owner cannot step down, or the org has nobody who can change roles. Check: count the owners, refuse if the caller is the last. Race: two owners demote <em>each other</em> at the same moment; under READ COMMITTED each statement sees the other still an owner, both checks pass, and the org ends with none. There is no single row to lock (the rule is about a <em>set</em> of rows), so the transaction takes a Postgres <em>advisory lock</em> named after the org: <code>pg_advisory_xact_lock(hashtext('noon:members:&lt;orgId&gt;'))</code>, held until commit, so the second change waits for the first and then sees its result. The integration test fires both demotions with <code>Promise.all</code> and asserts <code>[200, 403]</code>: the caller's own role is read again under the lock, so the second change finds its caller no longer an owner. The audit row is written in the same transaction, and only when the role really changed.</p><p class="label">From <span class="mono">apps/api/src/rbac.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;two owners demoting each other at the same moment: exactly one wins, and the org keeps an owner&quot;, async () =&gt; {
   const { org } = await world();
   expect((await setRole(&quot;owner&quot;, org.id, who.editor, &quot;owner&quot;)).status).toBe(200);
   const [a, b] = await Promise.all([setRole(&quot;owner&quot;, org.id, who.editor, &quot;viewer&quot;), setRole(&quot;editor&quot;, org.id, who.owner, &quot;viewer&quot;)]);
-  expect([a.status, b.status].sort()).toEqual([200, 409]);
+  // The loser is no longer an owner when its change comes up (the caller&#x27;s role is read again under the org&#x27;s lock),
+  // so it is refused as a non-owner, whichever request reached the lock first; a stale &quot;owner&quot; from before never acts.
+  expect([a.status, b.status].sort()).toEqual([200, 403]);
+  const [winner, loser] = a.status === 200 ? ([&quot;owner&quot;, &quot;editor&quot;] as const) : ([&quot;editor&quot;, &quot;owner&quot;] as const);
+  const members = (await call(winner, &quot;GET&quot;, `/orgs/${org.id}/members`)).json as { items: unknown[] };
+  expect(members.items.map((m) =&gt; Member.parse(m)).filter((m) =&gt; m.role === &quot;owner&quot;).map((m) =&gt; m.email)).toEqual([who[winner]]);
+  // Deterministically, the request that lost the race: it passed the route&#x27;s owner check before the other committed,
+  // and reaches the lock as a viewer. It changes nothing.
+  const loserId = Me.parse((await call(loser, &quot;GET&quot;, &quot;/auth/me&quot;)).json).user?.id;
+  expect(await ctx.db.db.forOrg(org.id).setMember({ email: who.viewer, role: &quot;editor&quot;, by: loserId })).toBe(&quot;forbidden&quot;);
+  expect((await call(loser, &quot;GET&quot;, `/orgs/${org.id}`)).status).toBe(200); // still a member, only not an owner
+  expect(Member.parse((await setRole(winner, org.id, who.viewer, &quot;viewer&quot;)).json).role).toBe(&quot;viewer&quot;); // the viewer was never promoted
 });</code></pre></div><p><strong>Shares (F25).</strong> An owner shares one document with someone outside the org, at editor or viewer, never owner. The first design question was where the row lives, and the answer is <em>not in <code>memberships</code></em>: a share must not make anyone a member, and every org route, plus <code>GET /orgs</code>'s keyset paging over the orgs a user belongs to, joins <code>memberships</code> and would have shown the org to the outsider. So <code>document_shares</code> is a table of its own, keyed by document and user, tied to the document's org by a composite foreign key so that a share can never point at a document of another org.</p><p class="label">From <span class="mono">packages/db/migrations/0016_document_shares.sql</span></p><div class="scroll"><pre><code>-- E8.3 (F25): one document shared with a user outside its org, at editor or viewer (never owner: a share opens a
 -- document, never the org). A table of its own, never rows in memberships: a share must not make anyone a member
 -- (every org route, and GET /orgs&#x27;s paging over orgs join memberships, stay exactly as they were).
@@ -598,6 +631,15 @@ const accessOf = (userParam: string): string =&gt;
         : undefined,</code></pre></div><p><code>accessOf</code> is a scalar subquery spliced into the document lookup, and it answers "the higher of the caller's org role and their share" in SQL: a <code>union all</code> of the two candidate roles, ordered by their position in the array <code>['viewer','editor','owner']</code> descending, <code>limit 1</code>. That is "max by enum order" without a numeric column, and it costs two primary-key probes inside the one round trip the document routes already made (the E1.4 rule: one lookup per request). A member who is also shared a document at a higher role gets the higher one; revoking the share leaves their org role; an outsider with no share gets <code>null</code>, which the outer <code>where role is not null</code> turns into no row, and no row is 404.</p><p class="label">From <span class="mono">apps/api/src/app.ts</span></p><div class="scroll"><pre><code>  // Everything under /documents/:id: the path names no org, so the lookup itself is access-filtered (a member of the
   // org, or someone the document is shared with, E8.3), and the same row carries the caller&#x27;s role for each route&#x27;s
   // `need` (E8.2). Neither: 404, as for an org. So a revoked share&#x27;s next /session is a 404, and its peer gives up.
+  // E9.6: minting a sync session has its own, tighter limit per user, taken BEFORE the document is looked up. A
+  // collaborator whose share was revoked gets 404 here; a peer that keeps asking regardless is soon refused with a
+  // Retry-After (and a real client backs off), on top of its per-user limit.
+  app.use(&quot;/documents/:id/session&quot;, createMiddleware&lt;{ Variables: { user: User } }&gt;(async (c, next) =&gt; {
+    if (c.req.method !== &quot;POST&quot;) return next();
+    const verdict = await db.take(`mint:${c.var.user.id}`, limits.mint);
+    return verdict.ok ? next() : limited(c, verdict.retryAfterSeconds);
+  }));
+
   const document = new Hono&lt;{ Variables: { user: User; doc: Document; role: Role } }&gt;();
   document.use(async (c, next) =&gt; {
     const found = await db.getDocumentForMember(c.req.param(&quot;id&quot;) ?? &quot;&quot;, c.var.user.id);
@@ -790,7 +832,8 @@ const access = accessSubscriber({ redisUrl: config.lease.redisUrl, onChange: (ch
     await accessChanged(change).catch((err: unknown) =&gt; {
       process.stderr.write(`${JSON.stringify({ level: &quot;warn&quot;, path: c.req.path, message: `access change not announced: ${describeError(err)}` })}\n`);
     });
-  };</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  // ponytail: one indexed read per live session per sweep; ceiling: a few thousand sessions a node (a sweep never
+  };
+  const attempt = allowAttempt ?? ((key: string) =&gt; db.take(`attempt:${createHash(&quot;sha256&quot;).update(key).digest(&quot;hex&quot;)}`, limits.attempt));</code></pre></div><p class="label">From <span class="mono">apps/sync/src/server.ts</span></p><div class="scroll"><pre><code>  // ponytail: one indexed read per live session per sweep; ceiling: a few thousand sessions a node (a sweep never
   // overlaps the last one); upgrade: one query for all of a node&#x27;s (org, document, user) triples.
   let sweeping = false;
   const sweeper = roles ? setInterval(() =&gt; {
@@ -939,18 +982,24 @@ const actorOf = (p: string): string =&gt;
 const AuditRow = z
   .object({ id: z.string(), org_id: z.string(), actor_kind: z.string(), actor_id: z.string().nullable(), actor_email: z.string().nullable(), action: z.string(), document_id: z.string().nullable(), detail: z.unknown(), created_at: timestamp })
   .transform((r): AuditEntry =&gt;
-    AuditEntry.parse({ id: r.id, orgId: r.org_id, actor: { kind: r.actor_kind, id: r.actor_id, email: r.actor_email }, action: r.action, documentId: r.document_id, detail: r.detail, at: r.created_at }));</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>        createRun: async ({ documentId, instruction, createdBy }) =&gt; {
-          const input = CreateRunBody.parse({ instruction }); // the same contract the reader uses, BEFORE the write
-          if (!orgExists || !isId(documentId) || (createdBy !== undefined &amp;&amp; !isId(createdBy))) return undefined;
-          try {
-            return await one(
-              RunRow,
-              // insert ... select: the row is only created if the document exists in this org. Audited in the same statement.
-              &quot;with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, &#x27;ai&#x27;, $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *), &quot; +
-                `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf(&quot;j.created_by&quot;)}, &#x27;run_started&#x27;, j.document_id, jsonb_build_object(&#x27;run&#x27;, j.id::text, &#x27;instruction&#x27;, j.input -&gt;&gt; &#x27;instruction&#x27;) from j) ` +
-                &quot;select * from j&quot;,
-              [orgId, documentId, JSON.stringify(input), createdBy ?? null],
-            );</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async recordConflict(documentId, input) {
+    AuditEntry.parse({ id: r.id, orgId: r.org_id, actor: { kind: r.actor_kind, id: r.actor_id, email: r.actor_email }, action: r.action, documentId: r.document_id, detail: r.detail, at: r.created_at }));</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      /** One statement: the run, if the document is this org&#x27;s and has no unfinished run, and its audit row. */
+      const insertRun = async (documentId: string, input: z.infer&lt;typeof CreateRunBody&gt;, createdBy: string | undefined, via: Pool | PoolClient): Promise&lt;Run | &quot;busy&quot; | undefined&gt; =&gt; {
+        try {
+          return await one(
+            RunRow,
+            // insert ... select: the row is only created if the document exists in this org. Audited in the same statement.
+            &quot;with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, &#x27;ai&#x27;, $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *), &quot; +
+              `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf(&quot;j.created_by&quot;)}, &#x27;run_started&#x27;, j.document_id, jsonb_build_object(&#x27;run&#x27;, j.id::text, &#x27;instruction&#x27;, j.input -&gt;&gt; &#x27;instruction&#x27;) from j) ` +
+              &quot;select * from j&quot;,
+            [orgId, documentId, JSON.stringify(input), createdBy ?? null],
+            via,
+          );
+        } catch (err) {
+          // The unique index IS the check: &quot;count, then insert&quot; would let two requests at the same moment both in.
+          if (err instanceof Error &amp;&amp; &quot;constraint&quot; in err &amp;&amp; err.constraint === &quot;jobs_one_unfinished_run_per_document&quot;) return &quot;busy&quot;;
+          throw err;
+        }
+      };</code></pre></div><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async recordConflict(documentId, input) {
         if (!isId(documentId)) return;
         const c = ConflictInput.parse(input);
         // Selected from documents: a document deleted meanwhile inserts nothing instead of failing on the foreign key.
@@ -1124,6 +1173,7 @@ export function auditWords(entry: AuditEntry): { who: string; what: string } {
     },
     endSession: (tokenHash: Buffer) =&gt; { sessions.delete(tokenHash.toString(&quot;hex&quot;)); return Promise.resolve(); },
     listOrgsFor: () =&gt; Promise.resolve({ items: [], nextCursor: null }),
+    take: () =&gt; Promise.resolve({ ok: true }), // the limits themselves: http-limits.test.ts
   };
   return { db: db as unknown as Db, sessions, calls };
 }</code></pre></div><p><strong>A timing test with real medians.</strong> The enumeration defence cannot be tested with a mock of <code>verifyPassword</code>: the claim is about wall-clock time, so the test signs up, times five unknown emails and five wrong passwords through the real scrypt, and compares medians (medians, because one garbage collection would ruin a mean). Without the dummy hash the unknown email answers in well under a millisecond; the assertion is loose (<code>0.3</code>) so a loaded host does not make it flaky, and tight enough that the bug fails it by an order of magnitude.</p><p><strong>The router read as data.</strong> Hono exposes <code>app.routes</code>, a list of <code>{ method, path, handler }</code>; <code>need</code> registered each guard in a <code>WeakMap</code>; the test joins the two and compares the whole table. It is a test of the <em>configuration</em>, not of any request, and it is the only kind of test that catches a route nobody wrote a test for.</p><p><strong>The real entry point in a real process.</strong> A test that hands <code>startServer</code> an identity strategy cannot prove that <code>main.ts</code> chooses the right one from <code>NODE_ENV</code>. <code>useApiProcess</code> spawns <code>main.ts</code> with a clean environment (nothing from the runner leaks in, in particular vitest's own <code>NODE_ENV=test</code>), waits for <code>/health</code>, and the test asks 401 of the header with <code>NODE_ENV</code> unset, <code>production</code> and <code>test</code>, and 200 with <code>development</code>.</p><p class="label">From <span class="mono">apps/api/src/testing.ts</span></p><div class="scroll"><pre><code>/**
@@ -1229,7 +1279,7 @@ docker compose exec -T postgres psql -U noon -d noon -c "select has_table_privil
 pnpm exec vitest run --config vitest.integration.config.ts apps/api/src/auth.int.test.ts apps/worker/src/service-credential.int.test.ts apps/api/src/rbac.int.test.ts \
   apps/sync/src/role-change.int.test.ts apps/api/src/audit.int.test.ts packages/db/src/audit.int.test.ts packages/db/src/app-role.int.test.ts
 pnpm exec playwright test e2e/sign-in.spec.ts e2e/viewer-rejected.spec.ts e2e/share-and-revoke.spec.ts e2e/audit-view.spec.ts
-make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>ad00176</code>, and the code is right until a test says otherwise. A step that fails is a finding: write it as <em>sequence → false belief → consequence → smallest fix</em> (SPEC §4a's form) and file it against the bead that owns the code.</p></section><section id="limits"><h2>9 · What the type system could not see, epic 8 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>a fast hash for passwords</td><td>a hash is a hash</td><td>scrypt: slow and memory-hard, parameters in the string</td></tr><tr><td>an unknown email answered without hashing</td><td>two branches look alike</td><td>verify against a dummy hash; <code>found &amp;&amp; matches</code></td></tr><tr><td>the first miss cost two hashes</td><td>lazy initialisation looks free</td><td>the dummy warmed in <code>buildApp</code></td></tr><tr><td>a row asking for <code>N = 2^40</code></td><td>a number is a number</td><td>a ceiling on the parameters; scrypt's refusal is a no</td></tr><tr><td><code>é</code> as one code point and as two</td><td>two equal-looking strings</td><td><code>NFKC</code> before hashing</td></tr><tr><td>a sign-in validated like a sign-up</td><td>one body schema is simpler</td><td><code>SignInBody</code> keeps only the caps</td></tr><tr><td>the session token stored as itself</td><td>a string is a string</td><td>its SHA-256, as <code>bytea</code></td></tr><tr><td>a cookie a script could read</td><td>a cookie is a cookie</td><td><code>HttpOnly</code></td></tr><tr><td>a planted cookie becoming a session</td><td>same name, same shape</td><td>a new token on every sign-in</td></tr><tr><td>a sliding expiry writing on every read</td><td>an <code>UPDATE</code> looked harmless</td><td>fixed at sign-in; identity stays a pure read</td></tr><tr><td>a stateless token for the browser</td><td>no table looked simpler</td><td>a row you can delete</td></tr><tr><td><code>POST /session</code> with no CSRF defence</td><td>no body, so no JSON check</td><td><code>SameSite=Strict</code></td></tr><tr><td>an image promoted with <code>NODE_ENV=test</code> accepting the header</td><td>"not production" reads as "safe"</td><td>only the literal <code>development</code></td></tr><tr><td>a name with a right-to-left override</td><td>a string</td><td><code>DisplayName</code> refuses <code>\p{Cf}</code></td></tr><tr><td>a route without a guard</td><td>a handler compiles without one</td><td>the route table test over <code>app.routes</code></td></tr><tr><td>404 to a member</td><td>"not found" felt safer</td><td>403 for members, 404 for strangers</td></tr><tr><td>two owners demoting each other</td><td>READ COMMITTED shows each an owner</td><td>an advisory lock per org</td></tr><tr><td>an editor promoting themselves</td><td>PUT members was an org route</td><td><code>need("owner")</code></td></tr><tr><td>the role in the token</td><td>a claim is a claim</td><td>read from Postgres at every join</td></tr><tr><td><code>mayEdit</code> checked when an op arrives</td><td>queued ops had passed</td><td>checked at the op's turn</td></tr><tr><td>a forged pub/sub message granting a role</td><td>a message is data</td><td>a hint only: the node re-reads</td></tr><tr><td>a missed announcement</td><td>pub/sub keeps nothing</td><td><code>"all"</code> on ready, and a 30 s sweep</td></tr><tr><td>an older role read overwriting a newer</td><td>two awaits, either order</td><td><code>asked</code>/<code>applied</code> numbering</td></tr><tr><td>a token minted before the revoke opening a socket</td><td>a valid signature</td><td>the row read before the upgrade: 401</td></tr><tr><td>a revoke between the read and the registration</td><td>the registry did not have the socket yet</td><td>read again after registering</td></tr><tr><td>a share that made a member</td><td>a flag on the membership row</td><td>a table of its own, never owner</td></tr><tr><td>the audit row after the action</td><td>two awaits look sequential</td><td>one statement (a CTE) or one transaction</td></tr><tr><td>a trail cascading away with its org</td><td>referential integrity</td><td>no foreign keys; the email copied in</td></tr><tr><td><code>set null</code> on a user delete</td><td>looked harmless</td><td>it is an <code>UPDATE</code>; no foreign key</td></tr><tr><td>the app role able to <code>UPDATE</code> the trail</td><td>a blanket grant, default privileges</td><td>revoked on every provisioning, plus a trigger</td></tr><tr><td>a sign-in recorded once, globally</td><td>it belongs to a person</td><td>one row per org</td></tr><tr><td>an instruction rendered as markup</td><td>a string</td><td>text nodes only; the e2e plants <code>onerror</code></td></tr><tr><td>a new <code>AuditAction</code> without a sentence</td><td>a <code>switch</code> with a default</td><td>a <code>Record</code> over the enum</td></tr><tr><td>the same role set again recorded as a change</td><td>an upsert is an upsert</td><td>compare <code>found.role</code> first</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lesson 7 said types cannot see time or which process is speaking. Epic 8 adds the two that identity turns on: types cannot see <em>who is asking</em> (a stranger's request and a member's are the same TypeScript) and cannot see <em>what a value costs to compute</em> (a fast hash and a slow one have the same signature; a branch that skips the hash returns the same type). Both were answered as before: put the truth in one place (the membership row, the session row, the audit table), read it at the moment of asking, make the cost the same on every path, and write a test that provokes the exact case: the timing, the race, the forgotten guard, the privilege.</p></section>
+make check                                   # the whole gate, as the pre-commit hook runs it</code></pre></div><p class="note"><strong>What to do when a step does not match this page:</strong> the page was cut from the code at commit <code>f21d6d2</code>, and the code is right until a test says otherwise. A step that fails is a finding: write it as <em>sequence → false belief → consequence → smallest fix</em> (SPEC §4a's form) and file it against the bead that owns the code.</p></section><section id="limits"><h2>9 · What the type system could not see, epic 8 edition</h2><p>Everything below compiled under <code>strict</code>, passed the linter and the first tests, or was rejected at design time by asking what the types could not ask.</p><div class="scroll"><table><tr><th>What went wrong, or would have</th><th>Why</th><th>Fix</th></tr><tr><td>a fast hash for passwords</td><td>a hash is a hash</td><td>scrypt: slow and memory-hard, parameters in the string</td></tr><tr><td>an unknown email answered without hashing</td><td>two branches look alike</td><td>verify against a dummy hash; <code>found &amp;&amp; matches</code></td></tr><tr><td>the first miss cost two hashes</td><td>lazy initialisation looks free</td><td>the dummy warmed in <code>buildApp</code></td></tr><tr><td>a row asking for <code>N = 2^40</code></td><td>a number is a number</td><td>a ceiling on the parameters; scrypt's refusal is a no</td></tr><tr><td><code>é</code> as one code point and as two</td><td>two equal-looking strings</td><td><code>NFKC</code> before hashing</td></tr><tr><td>a sign-in validated like a sign-up</td><td>one body schema is simpler</td><td><code>SignInBody</code> keeps only the caps</td></tr><tr><td>the session token stored as itself</td><td>a string is a string</td><td>its SHA-256, as <code>bytea</code></td></tr><tr><td>a cookie a script could read</td><td>a cookie is a cookie</td><td><code>HttpOnly</code></td></tr><tr><td>a planted cookie becoming a session</td><td>same name, same shape</td><td>a new token on every sign-in</td></tr><tr><td>a sliding expiry writing on every read</td><td>an <code>UPDATE</code> looked harmless</td><td>fixed at sign-in; identity stays a pure read</td></tr><tr><td>a stateless token for the browser</td><td>no table looked simpler</td><td>a row you can delete</td></tr><tr><td><code>POST /session</code> with no CSRF defence</td><td>no body, so no JSON check</td><td><code>SameSite=Strict</code></td></tr><tr><td>an image promoted with <code>NODE_ENV=test</code> accepting the header</td><td>"not production" reads as "safe"</td><td>only the literal <code>development</code></td></tr><tr><td>a name with a right-to-left override</td><td>a string</td><td><code>DisplayName</code> refuses <code>\p{Cf}</code></td></tr><tr><td>a route without a guard</td><td>a handler compiles without one</td><td>the route table test over <code>app.routes</code></td></tr><tr><td>404 to a member</td><td>"not found" felt safer</td><td>403 for members, 404 for strangers</td></tr><tr><td>two owners demoting each other</td><td>READ COMMITTED shows each an owner</td><td>an advisory lock per org</td></tr><tr><td>an editor promoting themselves</td><td>PUT members was an org route</td><td><code>need("owner")</code></td></tr><tr><td>the role in the token</td><td>a claim is a claim</td><td>read from Postgres at every join</td></tr><tr><td><code>mayEdit</code> checked when an op arrives</td><td>queued ops had passed</td><td>checked at the op's turn</td></tr><tr><td>a forged pub/sub message granting a role</td><td>a message is data</td><td>a hint only: the node re-reads</td></tr><tr><td>a missed announcement</td><td>pub/sub keeps nothing</td><td><code>"all"</code> on ready, and a 30 s sweep</td></tr><tr><td>an older role read overwriting a newer</td><td>two awaits, either order</td><td><code>asked</code>/<code>applied</code> numbering</td></tr><tr><td>a token minted before the revoke opening a socket</td><td>a valid signature</td><td>the row read before the upgrade: 401</td></tr><tr><td>a revoke between the read and the registration</td><td>the registry did not have the socket yet</td><td>read again after registering</td></tr><tr><td>a share that made a member</td><td>a flag on the membership row</td><td>a table of its own, never owner</td></tr><tr><td>the audit row after the action</td><td>two awaits look sequential</td><td>one statement (a CTE) or one transaction</td></tr><tr><td>a trail cascading away with its org</td><td>referential integrity</td><td>no foreign keys; the email copied in</td></tr><tr><td><code>set null</code> on a user delete</td><td>looked harmless</td><td>it is an <code>UPDATE</code>; no foreign key</td></tr><tr><td>the app role able to <code>UPDATE</code> the trail</td><td>a blanket grant, default privileges</td><td>revoked on every provisioning, plus a trigger</td></tr><tr><td>a sign-in recorded once, globally</td><td>it belongs to a person</td><td>one row per org</td></tr><tr><td>an instruction rendered as markup</td><td>a string</td><td>text nodes only; the e2e plants <code>onerror</code></td></tr><tr><td>a new <code>AuditAction</code> without a sentence</td><td>a <code>switch</code> with a default</td><td>a <code>Record</code> over the enum</td></tr><tr><td>the same role set again recorded as a change</td><td>an upsert is an upsert</td><td>compare <code>found.role</code> first</td></tr></table></div><p class="note"><strong>The pattern, extended once more:</strong> lesson 7 said types cannot see time or which process is speaking. Epic 8 adds the two that identity turns on: types cannot see <em>who is asking</em> (a stranger's request and a member's are the same TypeScript) and cannot see <em>what a value costs to compute</em> (a fast hash and a slow one have the same signature; a branch that skips the hash returns the same type). Both were answered as before: put the truth in one place (the membership row, the session row, the audit table), read it at the moment of asking, make the cost the same on every path, and write a test that provokes the exact case: the timing, the race, the forgotten guard, the privilege.</p></section>
 
   <section id="drills">
     <h2>Your turn: three drills</h2>
