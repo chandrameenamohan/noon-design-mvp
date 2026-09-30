@@ -43,6 +43,14 @@ function aTree(): Doc {
   return doc;
 }
 
+/**
+ * The document as `documentStore().load` reads it: its `content` and `seq` columns. (The room's idle save that wrote
+ * them was replaced by snapshots in epic 6; the columns stay load's starting point, so the drill writes them directly.)
+ */
+async function saved(doc: Document, tree: Doc): Promise<void> {
+  await ctx.db.rawQuery("update documents set content = $3, seq = 1 where org_id = $1 and id = $2", [doc.orgId, doc.id, JSON.stringify(tree)]);
+}
+
 test("a document nobody has opened yet is the empty page: one file, one export, no import line", async () => {
   const doc = await aDocument("ann@example.com");
   const res = await as("ann@example.com", `/documents/${doc.id}/code`);
@@ -57,7 +65,7 @@ test("a document nobody has opened yet is the empty page: one file, one export, 
 test("the file is byte-for-byte what generate() makes from the SAVED document: what the sandbox runs and epic 5 will push", async () => {
   const doc = await aDocument("ann@example.com");
   const tree = aTree();
-  await ctx.db.db.documentStore().save(doc.orgId, doc.id, tree, 1);
+  await saved(doc, tree);
   const res = await as("ann@example.com", `/documents/${doc.id}/code`);
   expect(res.status).toBe(200);
   const expected = generate(tree, manifest);
@@ -68,7 +76,7 @@ test("the file is byte-for-byte what generate() makes from the SAVED document: w
 test("a document the design system can no longer generate is refused by name, never served half", async () => {
   const doc = await aDocument("ann@example.com");
   const drifted = applyOp(emptyDoc(), { type: "add_node", nodeId: "w1", parentId: "root", index: 0, component: "Widget", props: {} }); // no such component any more
-  await ctx.db.db.documentStore().save(doc.orgId, doc.id, drifted, 1);
+  await saved(doc, drifted);
   const res = await as("ann@example.com", `/documents/${doc.id}/code`);
   expect(res.status).toBe(409);
   expect(await res.json()).toEqual({ error: "not_generated" }); // a NAME: the detail is for the log, never the wire
