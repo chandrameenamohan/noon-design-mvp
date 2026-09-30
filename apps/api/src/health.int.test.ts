@@ -8,8 +8,10 @@ import { TEST_SESSIONS } from "./testing.ts";
 // A real listening server and a real HTTP request: this is what init.sh's smoke test does too.
 let server: RunningServer;
 beforeAll(async () => {
-  // /health must answer without touching the database, so it gets one that cannot be used.
-  server = await startServer({ port: 0, db: {} as Db, identify: sessionIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // port 0 = "any free port", so tests never collide
+  // /health must answer without touching the database, so it gets one that cannot be used, except for E9.6's rate
+  // limit: an unknown caller is charged per address (Db.take) BEFORE the 401, and a take that throws is a closed 500.
+  const db = { take: () => Promise.resolve({ ok: true }) } as unknown as Db;
+  server = await startServer({ port: 0, db, identify: sessionIdentity, sessions: TEST_SESSIONS, enqueue: () => Promise.resolve() }); // port 0 = "any free port", so tests never collide
 });
 afterAll(() => server.close());
 
