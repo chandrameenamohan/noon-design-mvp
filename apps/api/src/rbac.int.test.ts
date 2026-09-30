@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
-import { Document, ErrorBody, Member, Org, Run, Workspace, type Role } from "@noon/contracts";
+import { Document, ErrorBody, Me, Member, Org, Run, Workspace, type Role } from "@noon/contracts";
 import { useTestServer } from "./testing.ts";
 
 // integration:rbac-matrix (E8.2, F24). Every org and document route, as an owner, an editor, a viewer and a
 // stranger: a member without the role gets 403 (they can see the thing), a stranger 404 (F2: never confirm it
-// exists). Reads are open to every member; writes need an editor; roles and usage need an owner. The sync side of
+// exists). Reads are open to every member; writes need an editor; roles, shares and usage need an owner. The sync side of
 // the matrix (a viewer's ops) is apps/sync/src/role-change.int.test.ts.
 const announced: { orgId: string; userId: string }[] = [];
 const ctx = useTestServer({ accessChanged: (change) => { announced.push(change); return Promise.resolve(); } });
@@ -32,6 +32,7 @@ async function world() {
 
 test("every route, every role: reads for every member, writes for editors, roles and usage for owners, 404 for a stranger", async () => {
   const { org, ws, doc, run } = await world();
+  const strangerId = Me.parse((await call("stranger", "GET", "/auth/me")).json).user?.id ?? "";
   // [method, path, body, least role]. Each write is one a viewer could do harm with; the stranger row is implied.
   const routes: [string, string, unknown, Role][] = [
     ["GET", `/orgs/${org.id}`, undefined, "viewer"],
@@ -52,6 +53,9 @@ test("every route, every role: reads for every member, writes for editors, roles
     ["GET", `/documents/${doc.id}/conflict`, undefined, "viewer"],
     ["POST", `/documents/${doc.id}/ship`, undefined, "editor"],
     ["GET", `/documents/${doc.id}/ship`, undefined, "viewer"],
+    // E8.3 (F25): the owner shares with the stranger (after every stranger row) and revokes it again.
+    ["PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "viewer" }, "owner"],
+    ["DELETE", `/documents/${doc.id}/shares/${strangerId}`, undefined, "owner"],
   ];
   const rank: Record<Role, number> = { viewer: 0, editor: 1, owner: 2 };
   // Least privileged first: a denied write must be refused BEFORE it does anything the next row would see.
@@ -66,7 +70,7 @@ test("every route, every role: reads for every member, writes for editors, roles
         expect(status, label).toBe(403);
         expect(ErrorBody.parse(json).error, label).toBe("forbidden");
       } else {
-        expect([200, 201, 409], label).toContain(status);
+        expect([200, 201, 204, 409], label).toContain(status);
       }
     }
   }
@@ -126,4 +130,49 @@ test("a member of org A who owns org B cannot change roles in A through B's stan
   const theirs = Org.parse((await call("viewer", "POST", "/orgs", { name: "Viewer's own" })).json);
   expect((await setRole("viewer", theirs.id, who.stranger, "editor")).status).toBe(200); // their own org: fine
   expect((await setRole("viewer", org.id, who.viewer, "owner")).status).toBe(403); // A: still a viewer there
+});
+
+// E8.3 (F25). A share opens ONE document, at its role, and nothing of the org; revoking it is a 404 on the very next
+// request (the lookup reads the row), so a revoked peer's next /session is refused and it gives up.
+test("an owner shares a document with an outside user: that document's routes at the share's role, nothing of the org; revoked, 404 at once", async () => {
+  const { org, doc, run } = await world();
+  const other = Document.parse((await call("owner", "POST", `/orgs/${org.id}/workspaces/${doc.workspaceId}/documents`, { title: "not shared" })).json);
+  announced.length = 0;
+  const shared = Member.parse((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "viewer" })).json);
+  expect(shared).toMatchObject({ email: who.stranger, role: "viewer" });
+  expect((await call("stranger", "POST", `/documents/${doc.id}/session`)).status).toBe(200);
+  expect((await call("stranger", "GET", `/documents/${doc.id}/runs/${run.id}`)).status).toBe(200);
+  expect((await call("stranger", "POST", `/documents/${doc.id}/ship`)).status).toBe(403); // a viewer's share
+  expect((await call("stranger", "POST", `/documents/${other.id}/session`)).status).toBe(404); // only that document
+  expect((await call("stranger", "GET", `/orgs/${org.id}`)).status).toBe(404); // and never the org
+  expect((await call("stranger", "GET", `/orgs/${org.id}/documents/${doc.id}`)).status).toBe(404);
+  expect(((await call("stranger", "GET", "/orgs")).json as { items: unknown[] }).items.map((o) => Org.parse(o).id)).not.toContain(org.id);
+
+  expect(Member.parse((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "editor" })).json).role).toBe("editor");
+  expect((await call("stranger", "POST", `/documents/${doc.id}/ship`)).status).toBe(201); // editor now
+  expect((await call("stranger", "PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "editor" })).status).toBe(403); // sharing is the owners'
+
+  expect((await call("owner", "DELETE", `/documents/${doc.id}/shares/${shared.userId}`)).status).toBe(204);
+  for (const [method, path] of [["POST", `/documents/${doc.id}/session`], ["GET", `/documents/${doc.id}/runs/${run.id}`], ["GET", `/documents/${doc.id}/ship`]] as const) {
+    const res = await call("stranger", method, path);
+    expect(res.status, `${method} ${path}`).toBe(404);
+    expect(ErrorBody.parse(res.json).error).toBe("not_found");
+  }
+  expect((await call("owner", "DELETE", `/documents/${doc.id}/shares/${shared.userId}`)).status).toBe(404); // nothing left to revoke
+  expect(announced).toEqual([shared.userId, shared.userId, shared.userId].map((userId) => ({ orgId: org.id, userId })));
+});
+
+test("a share is never owner, is for someone who exists, and only an owner of the document's org shares or revokes", async () => {
+  const { doc } = await world();
+  expect((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "owner" })).status).toBe(400);
+  expect((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: `nobody-${tag}@example.com`, role: "viewer" })).status).toBe(404);
+  const shared = Member.parse((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "editor" })).json);
+  for (const as of ["editor", "viewer", "stranger"] as const) {
+    expect((await call(as, "PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "viewer" })).status, as).toBe(403);
+    expect((await call(as, "DELETE", `/documents/${doc.id}/shares/${shared.userId}`)).status, as).toBe(403);
+  }
+  // A member's share lifts them to the higher of the two, and revoking it leaves their org role.
+  expect((await call("viewer", "POST", `/documents/${doc.id}/ship`)).status).toBe(403);
+  expect((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.viewer, role: "editor" })).status).toBe(200);
+  expect((await call("viewer", "POST", `/documents/${doc.id}/ship`)).status).toBe(201);
 });

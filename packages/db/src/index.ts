@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type QueryResultRow } from "pg";
-import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -27,11 +27,14 @@ export type Db = {
   listOrgsFor(userId: string, page?: PageInput): Promise<Page<Org> | undefined>;
   /** The org and this user's role in it, but only if they are a member. "Not a member" and "no such org" look the same. */
   getOrgForMember(orgId: string, userId: string): Promise<{ org: Org; role: Role } | undefined>;
-  /** The document and this user's role in its org, but only if they are a member of it. Used where the path names no org. */
+  /**
+   * The document and this user's role on it, but only if they are a member of its org or it is shared with them
+   * (E8.3: the higher of the two). Used where the path names no org.
+   */
   getDocumentForMember(documentId: string, userId: string): Promise<{ document: Document; role: Role } | undefined>;
   /**
-   * E8.2 (F24): this user's role in `orgId`, if the document is that org's and they are a member of it; undefined
-   * otherwise. The sync server asks it when a peer joins and when an owner changes the user's role.
+   * E8.2 (F24): this user's role on the document, if it is `orgId`'s and they are a member of that org or it is shared
+   * with them (E8.3); undefined otherwise. The sync server asks it when a peer joins and when an access change is announced.
    */
   roleIn(orgId: string, documentId: string, userId: string): Promise<Role | undefined>;
   /** Resolves if the database answers a query, rejects otherwise. */
@@ -159,6 +162,10 @@ type OrgScope = {
    * that email. "last_owner": it would leave the org without an owner. One change at a time per org.
    */
   setMember(input: { email: string; role: Role }): Promise<Member | "no_user" | "last_owner">;
+  /** E8.3 (F25): shares this org's document with the user with this email, or changes their share. Undefined: no such user (or document). */
+  share(input: { documentId: string; email: string; role: ShareRole }): Promise<Member | undefined>;
+  /** E8.3: the share goes. False: there was none. */
+  unshare(documentId: string, userId: string): Promise<boolean>;
   createWorkspace(input: { name: string }): Promise<Workspace>;
   /** Undefined means the cursor is not one this server issued. */
   listWorkspaces(page?: PageInput): Promise<Page<Workspace> | undefined>;
@@ -205,6 +212,16 @@ const WorkspaceRow = z.object({ id: z.string(), org_id: z.string(), name: z.stri
 const DocumentRow = z.object({ id: z.string(), org_id: z.string(), workspace_id: z.string(), title: z.string(), created_at: timestamp }) // content and seq are read only by documentStore()
   .transform((r): Document =>
     Document.parse({ id: r.id, orgId: r.org_id, workspaceId: r.workspace_id, title: r.title, createdAt: r.created_at }));
+
+type ShareRole = z.infer<typeof ShareBody>["role"];
+/**
+ * E8.3: the role of user `$<n>` on document `d`: their role in its org or their share of it, whichever is higher; null
+ * when they have neither. A scalar subquery: still one round trip per request (the E1.4 finding), two primary-key probes.
+ */
+const accessOf = (userParam: string): string =>
+  "(select role from (select role from memberships where org_id = d.org_id and user_id = " + userParam +
+  " union all select role from document_shares where document_id = d.id and user_id = " + userParam +
+  ") a order by array_position(array['viewer', 'editor', 'owner'], role) desc limit 1)";
 
 const MemberRow = z.object({ id: z.string(), email: z.string(), name: z.string(), role: z.string() })
   .transform((r): Member => Member.parse({ userId: r.id, email: r.email, name: r.name, role: r.role }));
@@ -621,12 +638,12 @@ export function createDb({ connectionString, schema }: { connectionString: strin
 
     getDocumentForMember: async (documentId, userId) =>
       isId(documentId) && isId(userId)
-        ? one(z.looseObject({ role: Role }).transform((r) => ({ document: DocumentRow.parse(r), role: r.role })), "select d.*, m.role from documents d join memberships m on m.org_id = d.org_id where d.id = $1 and m.user_id = $2", [documentId, userId])
+        ? one(z.looseObject({ role: Role }).transform((r) => ({ document: DocumentRow.parse(r), role: r.role })), `select * from (select d.*, ${accessOf("$2")} as role from documents d where d.id = $1) x where role is not null`, [documentId, userId])
         : undefined,
 
     roleIn: async (orgId, documentId, userId) =>
       isId(orgId) && isId(documentId) && isId(userId)
-        ? (await one(z.object({ role: Role }), "select m.role from documents d join memberships m on m.org_id = d.org_id where d.org_id = $1 and d.id = $2 and m.user_id = $3", [orgId, documentId, userId]))?.role
+        ? (await one(z.object({ role: Role.nullable() }), `select ${accessOf("$3")} as role from documents d where d.org_id = $1 and d.id = $2`, [orgId, documentId, userId]))?.role ?? undefined
         : undefined,
 
     forOrg(orgId) {
@@ -684,6 +701,20 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             client.release(broken); // after a failure the connection's transaction state is unknown: destroyed
           }
         },
+        share: async ({ documentId, email, role }) => {
+          const input = ShareBody.parse({ email, role });
+          if (!orgExists || !isId(documentId)) return undefined;
+          return one(
+            MemberRow,
+            // insert ... select: a row only when the document is this org's and the user exists.
+            "with s as (insert into document_shares (org_id, document_id, user_id, role) select d.org_id, d.id, u.id, $4 from documents d, users u " +
+              "where d.org_id = $1 and d.id = $2 and u.email = lower($3) on conflict (document_id, user_id) do update set role = excluded.role returning user_id, role) " +
+              "select u.id, u.email, u.name, s.role from s join users u on u.id = s.user_id",
+            [orgId, documentId, input.email, input.role],
+          );
+        },
+        unshare: async (documentId, userId) =>
+          orgExists && isId(documentId) && isId(userId) && (await pool.query("delete from document_shares where org_id = $1 and document_id = $2 and user_id = $3", [orgId, documentId, userId])).rowCount === 1,
         createWorkspace: async ({ name }) => {
           if (!orgExists) throw new Error("cannot create a workspace: invalid org id");
           return exactlyOne(WorkspaceRow, "insert into workspaces (org_id, name) values ($1, $2) returning *", [orgId, Name.parse(name)]);

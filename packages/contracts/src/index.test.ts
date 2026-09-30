@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { HealthResponse, includes, Preview, Role, SandboxUrl, SignUpBody, UsageAmount } from "./index.ts";
+import { HealthResponse, includes, Preview, Role, SandboxUrl, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
 
 const valid = { status: "ok", service: "api" };
 
@@ -73,4 +73,11 @@ test("a sign-up password is 8 to 128 characters and nothing else is demanded of 
 test("an owner may do what an editor may, an editor what a viewer may, and never the other way", () => {
   const allowed = Role.options.flatMap((role) => Role.options.filter((need) => includes(role, need)).map((need) => `${role}>=${need}`));
   expect(allowed.sort()).toEqual(["editor>=editor", "editor>=viewer", "owner>=editor", "owner>=owner", "owner>=viewer", "viewer>=viewer"]);
+});
+
+// F25: a share is a way into one document, never into the org: it can never make someone an owner.
+test("a document is shared at editor or viewer, and never at owner", () => {
+  const share = (role: string) => ShareBody.safeParse({ email: "outside@example.com", role }).success;
+  expect(["editor", "viewer", "owner", ""].map(share)).toEqual([true, true, false, false]);
+  expect(ShareBody.safeParse({ email: "outside@example.com", role: "viewer", orgId: "x" }).success).toBe(false);
 });

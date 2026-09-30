@@ -38,6 +38,8 @@ test("every org and document route declares the role it needs, and they are thes
     "GET /orgs/:orgId/documents/:id": "viewer",
     "GET /orgs/:orgId/usage": "owner",
     "POST /documents/:id/session": "viewer",
+    "PUT /documents/:id/shares": "owner",
+    "DELETE /documents/:id/shares/:userId": "owner",
     "POST /documents/:id/runs": "editor",
     "POST /documents/:id/runs/:runId/cancel": "editor",
     "GET /documents/:id/runs/:runId": "viewer",

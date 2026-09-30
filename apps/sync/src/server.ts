@@ -22,8 +22,9 @@ export type RunningSyncServer = {
   peerCount(documentId: string): number;
   roomCount(): number;
   /**
-   * E8.2 (F24): an owner changed this user's role in this org (or "all": changes may have been missed). Every live
-   * session it concerns reads its role again and keeps to it from its next op. Resolves once they have. Never rejects.
+   * E8.2 (F24): an owner changed this user's role in this org, or a share of one of its documents (E8.3), or "all":
+   * changes may have been missed. Every live session it concerns reads its role again and keeps to it from its next
+   * op; one with no access left is closed (4404). Resolves once they have. Never rejects.
    */
   recheck(change: { orgId: string; userId: string } | "all"): Promise<void>;
 };
@@ -63,14 +64,20 @@ type Options = {
    */
   lease?: { leases: Leases; nodeId: string };
   /**
-   * E8.2 (F24): a user's role in the org, if the document is that org's and they are a member (db.roleIn). Asked
-   * when a peer joins and on every `recheck`: a viewer's ops are refused, and a non-member is closed out. The token
-   * says only who someone is, never what they may do. Without it every peer may edit (tests without a database).
+   * E8.2 (F24): a user's role on the document, if it is that org's and they are a member or it is shared with them
+   * (db.roleIn, E8.3). Asked at the upgrade, when a peer joins and on every `recheck`: a viewer's ops are refused, and
+   * someone with no access is refused a socket (401) or closed out (4404). The token says only who someone is, never
+   * what they may do. Without it every peer may edit (tests without a database).
    */
   roles?: (orgId: string, documentId: string, userId: string) => Promise<Role | undefined>;
+  /**
+   * E8.3 (F25): every live session's role is read again this often, whatever was announced: the backstop for an
+   * announcement the api could not publish (it tries once), so a revoked share cannot stay open for good.
+   */
+  sweepMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 30_000 }: Options): Promise<RunningSyncServer> {
   const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
@@ -94,6 +101,15 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   const beating = lease ? setInterval(beat, lease.leases.ttlMs / 10) : undefined;
   beating?.unref();
   beat();
+  // ponytail: one indexed read per live session per sweep; ceiling: a few thousand sessions a node (a sweep never
+  // overlaps the last one); upgrade: one query for all of a node's (org, document, user) triples.
+  let sweeping = false;
+  const sweeper = roles ? setInterval(() => {
+    if (sweeping) return;
+    sweeping = true;
+    void recheck("all").finally(() => { sweeping = false; });
+  }, sweepMs) : undefined;
+  sweeper?.unref();
 
   const http = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
@@ -115,14 +131,37 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       documentId !== undefined && protocol === PROTOCOL && token !== undefined
         ? verifySessionToken({ token, secrets, documentId, leewaySeconds: TOKEN_LEEWAY_SECONDS })
         : undefined;
+    const refuse = (): void => void socket.end("HTTP/1.1 401 Unauthorized\r\nconnection: close\r\ncontent-length: 0\r\n\r\n");
     if (documentId === undefined || !verified?.ok) {
-      socket.end("HTTP/1.1 401 Unauthorized\r\nconnection: close\r\ncontent-length: 0\r\n\r\n");
+      refuse();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      void serve(ws, documentId, verified.claims);
+    // The http server let go of the socket's errors when it handed it to us; a reset while we ask must not crash the process.
+    socket.on("error", () => undefined);
+    void admits(verified.claims, documentId).then((yes) => {
+      if (closing) socket.destroy(); // shutting down while we asked: the peer reconnects elsewhere
+      else if (!yes) refuse();
+      else wss.handleUpgrade(req, socket, head, (ws) => { void serve(ws, documentId, verified.claims); });
     });
   });
+
+  /**
+   * E8.3 (F25): may the token's holder still open the document? A token lives 60 s: one minted before a revoke (or
+   * before a demotion out of the org) must not open a socket, so a valid signature alone is not enough. Asked BEFORE
+   * the upgrade, so a revoked peer's reconnect is a plain 401, like any other token that is no good. Postgres not
+   * answering is not a no: serve() asks again, and says "try again" (4503). A revoke landing after this read and
+   * before serve() registers the socket is still caught: serve() reads once more, after registering it.
+   * ponytail: two reads per connect; ceiling: none that matters (primary-key probes); upgrade: carry this answer into
+   * serve() with a "changed meanwhile" flag.
+   */
+  async function admits(claims: { userId: string; orgId: string; actor: { kind: "user" | "agent" | "git" } }, documentId: string): Promise<boolean> {
+    if (!roles || claims.actor.kind === "git") return true;
+    try {
+      return (await roles(claims.orgId, documentId, claims.userId)) !== undefined;
+    } catch {
+      return true;
+    }
+  }
 
   /**
    * Takes the document's lease (when there are several nodes), then loads the room. Never rejects.
@@ -524,6 +563,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
         close: async () => {
           closing = true;
           clearInterval(beating);
+          clearInterval(sweeper);
           // FIRST snapshot every open room, while its peers are still connected. Terminating the sockets
           // first (under F8's save) lost everything: their 'close' handlers only run on a later tick, so
           // "nothing pending" was true and the database pool was closed.

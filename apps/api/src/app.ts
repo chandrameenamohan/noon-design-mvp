@@ -14,6 +14,7 @@ import {
   includes,
   PageQuery,
   SetMemberBody,
+  ShareBody,
   SignInBody,
   SignUpBody,
   type Document,
@@ -123,8 +124,9 @@ export type AppDeps = {
    */
   allowAttempt?: (key: string) => Promise<boolean>;
   /**
-   * E8.2 (F24): tells every sync node that this user's role in this org changed (Redis pub/sub), so their live
-   * sessions keep to it within the 10 s F24 allows. A seam like `enqueue`; without Redis in a test, nobody listens.
+   * E8.2 (F24): tells every sync node that this user's role in this org changed, or a share of one of its documents
+   * (E8.3), over Redis pub/sub, so their live sessions keep to it within the 10 s F24 allows. A seam like `enqueue`;
+   * without Redis in a test, nobody listens.
    */
   accessChanged?: (change: { orgId: string; userId: string }) => Promise<void>;
 };
@@ -143,6 +145,15 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
 export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret, signIn = { ttlSeconds: SIGN_IN_TTL_SECONDS, secureCookie: true }, allowAttempt = () => Promise.resolve(true), accessChanged = () => Promise.resolve() }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
   const route = syncRouter({ nodes: sessions.sync, owner, alive });
+  // ponytail: announced once, best effort; ceiling: with Redis away here (but not at the sync nodes, which re-read
+  // everything when their own link comes back) open sessions keep the old access until the sync nodes' sweep (30 s),
+  // or until they reconnect; upgrade: an outbox row the api retries. REST routes, /session and the sync upgrade read
+  // the access on every request, so they are never behind.
+  const announce = async (c: Context, change: { orgId: string; userId: string }): Promise<void> => {
+    await accessChanged(change).catch((err: unknown) => {
+      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `access change not announced: ${describeError(err)}` })}\n`);
+    });
+  };
   // Paid for now, not by the first sign-in with an unknown email (whose extra hash would be a timing tell).
   dummyHash().catch(() => undefined);
 
@@ -273,12 +284,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     const member = await c.var.scope.setMember(await body(c, SetMemberBody));
     if (member === "no_user") return notFound(c);
     if (member === "last_owner") return fail(c, 409, "last_owner");
-    // ponytail: announced once, best effort; ceiling: with Redis away here (but not at the sync nodes, which re-read
-    // everything when their own link comes back) open sessions keep the old role until they reconnect; upgrade: an
-    // outbox row the api retries. REST routes read the role on every request, so they are never behind.
-    await accessChanged({ orgId: c.var.org.id, userId: member.userId }).catch((err: unknown) => {
-      process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `role change not announced: ${describeError(err)}` })}\n`);
-    });
+    await announce(c, { orgId: c.var.org.id, userId: member.userId });
     return c.json(member);
   });
 
@@ -319,8 +325,9 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
 
   app.route("/orgs/:orgId", org);
 
-  // Everything under /documents/:id: the path names no org, so the lookup itself is membership-filtered, and the
-  // same row carries the caller's role for each route's `need` (E8.2). Not a member: 404, as for an org.
+  // Everything under /documents/:id: the path names no org, so the lookup itself is access-filtered (a member of the
+  // org, or someone the document is shared with, E8.3), and the same row carries the caller's role for each route's
+  // `need` (E8.2). Neither: 404, as for an org. So a revoked share's next /session is a 404, and its peer gives up.
   const document = new Hono<{ Variables: { user: User; doc: Document; role: Role } }>();
   document.use(async (c, next) => {
     const found = await db.getDocumentForMember(c.req.param("id") ?? "", c.var.user.id);
@@ -356,6 +363,23 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
       token,
       expiresAt: new Date((now + sessions.ttlSeconds) * 1000).toISOString(),
     } satisfies SessionResponse);
+  });
+
+  // F25: an owner of the document's org shares it with someone outside the org (or changes the share), and revokes it.
+  // Committed BEFORE it is announced, like a role change: every sync node re-reads that user's live sessions, and a
+  // revoked one is closed. A token minted before the revoke is refused at the upgrade, which reads the row too.
+  document.put("/shares", need("owner"), async (c) => {
+    const { email, role } = await body(c, ShareBody);
+    const member = await db.forOrg(c.var.doc.orgId).share({ documentId: c.var.doc.id, email, role });
+    if (!member) return notFound(c); // nobody has that email (the api has no email to invite with)
+    await announce(c, { orgId: c.var.doc.orgId, userId: member.userId });
+    return c.json(member);
+  });
+  document.delete("/shares/:userId", need("owner"), async (c) => {
+    const userId = c.req.param("userId");
+    if (!(await db.forOrg(c.var.doc.orgId).unshare(c.var.doc.id, userId))) return notFound(c);
+    await announce(c, { orgId: c.var.doc.orgId, userId });
+    return c.body(null, 204);
   });
 
   // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look. It edits the

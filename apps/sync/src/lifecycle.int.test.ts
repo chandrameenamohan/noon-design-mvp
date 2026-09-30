@@ -4,21 +4,12 @@ import WebSocket from "ws";
 import type { Op } from "@noon/contracts";
 import { ROOT_ID } from "@noon/doc-model";
 import { signSessionToken } from "@noon/session-token";
-import { connect, TEST_ORG, TEST_SECRET, until, useSyncServer } from "./testing.ts";
+import { connect, TEST_ORG, TEST_SECRET, until, upgradeStatus, useSyncServer } from "./testing.ts";
 
 const HEARTBEAT_MS = 150;
 // This file floods on purpose (a stalled reader, a full backlog): the op budget of E2.9 is lifted so that it tests what it means to test.
 const ctx = useSyncServer({ heartbeatMs: HEARTBEAT_MS, maxBufferedBytes: 1024 * 1024, rate: { perSecond: 1_000_000, burst: 1_000_000 } });
 const add = (nodeId: string, props: Record<string, string> = {}): Op => ({ type: "add_node", nodeId, parentId: ROOT_ID, index: 99, component: "Text", props: { value: "x", ...props } });
-
-function upgradeStatus(url: string, protocols: string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, protocols);
-    socket.on("unexpected-response", (_req, res) => { resolve(res.statusCode ?? 0); });
-    socket.on("open", () => { socket.close(); reject(new Error(`opened: ${url}`)); });
-    socket.on("error", () => undefined);
-  });
-}
 
 test("every way a token can be wrong is an HTTP 401 at the upgrade, and no WebSocket is ever opened", async () => {
   const documentId = randomUUID();

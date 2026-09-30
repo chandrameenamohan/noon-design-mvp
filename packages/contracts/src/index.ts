@@ -66,6 +66,11 @@ export const CreateWorkspaceBody = z.strictObject({ name: Name });
 export const CreateDocumentBody = z.strictObject({ title: Name });
 /** PUT /orgs/:orgId/members: makes the user with this email a member at `role`, or changes their role. Owners only. */
 export const SetMemberBody = z.strictObject({ email: User.shape.email, role: Role });
+/**
+ * PUT /documents/:id/shares (F25): shares ONE document with the user with this email, or changes their share. Never
+ * `owner`: a share lets someone work on a document, never run the org. Owners of the document's org only.
+ */
+export const ShareBody = z.strictObject({ email: User.shape.email, role: z.enum(["editor", "viewer"]) });
 
 // --- AI runs (F9) ----------------------------------------------------------------
 /** Newlines and tabs are fine in an instruction; other control characters are not (jsonb cannot hold NUL). */

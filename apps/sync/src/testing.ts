@@ -52,6 +52,16 @@ export async function testSnapshots(): Promise<SnapshotStore> {
   return store;
 }
 
+/** The HTTP status an upgrade is answered with, when it is refused. Rejects if a WebSocket opens instead. */
+export function upgradeStatus(url: string, protocols: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url, protocols);
+    socket.on("unexpected-response", (_req, res) => { resolve(res.statusCode ?? 0); });
+    socket.on("open", () => { socket.close(); reject(new Error(`opened: ${url}`)); });
+    socket.on("error", () => undefined);
+  });
+}
+
 /** A real sync server on a free port for one test file. */
 export function useSyncServer(options: Omit<Parameters<typeof startSyncServer>[0], "port" | "secrets"> = {}): { readonly server: RunningSyncServer } {
   let server: RunningSyncServer | undefined;
