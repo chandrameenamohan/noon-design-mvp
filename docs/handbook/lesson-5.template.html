@@ -1,0 +1,111 @@
+<title>TypeScript Lesson Five</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 to 5 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+/* Lesson 5: the verification status is a fact the reader must not miss, so it is red-bordered, not accent. */
+.status { border: 1px solid var(--bad); background: var(--bad-wash); padding: 12px 16px; margin: 24px 0; font-size: 0.95rem; }
+.status p { margin: 0 0 8px; max-width: none; } .status p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 5 · Epic 5</p>
+  <h1>The loop closes: a push becomes ops, a ship becomes a pull request</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, how a webhook that is delivered at most once becomes an event that is worked exactly once, why the diff between an engineer's push and the open document has to be three-way and what happens when it is not, how a job is made idempotent by choosing the right predicate for a unique index, why a commit is recorded before it is pushed, and how a preview that anyone with a link could open was put behind a token without a second image; and you can point at the line of code for every claim.</p>
+
+  <div class="status">
+    <p><strong>Verification status, honestly.</strong> Every commit in this chapter passed lint, the type checker and the unit tests. The integration suites (<span class="mono">webhook</span>, <span class="mono">git</span>, <span class="mono">push</span>, <span class="mono">ship</span>, <span class="mono">gitea</span>, <span class="mono">sandbox-proxy</span>, <span class="mono">preview-proxy</span>) and the three e2e specs (<span class="mono">push</span>, <span class="mono">conflict</span>, <span class="mono">ship</span>) are written and committed and <em>have not been run</em>: the host was too loaded to run Docker suites beside other work, and the dev stack on it predates Gitea. They run on <span class="mono">build/epics</span> before anything merges to <span class="mono">main</span>. Where this page says "measured", it was measured in a learning test or an earlier epic; where it says "the test asserts", the test exists and is unrun. Section 10 is the by-hand demo to run first.</p>
+  </div>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what is committed. It is long: one section a day is a fine pace. Sections 3, 5, 6 and 8 are the ones an architect interview will dig into; section 2 is the one a security review will.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# now also Gitea on 127.0.0.1:3002, worker-git, worker-ship; the seed pushed, the hook installed<br>pnpm exec vitest run packages/codegen apps/api/src/webhook.test.ts apps/worker/src/push-ops.test.ts&nbsp;&nbsp;# the pure halves: parse, the signature, the three-way diff<br>docker compose logs -f worker-git&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# one JSON line per page a push touched: applied, conflict, or skipped</p>
+    <p>Try it, once the stack is up: section 10 walks the loop by hand, push to canvas and Ship to pull request, with the exact commands and what each should show.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-5/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-5/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend a type, end to end.</strong> The banner says what was pushed and why it was refused, and not by whom. Gitea's payload carries <code>pusher.login</code>. Carry it from the webhook to the banner: the reading (<code>PushReading</code>'s event gains <code>pusher</code>, validated, dropped rather than fatal when strange), a migration (<code>pusher</code> on <code>git_events</code> and <code>document_conflicts</code>, with a check), the store (<code>GitEvent</code>, <code>record</code>, <code>recordConflict</code>, <code>ConflictRow</code>), the <code>Conflict</code> contract (a <code>strictObject</code>: the api cannot even parse the row until you do), the route, <code>keepConflict</code>, and <code>conflictWords</code> (<code>who</code>). <span class="mono">make check</span> must stay green: the type checker will name every place a <code>Conflict</code> is built without a pusher, and that list is the drill.</p>
+      <p>Predict first: a reconcile finds a push with no delivery. What does the banner say about who pushed, and why must that not be an error?</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-5/d2-three-way/push-ops.ts</span> is "a push becomes ops" cut down to adds, props and removes, with one bug from this chapter planted in it. Its test builds the section 6 case: canvas edits since the file was generated, and an engineer's push from the old file. Read the failing assertion and say, before you open the code, whose work got undone. The fix changes one line.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. The webhook already dedupes on <code>X-Gitea-Delivery</code>. Why is there a second unique key on <code>(ref, after_sha)</code>, and why does dedupe live in Postgres rather than in the api?</summary>
+        <p>Two reasons for the second key. First, the delivery id is a header and the HMAC signs only the body, so anyone who captured one delivery can replay the body under a made-up id and pass every check; a dedupe on the id alone is not a dedupe. Second, Gitea never retries a failed delivery, so the git peer reconciles its mirror on a timer and when a document is opened, and a reconcile has no delivery id at all. The reconcile and the webhook must meet somewhere, and <code>(branch, commit)</code> is the content they both know. It lives in Postgres because two doors can arrive in the same instant: a "select, then insert" in the api would let both pass, while <code>insert ... on conflict do nothing returning id</code> is one statement that Postgres serialises, and <code>rowCount</code> tells the caller who won. The test sends ten copies at once and expects one 202. The named ceiling: a branch force-pushed <code>A → B → A</code> reads as known; the upgrade is a key on <code>(ref, before, after)</code>.</p></details>
+      <details class="recall"><summary>2. The git peer could write ops into Postgres directly; it is a trusted process on the compose network. Why does it instead open a WebSocket to our own sync server and submit ops like a browser tab? And why is the diff three-way?</summary>
+        <p>Because keystone 2 says one write path, and everything epic 2 built hangs off it: the room orders ops and assigns <code>seq</code>, checks each op against the tree as it is <em>now</em>, charges the actor's budget, relays to the other peers, and (epic 6) journals for recovery. A second writer would have to reimplement all of that or bypass it, and either way two tabs and a push would no longer converge by one rule. Going through <code>peer-client</code> also means the room can refuse the git peer's ops one by one, exactly as it refuses a tab's, and every op is stamped <code>actor.kind = "git"</code> with the commit as <code>runId</code>, which is what the canvas shows and the e2e asserts. The diff is three-way because the engineer started from a file generated at some past moment, and the canvas has edited since. Diffing the pushed file against the document treats every one of those canvas edits as something the engineer reverted (drill 2 makes you watch it happen). Diffing base against target, and replaying onto the current document with each op tried on a copy first, sends only what the engineer changed, and lets a remove on the canvas beat an edit in the push, the same rule the room applies to two tabs.</p></details>
+      <details class="recall"><summary>3. "One unfinished sandbox job per document" was the right index in epic 4. Ship's index is "one <em>queued</em> ship per document". Why the different predicate, and why does Ship record its commit on the job <em>before</em> pushing it?</summary>
+        <p>Because idempotence is a property of a key, and the key must be chosen from what the operation reads and when. A sandbox job reads the document continuously for as long as it runs, so a second one would be a duplicate at any point in its life: "unfinished" is right. A ship reads the document once, at the start, and then pushes what it read. A press while one runs must therefore become a <em>second</em> job, or the edit that prompted the press would be folded into a ship that already read the older document and would never ship. Only the waiting one is unique, so twenty presses at once make one job and a press during a run makes the next. Two ships running at once are safe without a lock because git refuses a push that is not a fast-forward (the loser builds again on top, three times, then <code>branch_busy</code>) and Gitea keeps one open pull request per branch (409, and the loser finds it by <code>head.ref</code>). The commit is recorded before the push because Ship's push comes back through the webhook like anyone's: the git peer asks "did Ship make this commit?" before it reads or opens anything, and if the answer were written after the push, the webhook could arrive first, diff Ship's page against the room, and undo a canvas edit made while the ship ran.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the two doors a push can come through and the one place they meet. Then name the three documents in the three-way diff and what each one is. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>Two doors: the api's <code>POST /webhooks/gitea</code> (HMAC over the raw bytes, then one row with the delivery id), and the git peer's reconcile of its bare mirror (on a 30 s timer and when a document is opened; a row with no delivery id). They meet at <code>git_events</code>'s unique key on <code>(ref, after_sha)</code>, and <code>on conflict do nothing</code> makes the second arrival a duplicate whichever it was. Three documents: <em>base</em>, the page at the commit before the push (what the engineer started from); <em>target</em>, the pushed page; <em>current</em>, the room's confirmed document as it is now. The ops are the base-to-target changes, each tried on a copy of current and sent only if it changes something.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. Gitea signs the webhook body. What exactly does the api compute the HMAC over, and why?</p>
+      <button id="q1a" data-correct>The raw request bytes, before any parsing: a parse-and-reserialise would verify something Gitea never sent, and one byte of whitespace is another body</button><button id="q1b">The parsed JSON, re-serialised with sorted keys</button><button id="q1c">The body plus the <code>X-Gitea-Delivery</code> header</button><button id="q1d">The <code>ref</code>, <code>before</code> and <code>after</code> fields only</button>
+      <p class="why" hidden>The header is not covered by the signature at all, which is why a replayed body under a fresh delivery id needs the second unique key.</p></div>
+    <div class="quiz"><p class="q">2. Before comparing the signature, the api checks the header against <code>/^[0-9a-f]{64}$/</code>. Why is the regex there?</p>
+      <button id="q2a" data-correct><code>timingSafeEqual</code> throws on buffers of different lengths, so the length is fixed first; and a malformed header is refused before any compare</button><button id="q2b">To reject the <code>sha256=</code> prefix GitHub uses</button><button id="q2c">Because <code>Buffer.from(hex)</code> throws on odd lengths</button><button id="q2d">To make the compare faster</button>
+      <p class="why" hidden>The same two lines guard the sandbox proxy's token: a regex fixes the length, then a constant-time compare.</p></div>
+    <div class="quiz"><p class="q">3. Gitea never retries a failed webhook delivery. What is the second door, and when does it open?</p>
+      <button id="q3a" data-correct>The git peer fetches its bare mirror and records every branch whose commit is not the newest one recorded: every 30 s, and when a document is opened (a one-row flag the peer takes BEFORE fetching)</button><button id="q3b">The api asks Gitea to redeliver</button><button id="q3c">The canvas polls Gitea's API for new commits</button><button id="q3d">A cron job replays the webhook log</button>
+      <p class="why" hidden>Taking the flag before the fetch means an open that arrives during the fetch sets it again and is not lost. The two doors meet at <code>(ref, after_sha)</code>.</p></div>
+    <div class="quiz"><p class="q">4. A commit contains a symlink at <code>src/pages/noon-&lt;id&gt;.tsx</code> pointing at <code>/proc/self/environ</code>. What does the git peer do?</p>
+      <button id="q4a" data-correct>Opens the page with <code>O_NOFOLLOW</code>, gets <code>ELOOP</code>, and refuses it as <code>not_a_file</code>: a conflict the banner shows, and nothing outside the worktree is read</button><button id="q4b">Reads it: the worktree is a checkout of trusted repository content</button><button id="q4c">Follows the link but only inside the container</button><button id="q4d">Refuses every commit containing any symlink</button>
+      <p class="why" hidden>The worker's environment holds the Gitea token. <code>readFile</code> follows links; <code>open(O_NOFOLLOW)</code> does not, and <code>stat().isFile()</code> refuses a directory (a submodule).</p></div>
+    <div class="quiz"><p class="q">5. The canvas renamed node A after the file was generated; the engineer's push, from the old file, relabels B. What does a two-way diff (pushed file against the document) send, and what does the three-way diff send?</p>
+      <button id="q5a" data-correct>Two-way: relabel B AND rename A back, undoing the canvas. Three-way (base → target, replayed on current): relabel B only</button><button id="q5b">Both send relabel B only; the difference is performance</button><button id="q5c">Two-way sends nothing; three-way sends both</button><button id="q5d">Both refuse the push as a conflict</button>
+      <p class="why" hidden>Drill 2 plants the two-way version. The fix is one expression: what <code>from</code> is.</p></div>
+    <div class="quiz"><p class="q">6. Why does Ship record its commit on the job row BEFORE pushing it to Gitea?</p>
+      <button id="q6a" data-correct>Ship's push comes back through the webhook like anyone's; the git peer skips a commit Ship made, and if the record came after the push the webhook could win the race and diff Ship's page against the room, undoing a canvas edit made during the ship</button><button id="q6b">So the canvas can show the commit hash while the push is in flight</button><button id="q6c">Because Postgres requires the output before the job can finish</button><button id="q6d">To let a second ship reuse the commit</button>
+      <p class="why" hidden>The order is the whole fix. The integration test asserts the first reported output is <code>{ commit, pr: null }</code>, before the push.</p></div>
+    <div class="quiz"><p class="q">7. Ship's unique index is on <code>queue = 'ship' and status = 'queued'</code>, not on "unfinished" like the sandbox job. Why?</p>
+      <button id="q7a" data-correct>A ship reads the document once, at start; a press while one runs must queue a NEXT ship that reads afresh, or the edit that prompted the press would never ship. Only the waiting one coalesces presses</button><button id="q7b">Postgres cannot index on two status values</button><button id="q7c">Because two ships running at once would corrupt the branch</button><button id="q7d">To let the canvas cancel a queued ship</button>
+      <p class="why" hidden>Two ships at once are safe: a push is never forced (the loser builds again on top), and Gitea's 409 is answered by finding the open pull request by <code>head.ref</code>.</p></div>
+    <div class="quiz"><p class="q">8. Every sandbox is on its own <code>--internal</code> Docker network. How does the canvas reach a preview, and how does the sandbox get its clone?</p>
+      <button id="q8a" data-correct>Through the pool's proxy, the only published port, which forwards <code>/preview/&lt;doc&gt;/&lt;nonce&gt;.&lt;hmac&gt;/</code> to the right container after checking the token; the clone arrives as a git bundle the worker fetched and wrote in by <code>docker exec</code></button><button id="q8b">Docker publishes the sandbox's port anyway; the sandbox clones from Gitea over the compose network</button><button id="q8c">The canvas connects to the container's IP directly</button><button id="q8d">The proxy has a route to Gitea and the sandbox clones through it</button>
+      <p class="why" hidden>Measured: an internal-only container gets no published port. A proxy route to Gitea was rejected: customer code would reach every repo the token reads.</p></div>
+  </section>
+
+  <footer>Next: Lesson 6, after epic 6. Durability: the op journal and snapshots, so a sync node killed mid-edit loses no acknowledged op and duplicates none; and the id an engineer brings back is refused from the journal, not from <code>git log</code>.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
