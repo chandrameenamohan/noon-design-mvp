@@ -227,6 +227,15 @@ test("close() right after connectPeer() wins: the connection that had not starte
   expect(peer.status).toBe("closed");
 });
 
+test("a peer just made is connecting, not closed: 'closed' means ended for good, with a reason", async () => {
+  // Its first open() is a microtask away. A caller that waited for "closed" and then read closedBecause got undefined.
+  const peer = connectPeer(options(fakeNet(() => undefined), { session: () => Promise.resolve(null) }));
+  expect(peer.status).toBe("connecting");
+  expect(peer.closedBecause).toBeUndefined();
+  await until(() => peer.status === "closed", "the session is refused");
+  expect(peer.closedBecause).toBe("no_session");
+});
+
 // --- presence ------------------------------------------------------------------------------------
 const ada = { peerId: "p7", actor: { kind: "user", id: "u-ada" }, name: "Ada", cursor: { x: 0.5, y: 0.5 }, selection: null } as const;
 const framesOf = (socket: FakeSocket | undefined, type: string): Record<string, unknown>[] => (socket?.sent ?? []).map((f) => JSON.parse(f) as Record<string, unknown>).filter((f) => f["type"] === type);

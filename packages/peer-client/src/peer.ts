@@ -292,7 +292,9 @@ export function connectPeer({ manifest, session, onChange, onRejected, onOp, onS
   return {
     /** What the user sees: confirmed edits plus our own unconfirmed ones. Read only. */
     get doc(): Doc { return replica.doc; },
-    get status(): PeerStatus { return status; },
+    // Before the first open() (a microtask away) the variable says "closed" so that the first onStatus is
+    // "connecting"; a caller must never see that: "closed" means ended for good, with closedBecause set.
+    get status(): PeerStatus { return status === "closed" && closedBecause === undefined ? "connecting" : status; },
     /** The room cannot save edits right now (its storage is down): submit() refuses, and edits already made wait. */
     get readOnly(): boolean { return readOnly; },
     /** Why the peer ended for good: a close code, "protocol", "no_session" or "closed_by_caller". */
