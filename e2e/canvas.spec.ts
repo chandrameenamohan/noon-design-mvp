@@ -16,11 +16,13 @@ async function open(browser: Browser, url: string, before?: (page: Page) => void
 /**
  * The tree as the page shows it: nested [component, children]. Two pages that agree print the same thing.
  * A node's children are the wrappers whose nearest wrapper ancestor it is: the real component sits in between (E10.2).
+ * A canvas node carries data-component; a layers row (E10.3) carries data-node-id too and comes first in the page,
+ * so every selector here names the canvas's nodes, not "the first element with that id".
  */
 const treeOf = (page: Page): Promise<string> =>
   page.evaluate(() => {
-    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-node-id"), child.getAttribute("data-component"), walk(child)]);
-    const root = document.querySelector("[data-node-id=root]");
+    const walk = (el: Element): unknown => [...el.querySelectorAll("[data-node-id][data-component]")].filter((child) => child.parentElement?.closest("[data-node-id]") === el).map((child) => [child.getAttribute("data-node-id"), child.getAttribute("data-component"), walk(child)]);
+    const root = document.querySelector("[data-node-id=root][data-component]");
     return JSON.stringify(root ? walk(root) : "no root");
   });
 
@@ -61,7 +63,7 @@ test("a node added in one browser appears in the other; p95 under 200 ms over 25
     await from.getByRole("option", { name: i % 3 === 0 ? "Text" : "Stack", exact: true }).click();
     const clicked = Date.now();
     // The peer's own clock when its DOM first held the node, without Playwright's trip back to the test.
-    const seen = await to.waitForFunction((count) => document.querySelectorAll("[data-node-id]:not([data-node-id=root])").length >= count && Date.now(), i, { polling: "raf" });
+    const seen = await to.waitForFunction((count) => document.querySelectorAll("[data-node-id][data-component]:not([data-node-id=root])").length >= count && Date.now(), i, { polling: "raf" });
     edits.push({ i, from, to, started, clicked, rendered: Number(await seen.jsonValue()), done: Date.now() });
   }
   const latencies = edits.map((edit) => edit.done - edit.started);
