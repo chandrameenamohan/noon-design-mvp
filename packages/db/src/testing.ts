@@ -16,6 +16,8 @@ export type TestDb = {
   db: Db;
   /** An org owned by a throwaway user, for tests that are not about ownership. */
   createOrg(name: string): Promise<Org>;
+  /** A document in a fresh org of that name, for tests about one document. */
+  createDocument(orgName: string): Promise<{ id: string; orgId: string }>;
   schema: string;
   /** Raw SQL, for proving what the DATABASE refuses. Production code has no such door. */
   rawQuery(sql: string, params?: unknown[]): Promise<unknown>;
@@ -42,12 +44,20 @@ export async function createTestDb({ migrate = true }: { migrate?: boolean } = {
     throw err;
   }
 
+  async function createOrg(name: string): Promise<Org> {
+    const owner = await db.upsertUser({ email: "owner@example.com", name: "Owner" });
+    return db.createOrg({ name, ownerId: owner.id });
+  }
   return {
     db,
     schema,
-    async createOrg(name) {
-      const owner = await db.upsertUser({ email: "owner@example.com", name: "Owner" });
-      return db.createOrg({ name, ownerId: owner.id });
+    createOrg,
+    async createDocument(orgName) {
+      const org = await createOrg(orgName);
+      const ws = await db.forOrg(org.id).createWorkspace({ name: "ws" });
+      const doc = await db.forOrg(org.id).createDocument({ workspaceId: ws.id, title: "Checkout" });
+      if (!doc) throw new Error("no document");
+      return { id: doc.id, orgId: org.id };
     },
     rawQuery: (sql, params = []) => admin.query(sql, params),
     async columnsByTable() {

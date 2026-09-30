@@ -6,17 +6,47 @@ import type { DocumentStore } from "@noon/db";
 import { signSessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
+import { s3Snapshots, snapshotKey, type SnapshotStore } from "./snapshots.ts";
 
 export const TEST_SECRET = "test-only-session-secret-0123456789abcdef";
 export const TEST_ORG = "22222222-2222-4222-8222-222222222222";
 
 /** The journal half of a fake DocumentStore, for tests that are not about the journal: it keeps nothing. */
-export const NO_JOURNAL: Pick<DocumentStore, "append" | "find" | "everAdded" | "since"> = {
+export const NO_JOURNAL: Pick<DocumentStore, "append" | "find" | "everAdded" | "since" | "snapshotted"> = {
   append: () => Promise.resolve(undefined),
   find: () => Promise.resolve(undefined),
   everAdded: () => Promise.resolve(false),
   since: () => Promise.resolve([]),
+  snapshotted: () => Promise.resolve(),
 };
+
+/** Snapshots in memory, by key. `fail`: every put refuses, as an unreachable MinIO would. */
+export function memorySnapshots(): SnapshotStore & { objects: Map<string, Uint8Array>; fail: boolean } {
+  const objects = new Map<string, Uint8Array>();
+  return {
+    objects,
+    fail: false,
+    put(orgId, documentId, seq, body) {
+      if (this.fail) return Promise.reject(new Error("minio down"));
+      const key = snapshotKey(orgId, documentId, seq);
+      if (!objects.has(key)) objects.set(key, body); // IfNoneMatch
+      return Promise.resolve();
+    },
+    get: (orgId, documentId, seq) => Promise.resolve(objects.get(snapshotKey(orgId, documentId, seq))),
+  };
+}
+
+/**
+ * The compose stack's MinIO (./init.sh), in a bucket of the tests' own. Every key names a random document,
+ * so test files never see each other's snapshots.
+ */
+export async function testSnapshots(): Promise<SnapshotStore> {
+  const password = process.env["MINIO_PASSWORD"];
+  if (!password) throw new Error("MINIO_PASSWORD is not set: run ./init.sh (it writes .env and starts MinIO)");
+  const store = s3Snapshots({ endpoint: `http://localhost:${process.env["MINIO_PORT"] ?? "9005"}`, accessKeyId: "noon", secretAccessKey: password, bucket: "test-snapshots" });
+  await store.ensureBucket();
+  return store;
+}
 
 /** A real sync server on a free port for one test file. */
 export function useSyncServer(options: Omit<Parameters<typeof startSyncServer>[0], "port" | "secrets"> = {}): { readonly server: RunningSyncServer } {

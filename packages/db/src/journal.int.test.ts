@@ -13,13 +13,7 @@ afterAll(() => t.drop());
 const add = (nodeId: string): Op => ({ type: "add_node", nodeId, parentId: "root", index: 0, component: "Stack", props: {} });
 const row = (seq: number, op: Op, actorId = "u1"): SequencedOp => ({ seq, opId: randomUUID(), actor: { kind: "agent", id: actorId, runId: "run-1" }, op });
 
-async function aDocument(): Promise<{ id: string; orgId: string }> {
-  const org = await t.createOrg("Journal");
-  const ws = await t.db.forOrg(org.id).createWorkspace({ name: "ws" });
-  const doc = await t.db.forOrg(org.id).createDocument({ workspaceId: ws.id, title: "Checkout" });
-  if (!doc) throw new Error("no document");
-  return { id: doc.id, orgId: org.id };
-}
+const aDocument = () => t.createDocument("Journal");
 
 test("a sender's opId again is answered with the ORIGINAL row; a taken seq is refused by name", async () => {
   const store = t.db.documentStore();

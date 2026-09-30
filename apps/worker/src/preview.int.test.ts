@@ -13,7 +13,7 @@ import { buildImage, DOCKER, docker, IMAGE, makeTestSeed, removePool, TEST_PREVI
 // E4.2b: the `sandbox` queue's handler. The REAL sync server, the REAL peer-client, a REAL container.
 const ctx = useSyncServer();
 // A sync server that knows no document: every peer, the handler's included, is closed for good (4404).
-const nowhere = useSyncServer({ store: { ...NO_JOURNAL, load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
+const nowhere = useSyncServer({ store: { ...NO_JOURNAL, load: () => Promise.resolve(undefined) } });
 const sandbox: Omit<SandboxOptions, "signal"> = { image: IMAGE, docker: DOCKER, pool: testPool(), previewKey: TEST_PREVIEW_KEY, proxyPort: 24000, seed: TEST_SEED };
 const made: string[] = [];
 const job = (createdBy: string | undefined = randomUUID()): Job => {

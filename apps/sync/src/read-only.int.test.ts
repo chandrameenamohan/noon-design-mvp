@@ -21,8 +21,8 @@ function switchableStore() {
   const gate = <T>(work: () => T): Promise<T> =>
     state.hang ? new Promise<T>(() => undefined) : state.down ? Promise.reject(new Error("connection refused")) : Promise.resolve(work());
   const store: DocumentStore = {
-    load: () => gate(() => ({ doc: undefined, seq: 0 })),
-    save: () => gate(() => undefined),
+    load: () => gate(() => ({ doc: undefined, seq: 0, snapshotSeq: 0 })),
+    snapshotted: () => gate(() => undefined),
     append: (_org, _doc, op) => gate(() => {
       const original = rows.find((r) => r.actor.id === op.actor.id && r.opId === op.opId);
       if (original) return original;

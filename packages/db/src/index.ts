@@ -32,10 +32,15 @@ export type Db = {
   close(): Promise<void>;
 };
 
-/** `load` gives undefined when the document does not exist IN THAT ORG; `doc` is undefined when nothing was saved yet. */
+/**
+ * `load` gives undefined when the document does not exist IN THAT ORG. `snapshotSeq` is the newest snapshot
+ * in MinIO (0: none yet). `doc` and `seq` are what F8's idle save wrote before E6.2 (`doc` undefined: nothing):
+ * a document opens from whichever of the two is newer.
+ */
 export type DocumentStore = {
-  load(orgId: string, documentId: string): Promise<{ doc: Doc | undefined; seq: number } | undefined>;
-  save(orgId: string, documentId: string, doc: Doc, seq: number): Promise<void>;
+  load(orgId: string, documentId: string): Promise<{ doc: Doc | undefined; seq: number; snapshotSeq: number } | undefined>;
+  /** E6.2: a snapshot at `seq` is stored. Called only AFTER the object is written; never moves backwards. */
+  snapshotted(orgId: string, documentId: string, seq: number): Promise<void>;
   /**
    * E6.1a: journals an accepted op, BEFORE anyone hears of it. Undefined: written. An op: this sender's
    * opId was journaled already, and that is what it became (a resend the room had forgotten). Rejects
@@ -389,17 +394,17 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         const row = await one(
           // seq is a bigint, which the driver hands over as a STRING (learning-tests/postgres): convert
           // once, here. A document would need nine quadrillion ops to leave Number's safe range.
-          z.object({ content: z.unknown(), seq: z.string().regex(/^\d+$/).transform(Number) }),
-          "select content, seq from documents where org_id = $1 and id = $2",
+          z.object({ content: z.unknown(), seq: count, snapshot_seq: count }),
+          "select content, seq, snapshot_seq from documents where org_id = $1 and id = $2",
           [orgId, documentId],
         );
         if (!row) return undefined;
-        return { doc: row.content === null ? undefined : Doc.parse(row.content), seq: row.seq };
+        return { doc: row.content === null ? undefined : Doc.parse(row.content), seq: row.seq, snapshotSeq: row.snapshot_seq };
       },
-      async save(orgId, documentId, doc, seq) {
+      async snapshotted(orgId, documentId, seq) {
         if (!isId(orgId) || !isId(documentId)) return;
-        // `seq <= $4`: a late save from an older room must never overwrite a newer document.
-        await pool.query("update documents set content = $3, seq = $4 where org_id = $1 and id = $2 and seq <= $4", [orgId, documentId, JSON.stringify(doc), seq]);
+        // `< $3`: a slow write of an older snapshot must never point the document back at it.
+        await pool.query("update documents set snapshot_seq = $3 where org_id = $1 and id = $2 and snapshot_seq < $3", [orgId, documentId, seq]);
       },
       async append(orgId, documentId, { seq, opId, actor, op }) {
         if (!isId(orgId) || !isId(documentId)) throw new Error("journal: not a document id");
@@ -430,8 +435,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         const found = await pool.query("select 1 from op_journal where document_id = $2 and org_id = $1 and op ->> 'type' = 'add_node' and op ->> 'nodeId' = $3 limit 1", [orgId, documentId, nodeId]);
         return found.rowCount === 1;
       },
-      // ponytail: every row after the saved seq, in one read. Ceiling: a document that ran long without a
-      // save (a crash) opens slowly. Upgrade: E6.2's snapshots bound how many rows are ever replayed.
+      // ponytail: every row after the snapshot, in one read. Ceiling: a room that crashed long after its last
+      // snapshot opens slowly (10,000 rows open in well under 2 s, F19). Upgrade: stream the rows in pages.
       since: async (orgId, documentId, seq) =>
         isId(orgId) && isId(documentId)
           ? rows(JournalRow, `select ${JOURNAL_COLUMNS} from op_journal where org_id = $1 and document_id = $2 and seq > $3 order by seq`, [orgId, documentId, seq])

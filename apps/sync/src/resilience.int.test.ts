@@ -2,41 +2,44 @@ import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
 import type { Doc, Op } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
-import { ROOT_ID } from "@noon/doc-model";
+import { emptyDoc, ROOT_ID } from "@noon/doc-model";
 import { signSessionToken } from "@noon/session-token";
 import WebSocket from "ws";
 import { startSyncServer } from "./server.ts";
-import { connect, NO_JOURNAL, TEST_ORG, TEST_SECRET, until } from "./testing.ts";
+import { decodeSnapshot } from "./snapshots.ts";
+import { connect, memorySnapshots, NO_JOURNAL, TEST_ORG, TEST_SECRET, until } from "./testing.ts";
 
 // Findings from the E2.3 review, reproduced with a store whose behaviour the test controls.
 const add = (nodeId: string): Op => ({ type: "add_node", nodeId, parentId: ROOT_ID, index: 0, component: "Stack", props: {} });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function fakeStore(over: Partial<DocumentStore> = {}): DocumentStore & { saved: { seq: number; doc: Doc }[] } {
-  const saved: { seq: number; doc: Doc }[] = [];
+function fakeStore(over: Partial<DocumentStore> = {}): DocumentStore & { pointed: number[] } {
+  const pointed: number[] = [];
   return {
-    saved,
+    pointed,
     ...NO_JOURNAL,
-    load: () => Promise.resolve({ doc: undefined, seq: 0 }),
-    save: (_org, _id, doc, seq) => { saved.push({ seq, doc: structuredClone(doc) }); return Promise.resolve(); },
+    load: () => Promise.resolve({ doc: undefined, seq: 0, snapshotSeq: 0 }),
+    snapshotted: (_org, _id, seq) => { pointed.push(seq); return Promise.resolve(); },
     ...over,
   };
 }
+const stored = (snapshots: ReturnType<typeof memorySnapshots>): Doc[] => [...snapshots.objects.values()].map((bytes) => decodeSnapshot(bytes) ?? emptyDoc());
 
-test("a graceful shutdown SAVES every open room before it returns", async () => {
+test("a graceful shutdown SNAPSHOTS every open room before it returns", async () => {
   const store = fakeStore();
-  const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store });
+  const snapshots = memorySnapshots();
+  const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store, snapshots });
   const peer = await connect(server.url, randomUUID());
   const opId = peer.send(add("unsaved"));
   await peer.next("op", (m) => m.opId === opId);
 
   await server.close(); // what SIGTERM runs; the peer is still connected
-  expect(store.saved.map((s) => s.seq)).toEqual([1]);
-  expect(store.saved[0]?.doc.nodes["unsaved"]).toBeDefined();
+  expect(store.pointed).toEqual([1]);
+  expect(stored(snapshots)[0]?.nodes["unsaved"]).toBeDefined();
 });
 
 test("a peer that goes away while its document is still loading does not leave a room behind", async () => {
-  const store = fakeStore({ load: async () => { await sleep(150); return { doc: undefined, seq: 0 }; } });
+  const store = fakeStore({ load: async () => { await sleep(150); return { doc: undefined, seq: 0, snapshotSeq: 0 }; } });
   const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store });
   for (let i = 0; i < 5; i++) {
     const peer = await connect(server.url, randomUUID());
@@ -53,7 +56,7 @@ test("a database outage is 4503 'try again', not 4500 'your document is corrupt'
   // that ONE load when it fails. (A fixed 80 ms delay was enough alone and too short inside `make check`.)
   let allConnected = (): void => undefined;
   const gate = new Promise<void>((resolve) => { allConnected = resolve; });
-  const store = fakeStore({ load: async () => { loads++; await gate; if (down) throw new Error("connection refused"); return { doc: undefined, seq: 0 }; } });
+  const store = fakeStore({ load: async () => { loads++; await gate; if (down) throw new Error("connection refused"); return { doc: undefined, seq: 0, snapshotSeq: 0 }; } });
   const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store });
   const documentId = randomUUID();
   const peers = await Promise.all([connect(server.url, documentId), connect(server.url, documentId), connect(server.url, documentId)]);
@@ -77,22 +80,29 @@ test("every peer waiting on one failed open gets the SAME reason (absent documen
   await server.close();
 });
 
-test("a save that fails is retried until it succeeds, and only then is the room dropped", async () => {
-  let failures = 2;
+test("a last-leave snapshot that fails is not retried and names nothing: the room goes, the journal keeps the ops", async () => {
   const store = fakeStore();
-  const working = fakeStore();
-  store.save = async (...args) => {
-    if (failures-- > 0) throw new Error("deadlock detected");
-    await working.save(...args);
-    store.saved.push(...working.saved.splice(0));
-  };
-  const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store, saveRetryMs: 20 });
-  const peer = await connect(server.url, randomUUID());
+  const snapshots = memorySnapshots();
+  snapshots.fail = true;
+  const server = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store, snapshots });
+  const documentId = randomUUID();
+  const peer = await connect(server.url, documentId);
   const opId = peer.send(add("kept"));
   await peer.next("op", (m) => m.opId === opId);
   peer.close();
-  await until(() => server.roomCount() === 0, "the room to be saved on a retry and dropped", 3000);
-  expect(store.saved.map((s) => s.seq)).toEqual([1]);
+  await until(() => server.roomCount() === 0, "the room to be dropped although its snapshot failed", 3000);
+  await server.idle();
+  expect(snapshots.objects.size).toBe(0);
+  expect(store.pointed).toEqual([]); // Postgres never names a snapshot MinIO does not hold
+
+  snapshots.fail = false; // the next room of the document snapshots as usual
+  const again = await connect(server.url, documentId);
+  const next = again.send(add("later"));
+  await again.next("op", (m) => m.opId === next);
+  again.close();
+  await until(() => server.roomCount() === 0, "the room to be snapshotted and dropped", 3000);
+  await server.idle();
+  expect(store.pointed).toEqual([1]); // NO_JOURNAL keeps nothing, so this room started at 0 again
   await server.close();
 });
 

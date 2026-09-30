@@ -2,18 +2,19 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
-import { ClientMessage, type HealthResponse, type SequencedOp } from "@noon/contracts";
+import { ClientMessage, type Doc, type HealthResponse, type SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { manifest } from "@noon/design-system";
 import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
 import { frameText } from "./raw.ts";
 import { createRoom, type Peer, type RateLimit, type Room, type RoomLimits } from "./room.ts";
+import { decodeSnapshot, snapshotter, type SnapshotCadence, type SnapshotStore } from "./snapshots.ts";
 
 export type RunningSyncServer = {
   url: string;
   close(): Promise<void>;
-  /** Resolves when no document save is in flight. */
+  /** Resolves when no last-leave snapshot is in flight. */
   idle(): Promise<void>;
   peerCount(documentId: string): number;
   roomCount(): number;
@@ -32,27 +33,30 @@ type Options = {
   limits?: Partial<RoomLimits>;
   /** Each peer's op budget (room.ts). */
   rate?: Partial<RateLimit>;
-  /** Where documents are loaded from and saved to. Without one, rooms start empty and nothing is kept. */
+  /** Where documents and their journals are kept. Without one, rooms start empty and nothing is kept. */
   store?: DocumentStore;
+  /** Where rooms write their snapshots (MinIO, E6.2). Without one, a room never snapshots and opening replays the whole journal. */
+  snapshots?: SnapshotStore;
+  /** When a room snapshots: every `everyOps` ops, every `everyMs` while peers are connected, and always on last leave. */
+  cadence?: Partial<SnapshotCadence>;
   /** A peer that has not answered a ping by the next tick is terminated. */
   heartbeatMs?: number;
   /** A peer whose unsent backlog passes this is terminated: one stalled reader must not grow our memory. */
   maxBufferedBytes?: number;
-  /** How long to wait before trying a failed save again. */
-  saveRetryMs?: number;
   /** A journal call that has not answered by then counts as failed: a paused or partitioned database hangs rather than refuses. */
   journalTimeoutMs?: number;
   /** How often a read-only room asks the journal whether it can write again (E6.1b). */
   recoverMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, saveRetryMs = 5000, journalTimeoutMs = 5000, recoverMs = 1000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000 }: Options): Promise<RunningSyncServer> {
+  const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
   // the REASON when a document cannot be opened, so every peer waiting on it is told the same thing.
-  type Opened = { room: Room; orgId: string } | { closeCode: number };
+  type Opened = { room: Room; orgId: string; snapshot?: ReturnType<typeof snapshotter> } | { closeCode: number };
   const rooms = new Map<string, Promise<Opened>>();
-  const saves = new Set<Promise<void>>();
+  const leaving = new Set<Promise<void>>();
   const peerCounts = new Map<string, () => number>(); // answered by the ROOM: who has joined, not which sockets exist
   let closing = false;
 
@@ -96,13 +100,33 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
       return { closeCode: CLOSE.unavailable }; // the database is down: "try again", NOT "your document is broken"
     }
     if (!stored) return { closeCode: CLOSE.documentNotFound };
-    const doc = stored.doc ?? emptyDoc();
+    // The newest snapshot, or what F8's idle save wrote before E6.2 if that is newer (a document not
+    // snapshotted since). Then only the journal rows after it (F19).
+    let doc: Doc;
+    let seq: number;
+    if (stored.snapshotSeq > stored.seq) {
+      if (!snapshots) return { closeCode: CLOSE.unavailable }; // snapshotted, and this process was started without MinIO
+      let bytes;
+      try {
+        bytes = await snapshots.get(orgId, documentId, stored.snapshotSeq);
+      } catch {
+        return { closeCode: CLOSE.unavailable }; // MinIO is down: "try again"
+      }
+      // Postgres names it only after it was stored, so a missing or unreadable one is damage, not an outage.
+      const decoded = bytes && decodeSnapshot(bytes);
+      if (!decoded) {
+        log(documentId, `snapshot ${String(stored.snapshotSeq)} is ${bytes ? "not a well-formed document" : "missing"}`);
+        return { closeCode: CLOSE.documentCorrupt };
+      }
+      doc = decoded;
+      seq = stored.snapshotSeq;
+    } else {
+      doc = stored.doc ?? emptyDoc();
+      seq = stored.seq;
+    }
     // The contract checked each node's shape. Whether they form a TREE is checkDoc's job, and a room
     // must never open on top of a corrupt document: every later op would build on the damage.
     if (checkDoc(doc).length > 0) return { closeCode: CLOSE.documentCorrupt };
-    // The saved document is written when the last peer leaves; the journal on every op. After a crash
-    // the journal is ahead, and a room that numbered from the saved seq would find every number taken.
-    let seq = stored.seq;
     try {
       for (const row of await store.since(orgId, documentId, seq)) {
         applyOpInto(doc, row.op);
@@ -118,8 +142,35 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
       everAdded: (nodeId: string) => bounded(store.everAdded(orgId, documentId, nodeId)),
       since: (after: number) => bounded(store.since(orgId, documentId, after)),
     };
-    const room: Room = createRoom({ doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}), onReadOnly: () => { heal(room); } });
-    return { room, orgId };
+    const snapshotFrom = Math.max(stored.snapshotSeq, stored.seq);
+    let snapshot: ReturnType<typeof snapshotter> | undefined;
+    const room: Room = createRoom({
+      doc, seq, manifest, limits: roomLimits, journal, ...(rate ? { rate } : {}),
+      onReadOnly: () => { heal(room); },
+      onAccepted: (accepted) => { snapshot?.accepted(accepted); },
+    });
+    if (snapshots) {
+      const to = snapshots;
+      // MinIO first, THEN Postgres: the pointer never names an object that is not there. Either failing
+      // loses nothing (the journal holds every op), it only leaves more rows for the next open to replay.
+      snapshot = snapshotter({
+        room, from: snapshotFrom, cadence,
+        write: async (at, body) => {
+          try {
+            await to.put(orgId, documentId, at, body);
+            await store.snapshotted(orgId, documentId, at);
+          } catch (err) {
+            log(documentId, `snapshot ${String(at)} failed: ${err instanceof Error ? err.message : "unknown"}`);
+            throw err;
+          }
+        },
+      });
+    }
+    return { room, orgId, ...(snapshot ? { snapshot } : {}) };
+  }
+
+  function log(documentId: string, message: string): void {
+    process.stderr.write(`${JSON.stringify({ level: "error", source: "sync", documentId, message })}\n`);
   }
 
   function bounded<T>(work: Promise<T>): Promise<T> {
@@ -131,8 +182,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
   /**
    * The room went read-only (E6.1b): ask it to recover every `recoverMs` until the journal answers.
    * ponytail: a read-only room that was dropped meanwhile keeps asking too, one cheap read a tick, until
-   * the database is back; ceiling: one timer per such room. It cannot be dropped without a successful save,
-   * which means the database answered, so in practice the next tick ends it.
+   * the database is back; ceiling: one timer per such room, for as long as the outage lasts.
    */
   function heal(room: Room): void {
     void (async () => {
@@ -178,7 +228,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
     if (ws.readyState !== ws.OPEN) {
       // It went away while the document was loading. It never joined, so no 'close' handler below will
       // ever run for it: if nobody else is here, this is the moment to let the room go.
-      if (room.peerCount === 0) closeRoom(documentId, opened.orgId, room, opening);
+      if (room.peerCount === 0) closeRoom(documentId, opened, opening);
       return;
     }
 
@@ -214,7 +264,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
     ws.on("close", () => {
       clearInterval(heartbeat);
       room.leave(peer);
-      if (room.peerCount === 0 && !closing) closeRoom(documentId, opened.orgId, room, opening);
+      if (room.peerCount === 0 && !closing) closeRoom(documentId, opened, opening);
     });
     onFrame = (data) => {
       let parsed;
@@ -234,50 +284,36 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
     for (const data of early.splice(0)) onFrame(data); // ...then whatever arrived while the document was loading
   }
 
-  /** Writes the room's document. Waits for ops still in the queue first, so the save is never behind the room. */
-  async function save(documentId: string, orgId: string, room: Room): Promise<boolean> {
-    try {
-      await room.settled();
-      await store?.save(orgId, documentId, room.doc, room.seq);
-      return true;
-    } catch (err) {
-      process.stderr.write(`${JSON.stringify({ level: "error", source: "sync", documentId, message: `save failed: ${err instanceof Error ? err.message : "unknown"}` })}\n`);
-      return false;
-    }
+  /** The room's last snapshot, once the ops still in its queue are handled. False: not stored (logged). */
+  async function snapshotNow(opened: { room: Room; snapshot?: ReturnType<typeof snapshotter> }): Promise<boolean> {
+    await opened.room.settled();
+    return (await opened.snapshot?.take()) ?? true;
   }
 
   /**
-   * The last peer left: save, then forget the room. A failed save is RETRIED for as long as the room
-   * stays empty, because its memory is then the only copy of those edits.
-   * Since E6.1a a crash loses nothing acknowledged: the journal was written before each broadcast, and
-   * the next room replays what this save never wrote. E6.2 replaces this save with snapshots.
+   * The last peer left: snapshot, then forget the room. A failed snapshot is NOT retried: the journal holds
+   * every op this room accepted (E6.1a), so the next open replays what the snapshot would have held.
+   * This replaced F8's save, which had to retry for ever because the room's memory was the only copy.
    */
-  function closeRoom(documentId: string, orgId: string, room: Room, opening: Promise<Opened>): void {
+  function closeRoom(documentId: string, opened: { room: Room; snapshot?: ReturnType<typeof snapshotter> }, opening: Promise<Opened>): void {
     const work = (async () => {
-      // peerCount is read through a function: someone may join WHILE a save is awaited, which the
-      // type checker cannot know, so it would call the second check "always true".
-      const empty = (): boolean => room.peerCount === 0 && rooms.get(documentId) === opening;
-      while (empty()) {
-        if (await save(documentId, orgId, room)) {
-          if (empty()) {
-            rooms.delete(documentId);
-            peerCounts.delete(documentId);
-          }
-          return;
-        }
-        if (closing) return;
-        await new Promise((resolve) => setTimeout(resolve, saveRetryMs));
+      await snapshotNow(opened);
+      // Someone may have joined WHILE the snapshot was written: then the room stays.
+      if (opened.room.peerCount === 0 && rooms.get(documentId) === opening) {
+        opened.snapshot?.stop();
+        rooms.delete(documentId);
+        peerCounts.delete(documentId);
       }
     })();
-    saves.add(work);
-    void work.finally(() => saves.delete(work));
+    leaving.add(work);
+    void work.finally(() => leaving.delete(work));
   }
 
   return new Promise((resolve) => {
     http.listen(port, () => {
       const address = http.address() as AddressInfo;
       const idle = async (): Promise<void> => {
-        while (saves.size > 0) await Promise.all(saves);
+        while (leaving.size > 0) await Promise.all(leaving);
       };
       resolve({
         url: `ws://localhost:${String(address.port)}`,
@@ -286,11 +322,15 @@ export function startSyncServer({ port, secrets, limits, rate, store, heartbeatM
         peerCount: (documentId) => peerCounts.get(documentId)?.() ?? 0,
         close: async () => {
           closing = true;
-          // FIRST save every open room, while its peers are still connected. Terminating the sockets
-          // first looked right and lost everything: their 'close' handlers, which start the saves, only
-          // run on a later tick, so "no saves pending" was true and the database pool was closed.
-          const open = await Promise.all([...rooms.entries()].map(async ([documentId, opening]) => ({ documentId, opened: await opening })));
-          await Promise.all(open.flatMap(({ documentId, opened }) => ("room" in opened ? [save(documentId, opened.orgId, opened.room)] : [])));
+          // FIRST snapshot every open room, while its peers are still connected. Terminating the sockets
+          // first (under F8's save) lost everything: their 'close' handlers only run on a later tick, so
+          // "nothing pending" was true and the database pool was closed.
+          const open = await Promise.all([...rooms.values()]);
+          await Promise.all(open.map(async (opened) => {
+            if (!("room" in opened)) return;
+            await snapshotNow(opened);
+            opened.snapshot?.stop();
+          }));
           for (const client of wss.clients) client.terminate();
           wss.close();
           await new Promise<void>((done) => {

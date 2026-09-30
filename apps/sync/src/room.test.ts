@@ -649,3 +649,16 @@ test("a presence message is turned into JSON ONCE however many peers receive it"
   stringify.mockRestore();
   expect(texts.filter((t) => t.includes('"presence"'))).toHaveLength(3);
 });
+
+test("onAccepted hears every seq the room applies, and nothing it refuses", async () => {
+  const journal = memoryJournal();
+  const heard: number[] = [];
+  const room = createRoom({ doc: emptyDoc(), manifest, journal, onAccepted: (seq) => void heard.push(seq) });
+  const a = peer("a");
+  room.join(a);
+  await room.submit(a, clientOp(add("n1")));
+  await room.submit(a, clientOp(add("n1"), 1)); // duplicate node: refused
+  await room.submit(a, clientOp(setGap("n1", 4), 1));
+  expect(heard).toEqual([1, 2]);
+  expect(rejects(a)).toHaveLength(1);
+});

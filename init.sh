@@ -20,12 +20,12 @@ grep -q "make -s check" "$hook" || { echo "FAIL: the pre-commit gate is not inst
 # Local secrets: random, generated once, kept in the git-ignored .env that compose reads by itself.
 # Hex only, so a value can sit inside a postgres:// URL without escaping.
 touch .env
-for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD GITEA_ADMIN_PASSWORD GITEA_WEBHOOK_SECRET; do
+for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD GITEA_ADMIN_PASSWORD GITEA_WEBHOOK_SECRET MINIO_PASSWORD; do
   grep -q "^$name=" .env || printf '%s=%s\n' "$name" "$(openssl rand -hex 24)" >> .env
 done
 . ./.env
 
-docker compose up -d --wait postgres redis gitea
+docker compose up -d --wait postgres redis gitea minio
 # POSTGRES_PASSWORD only applies when the data volume is first created. Setting it here as well keeps an
 # existing volume (and one created with an older password) in step with .env. Local socket, no password needed.
 docker compose exec -T postgres psql -U noon -d noon -qc "alter role noon password '$POSTGRES_PASSWORD'" >/dev/null

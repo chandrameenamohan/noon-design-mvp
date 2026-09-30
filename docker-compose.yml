@@ -1,4 +1,4 @@
-# ponytail: only the stores an epic already needs. MinIO arrives with epic 6.
+# ponytail: only the stores an epic already needs.
 #
 # Secrets: there are NO default passwords here. `./init.sh` generates random ones into .env (git-ignored),
 # and compose refuses to start when one is missing, instead of quietly using a password from a public repo.
@@ -31,6 +31,23 @@ services:
     healthcheck:
       # redis-cli exits 0 on an ERROR reply too (measured with a wrong password): only the word PONG is health.
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  # E6.2: room snapshots (SPEC §2a). Pinned: conditional writes (IfNoneMatch) need a 2024+ release, and this
+  # is the one learning-tests/minio ran against. Docker Hub's minio/minio refuses pulls: quay.io it is.
+  # The sync server makes its bucket at start. Only the S3 port is published; the console is not.
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: noon
+      MINIO_ROOT_PASSWORD: "${MINIO_PASSWORD:?run ./init.sh}"
+    # 9005 on the host: 9000 is a popular default (and learning-tests/minio takes 9100).
+    ports: ["127.0.0.1:${MINIO_PORT:-9005}:9000"]
+    volumes: ["miniodata:/data"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -108,9 +125,16 @@ services:
       PORT: "3001"
       DATABASE_URL: "postgres://noon_app:${APP_DB_PASSWORD:?run ./init.sh}@postgres:5432/noon"
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
+      MINIO_URL: http://minio:9000
+      MINIO_USER: noon
+      MINIO_PASSWORD: "${MINIO_PASSWORD:?run ./init.sh}"
+      # Tunable from the shell (SPEC §2.9); empty = the defaults, 500 ops and 30 s.
+      SNAPSHOT_EVERY_OPS: "${SNAPSHOT_EVERY_OPS:-}"
+      SNAPSHOT_EVERY_SECONDS: "${SNAPSHOT_EVERY_SECONDS:-}"
     ports: ["127.0.0.1:${SYNC_PORT:-3001}:3001"]
     depends_on:
       migrate: { condition: service_completed_successfully }
+      minio: { condition: service_healthy }
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 2s
@@ -232,5 +256,6 @@ services:
       retries: 30
 volumes:
   pgdata:
+  miniodata:
   giteadata:
   gitpeer:

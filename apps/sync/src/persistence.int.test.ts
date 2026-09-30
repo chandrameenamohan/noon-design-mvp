@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import type { Doc, Op } from "@noon/contracts";
-import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
+import type { Op } from "@noon/contracts";
+import { ROOT_ID } from "@noon/doc-model";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
 import { connect, TEST_SECRET, until } from "./testing.ts";
 
-// F8: a document reopened after everyone left shows its last state. KNOWN LIMIT until the journal
-// (F18): the save happens when the last peer leaves, so a crash loses the edits since the last save.
+// Opening a document over real sockets and Postgres. F8's idle save (and its check, reopen-keeps-state) is
+// gone since E6.2: a reopen is snapshot + journal replay, proven in snapshot.int.test.ts.
 let t: TestDb;
 let server: RunningSyncServer;
 beforeAll(async () => {
@@ -21,40 +21,7 @@ afterAll(async () => {
 
 const add = (nodeId: string, parentId = ROOT_ID): Op => ({ type: "add_node", nodeId, parentId, index: 99, component: "Stack", props: {} });
 
-async function aDocument(): Promise<{ id: string; orgId: string }> {
-  const org = await t.createOrg("Persistence");
-  const ws = await t.db.forOrg(org.id).createWorkspace({ name: "ws" });
-  const doc = await t.db.forOrg(org.id).createDocument({ workspaceId: ws.id, title: "Checkout" });
-  if (!doc) throw new Error("no document");
-  return { id: doc.id, orgId: org.id };
-}
-
-test("when the last peer leaves the document is saved, the room is dropped, and a reopen shows the last state", async () => {
-  const doc = await aDocument();
-  const [a, b] = await Promise.all([connect(server.url, doc.id, randomUUID(), {}, doc.orgId), connect(server.url, doc.id, randomUUID(), {}, doc.orgId)]);
-  const ops = [add("outer"), add("inner", "outer"), { type: "set_prop", nodeId: "outer", key: "gap", value: 24 } satisfies Op];
-  for (const op of ops) a.send(op);
-  await b.next("op", (m) => m.seq === 3);
-  const expected = ops.reduce<Doc>(applyOp, emptyDoc());
-
-  a.close();
-  await a.closed;
-  expect(server.roomCount()).toBe(1); // one peer is still here: nothing is dropped yet
-  b.close();
-  await b.closed;
-  // The client saw the close; the server sees it a moment later, saves, and only then drops the room.
-  await until(() => server.roomCount() === 0, "the room to be saved and dropped");
-  await server.idle();
-
-  const stored = await t.rawQuery("select content, seq from documents where id = $1", [doc.id]);
-  expect(stored).toMatchObject({ rows: [{ content: expected, seq: "3" }] }); // bigint arrives as a string
-
-  const again = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
-  expect(await again.next("welcome")).toMatchObject({ type: "welcome", doc: expected, seq: 3, peers: [] });
-  const opId = again.send(add("after-reopen"));
-  expect((await again.next("op", (m) => m.opId === opId)).seq).toBe(4); // numbering continues, it does not restart
-  again.close();
-});
+const aDocument = () => t.createDocument("Persistence");
 
 test("an op sent the instant the socket opens is never silently lost while the document is still loading", async () => {
   const doc = await aDocument();

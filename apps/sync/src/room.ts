@@ -77,6 +77,8 @@ type Options = {
   mintPeerId?: () => string;
   /** The room just went read-only. It never retries by itself (no clock): the caller calls recover() until it answers true. */
   onReadOnly?: () => void;
+  /** An op was applied and announced as `seq`: when the caller counts toward its next snapshot (E6.2). */
+  onAccepted?: (seq: number) => void;
 };
 
 /**
@@ -88,7 +90,7 @@ type Options = {
  * the journal is awaited, and without the queue a second op would be validated against a document
  * the first has not changed yet: two peers could both "successfully" add the same node id.
  */
-export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID(), onReadOnly }: Options) {
+export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal, rate: rateOverrides, now = Date.now, mintPeerId = () => crypto.randomUUID(), onReadOnly, onAccepted }: Options) {
   const limits: RoomLimits = { ...DEFAULT_LIMITS, ...overrides };
   const rate: RateLimit = { ...DEFAULT_RATE, ...rateOverrides };
   const peers = new Set<Peer>();
@@ -221,6 +223,7 @@ export function createRoom({ doc, seq = 0, manifest, limits: overrides, journal,
     nodeCount = sequenced.op.type === "add_node" ? nodeCount + 1 : sequenced.op.type === "remove_node" ? Object.keys(doc.nodes).length : nodeCount;
     remember(`${sequenced.actor.id}:${sequenced.opId}`, sequenced);
     broadcast({ type: "op", ...sequenced }); // the sender's copy is its acknowledgement
+    onAccepted?.(seq);
   }
 
   function storageFailed(): void {

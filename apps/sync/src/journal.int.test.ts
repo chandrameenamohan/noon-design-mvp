@@ -18,13 +18,7 @@ const add = (nodeId: string, parentId = ROOT_ID): Op => ({ type: "add_node", nod
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const start = () => startSyncServer({ port: 0, secrets: [TEST_SECRET], store: t.db.documentStore() });
 
-async function aDocument(): Promise<{ id: string; orgId: string }> {
-  const org = await t.createOrg("Journal");
-  const ws = await t.db.forOrg(org.id).createWorkspace({ name: "ws" });
-  const doc = await t.db.forOrg(org.id).createDocument({ workspaceId: ws.id, title: "Checkout" });
-  if (!doc) throw new Error("no document");
-  return { id: doc.id, orgId: org.id };
-}
+const aDocument = () => t.createDocument("Journal");
 
 // integration:no-broadcast-on-append-failure
 test("if the journal append fails, no peer receives the op, the sender is refused, and the document is untouched", async () => {
@@ -44,14 +38,16 @@ test("if the journal append fails, no peer receives the op, the sender is refuse
     expect([...a.inbox, ...b.inbox].filter((m) => m.type === "op")).toEqual([]);
     expect(await t.rawQuery("select actor_id from op_journal where document_id = $1", [doc.id])).toMatchObject({ rows: [{ actor_id: "rival" }] });
 
-    // The database, not a bug, refused: the room did not apply the op, so what it saves has no n1.
+    // The database, not a bug, refused: the room did not apply the op, so a reopened room has no n1.
     a.close(); b.close();
     await Promise.all([a.closed, b.closed]);
-    await until(() => server.roomCount() === 0, "the room to be saved and dropped");
+    await until(() => server.roomCount() === 0, "the room to be dropped");
     await server.idle();
-    const stored = (await t.rawQuery("select content, seq from documents where id = $1", [doc.id])) as { rows: [{ content: Doc | null; seq: string }] };
-    expect(stored.rows[0].seq).toBe("0");
-    expect(stored.rows[0].content?.nodes["n1"]).toBeUndefined();
+    const again = await connect(server.url, doc.id, randomUUID(), {}, doc.orgId);
+    const welcome = await again.next("welcome");
+    expect(welcome.seq).toBe(1); // the rival's row, replayed
+    expect(welcome.doc.nodes["n1"]).toBeUndefined();
+    again.close();
   } finally {
     await server.close();
   }
@@ -73,8 +69,7 @@ test("a resent op gets its original seq after a restart, even when the process d
   const expected = ops.reduce<Doc>(applyOp, emptyDoc());
   await server.close();
   await a.closed;
-  // A crash: the save on last leave never happened. Only the journal knows about seq 1..3.
-  await t.rawQuery("update documents set content = null, seq = 0 where id = $1", [doc.id]);
+  // No snapshot store here: only the journal knows about seq 1..3, as after a crash before any snapshot.
 
   server = await start();
   try {

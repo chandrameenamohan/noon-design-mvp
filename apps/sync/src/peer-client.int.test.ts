@@ -123,7 +123,7 @@ test("a refusal from the server rolls the edit back and reports the reason", asy
 });
 
 test("a close code that means 'do not retry' ends the peer instead of reconnecting for ever", async () => {
-  const gone = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store: { ...NO_JOURNAL, load: () => Promise.resolve(undefined), save: () => Promise.resolve() } });
+  const gone = await startSyncServer({ port: 0, secrets: [TEST_SECRET], store: { ...NO_JOURNAL, load: () => Promise.resolve(undefined) } });
   const net = sabotage();
   const { peer, statuses } = peerFor(gone.url, randomUUID(), { WebSocketImpl: net.WebSocketImpl });
   await until(() => peer.status === "closed", "peer closed");
