@@ -54,7 +54,15 @@ export async function bootstrapGitea(setup: GiteaSetup): Promise<void> {
   await api("POST", "/user/repos", { name: setup.repo, private: true, default_branch: "main" });
   // Only an EMPTY repo gets the seed: after the first run it holds the owner's commits, never overwritten.
   const { empty } = (await (await api("GET", repo)).json()) as { empty?: unknown };
-  if (empty === true) await pushSeed(`${setup.url}/${setup.user}/${setup.repo}.git`, { user: setup.user, token: setup.token });
+  if (empty === true) {
+    await pushSeed(`${setup.url}/${setup.user}/${setup.repo}.git`, { user: setup.user, token: setup.token });
+    // Gitea marks the repo non-empty from a queue after the push returns (measured ~2 s); until then its API
+    // answers `/branches/main` with a 500 panic. Return only once main is readable, so no caller races it.
+    for (const deadline = Date.now() + 30_000; ; await new Promise((wake) => setTimeout(wake, 100))) {
+      if (((await (await api("GET", repo)).json()) as { empty?: unknown }).empty === false) break;
+      if (Date.now() > deadline) throw new Error(`Gitea ${repo}: still empty 30 s after the seed push`);
+    }
+  }
   // One hook per URL, its secret kept in step with .env: updated when it exists, made when it does not.
   const hook = { active: true, events: ["push"], config: { url: setup.webhook.url, content_type: "json", secret: setup.webhook.secret } };
   const hooks = (await (await api("GET", `${repo}/hooks`)).json()) as Hook[];
