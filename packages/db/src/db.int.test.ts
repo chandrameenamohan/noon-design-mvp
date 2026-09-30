@@ -11,10 +11,17 @@ test("migrations create the tables, and every tenant table carries org_id", asyn
   const tables = await t.columnsByTable();
   expect(Object.keys(tables).sort()).toEqual(
     // git_events and git_reconcile are the stack's one repo, not an org's data (E5.3a).
-    ["document_conflicts", "documents", "git_events", "git_reconcile", "jobs", "memberships", "op_journal", "orgs", "schema_migrations", "usage", "users", "workspaces"].sort(),
+    // credentials and auth_sessions belong to a user, not an org (E8.1); rate_limits is keyed by whatever it limits (E9.5).
+    [
+      "audit_log", "auth_sessions", "credentials", "document_conflicts", "document_shares", "documents", "git_events",
+      "git_reconcile", "idempotency_keys", "jobs", "memberships", "op_journal", "orgs", "rate_limits", "schema_migrations",
+      "ship_commits", "usage", "users", "workspaces",
+    ].sort(),
   );
   // document_conflicts hangs off its document (one row per document, deleted with it): the document holds the org.
-  for (const tenantTable of ["memberships", "workspaces", "documents", "jobs", "usage", "op_journal"]) {
+  // ship_commits hangs off its job the same way (noon-91u).
+  const tenantTables = ["memberships", "workspaces", "documents", "jobs", "usage", "op_journal", "document_shares", "audit_log", "idempotency_keys"];
+  for (const tenantTable of tenantTables) {
     expect(tables[tenantTable], tenantTable).toContain("org_id");
   }
 });
