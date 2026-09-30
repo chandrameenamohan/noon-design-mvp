@@ -132,6 +132,11 @@ async function round(how: Wipe): Promise<Record<string, unknown>> {
     try {
       await wipe(how);
       await until(() => watcher?.closed() === true, "the room's owner gives it up (its lease is gone)", 30_000);
+      // The owner drops the room in one go (stop reading, close every socket), and it answers fast, so at that instant
+      // the wire is usually empty: what spans the fault is the stream's edits the peers HOLD until the next welcome.
+      // Seen closed before the stream's next tick, none was held yet and the run was vacuous (both rounds of one run).
+      // Synchronous from here to fault(): no acknowledgement can land between the check and the mark.
+      await until(() => all.some(([, p]) => p.pendingCount > 0), "a peer holds an edit across the room's move", 10_000);
       ledger.fault();
     } finally {
       clearInterval(stream);
