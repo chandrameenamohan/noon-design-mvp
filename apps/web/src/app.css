@@ -64,6 +64,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .outline { position: absolute; --stroke-colour: var(--accent); box-shadow: 0 0 0 calc(2px / var(--zoom)) var(--stroke-colour); }
 .outline-hovered { box-shadow: 0 0 0 calc(1px / var(--zoom)) var(--stroke-colour); }
 .outline-peer { --stroke-colour: var(--peer-colour); }
+/* The space a hovered gap or padding control stands for (E10.4): a translucent fill, no stroke, no label. */
+.outline-shade { box-shadow: none; background: var(--accent); opacity: 0.3; }
 .outline-label { position: absolute; left: calc(-2px / var(--zoom)); bottom: 100%; padding: 0 calc(6px / var(--zoom)); border-radius: calc(var(--radius-sm) / var(--zoom)) calc(var(--radius-sm) / var(--zoom)) 0 0; font-size: calc(var(--text-xs) / var(--zoom)); line-height: 1.5; font-weight: 600; white-space: nowrap; color: var(--on-accent); background: var(--accent); }
 .outline-hovered .outline-label { color: var(--fg); background: var(--surface); }
 .outline-peer .outline-label { color: #fff; background: var(--peer-colour); }
@@ -97,11 +99,48 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .also-here li::before { content: ""; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--peer-colour); }
 .presence-cursor { position: absolute; pointer-events: none; transform: translate(4px, 4px); padding: 0 var(--space-1); border-radius: 0 6px 6px 6px; color: #fff; font-size: var(--text-xs); white-space: nowrap; }
 
-/* --- the inspector (right pane) ------------------------------------------------------------------ */
+/* --- the inspector (right pane, E10.4): three sections, one row per prop: name | control | reset ------- */
 .inspector { padding: 0 var(--space-3) var(--space-3); }
 .inspector h2 { font-size: var(--text-lg); padding-block: var(--space-2); }
-.inspector label { display: inline-block; min-width: 6rem; font-family: var(--font-mono); font-size: var(--text-sm); }
 .inspector p { margin: var(--space-2) 0; }
+.inspector-section { padding-block: var(--space-2); border-top: 1px solid var(--border); }
+.inspector-section h3 { font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-muted); margin-block-end: var(--space-2); }
+.component-name { font-size: var(--text-md); }
+.inspector-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block: var(--space-2); }
+/* Prop names in mono, like the code they become; the reset column keeps its width so rows do not jump when a prop is set. */
+.field { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-2); margin-block: var(--space-2); }
+.field label, .field-name { font-family: var(--font-mono); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-control { display: flex; align-items: center; min-width: 0; }
+.field-control > input:not([type="checkbox"]), .field-control > select { width: 100%; min-width: 0; }
+.mono { font-family: var(--font-mono); }
+.reset, .reset-space { min-width: 3.25rem; }
+.reset { padding-inline: var(--space-2); font-size: var(--text-xs); }
+/* The default in words, and a refusal, sit under the control in the control's column. */
+.field-default, .field-refusal { grid-column: 2 / -1; font-size: var(--text-xs); }
+.field-refusal { color: var(--danger-fg); }
+.field[data-refused] input, .field[data-refused] select, .field[data-refused] .segmented { border-color: var(--danger-border); }
+/* The stepper: the field in the middle, − and + on either side, drawn as one control. */
+.stepper { display: inline-flex; align-items: stretch; width: 100%; }
+.stepper button { padding-inline: var(--space-2); border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.stepper button:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.stepper input { flex: 1 1 auto; min-width: 0; border-inline: 0; border-radius: 0; text-align: center; -moz-appearance: textfield; appearance: textfield; }
+.stepper input::-webkit-inner-spin-button, .stepper input::-webkit-outer-spin-button { appearance: none; }
+/* The segmented choice: a radio group drawn as one bar; the checked segment fills with the accent; the default wears a dot while unset. */
+.segmented { display: inline-flex; width: 100%; margin: 0; padding: 0; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); overflow: hidden; }
+.segment { position: relative; flex: 1 1 0; display: flex; align-items: center; justify-content: center; min-height: 1.75rem; padding-inline: var(--space-1); font-family: var(--font-mono); font-size: var(--text-sm); cursor: pointer; }
+.segment + .segment { border-inline-start: 1px solid var(--border-strong); }
+.segment input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.segment:has(input:checked) { background: var(--accent); color: var(--on-accent); }
+.segment:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: -3px; }
+.segment[data-default]::after { content: ""; position: absolute; right: 3px; top: 3px; width: 5px; height: 5px; border-radius: 50%; background: var(--fg-muted); }
+.segment-face { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The switch: a native checkbox, so it works and is announced everywhere, drawn as a track and a knob. */
+.switch { appearance: none; width: 2rem; height: 1.125rem; margin: 0; padding: 0; border: 1px solid var(--border-strong); border-radius: 1rem; background: var(--surface-2); position: relative; cursor: pointer; }
+.switch::after { content: ""; position: absolute; top: 1px; left: 1px; width: 0.875rem; height: 0.875rem; border-radius: 50%; background: var(--fg-muted); transition: transform 120ms; }
+.switch:checked { background: var(--accent); border-color: var(--accent); }
+.switch:checked::after { background: var(--on-accent); transform: translateX(0.875rem); }
+/* A shading row is hovered: the row itself says so too, not only the canvas. */
+.shading:hover, .shading:focus-within { background: var(--accent-soft); border-radius: var(--radius-sm); }
 
 /* --- the AI panel (right pane, under the inspector) and the ship control (top bar) --------------- */
 .ai-panel { display: grid; gap: var(--space-2); padding: var(--space-3); border-top: 1px solid var(--border); }

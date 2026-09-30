@@ -1,11 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { manifest } from "@noon/design-system";
 import { connectPeer, type Rejection } from "@noon/peer-client";
+import type { Op } from "@noon/contracts";
 import type { sentenceFor } from "./reasons.ts";
 
 type Reason = Parameters<typeof sentenceFor>[0];
-/** An edit that did not happen, waiting for the user to read it. `id` only makes it dismissible. */
-type Refusal = { id: string; reason: Reason };
+/** An edit that did not happen, waiting for the user to read it. `id` only makes it dismissible; `op` lets the inspector repeat it beside the control it was about (E10.4). */
+export type Refusal = { id: string; reason: Reason; op?: Op };
 import { openSession } from "./api.ts";
 
 function openStore(documentId: string, onRejected: (rejection: Rejection) => void) {
@@ -35,10 +36,10 @@ const NOTHING = { subscribe: () => () => undefined, snapshot: () => "" };
 export function usePeer(documentId: string) {
   const [refusals, setRefusals] = useState<Refusal[]>([]);
   const [store, setStore] = useState<ReturnType<typeof openStore>>();
-  const refuse = (reason: Reason): void => { setRefusals((before) => [...before, { id: crypto.randomUUID(), reason }]); };
+  const refuse = (reason: Reason, op?: Op): void => { setRefusals((before) => [...before, { id: crypto.randomUUID(), reason, ...(op === undefined ? {} : { op }) }]); };
   useEffect(() => {
     // `quiet` (someone else removed the node first) is not news: the canvas already shows it (F5).
-    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason); });
+    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason, rejection.op); });
     setStore(opened);
     return () => { opened.peer.close(); };
   }, [documentId]);

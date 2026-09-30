@@ -3,7 +3,9 @@ import type { Doc, DocNode, Presence } from "@noon/contracts";
 import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
 import { components, FRAME, frameStylesheet } from "./designSystem.ts";
+import type { Hint } from "./Inspector.tsx";
 import { hitTest, step, type Box, type Step } from "./selection.ts";
+import { gapsBetween, paddingRing, type Rect } from "./spaces.ts";
 import { fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Viewport } from "./viewport.ts";
 
 /**
@@ -20,6 +22,10 @@ import { fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Viewpor
  * inspector's heading and a live sentence say what is selected.
  *
  * Nothing here writes to the document: the surface only reports a selection.
+ *
+ * `hint` (E10.4): a gap or padding control is hovered or focused in the inspector, and the space it stands
+ * for is shaded here: the strips of computed padding inside the node's own box, or the spaces between its
+ * children's boxes (spaces.ts). Measured like the outlines, in world coordinates, so it zooms with the frame.
  */
 type Props = {
   doc: Doc;
@@ -27,6 +33,8 @@ type Props = {
   selected: string;
   /** The others' selections, node id -> who has it selected. */
   selectedBy: Map<string, Presence[]>;
+  /** The space to shade, if a layout control is hovered or focused. */
+  hint: Hint | null;
   onSelect: (id: string) => void;
   /** Where this person's pointer is, as a fraction of the canvas (SPEC F7), or null when it left. */
   onPoint: (cursor: Presence["cursor"]) => void;
@@ -34,7 +42,7 @@ type Props = {
   children?: ReactNode;
 };
 
-type Outline = { id: string; kind: "selected" | "hovered" | "peer"; label: string; colour?: string; x: number; y: number; width: number; height: number };
+type Outline = { id: string; kind: "selected" | "hovered" | "peer" | "shade"; label: string; colour?: string; x: number; y: number; width: number; height: number };
 type Drag = { kind: "pan" | "click"; x: number; y: number };
 
 const propsText = (node: DocNode): string => Object.entries(node.props).map(([key, value]) => `${key}=${String(value)}`).join(" ");
@@ -67,10 +75,28 @@ const boxesOf = (view: HTMLElement): Box[] =>
     const rect = rectOf(wrapper);
     return rect ? [{ id: wrapper.getAttribute("data-node-id") ?? "", depth: Number(wrapper.getAttribute("data-depth")), left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }] : [];
   });
+/** The node's own children on the canvas: the wrappers whose nearest wrapper ancestor is this one (the real component sits in between). */
+const childWrappers = (wrapper: Element): Element[] => [...wrapper.querySelectorAll("[data-node-id]")].filter((child) => child.parentElement?.closest("[data-node-id]") === wrapper);
+const asRect = (r: DOMRect): Rect => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+/**
+ * The rectangles a hint shades, on the SCREEN. Padding is read from the component's computed style: what the
+ * design system actually applied, whether from the prop or its own default. Both are in CSS px; the caller
+ * takes them to world coordinates.
+ */
+function shadesOf(wrapper: Element, space: Hint["space"], zoom: number): Rect[] {
+  if (space === "gap") return gapsBetween(childWrappers(wrapper).flatMap((child) => { const r = rectOf(child); return r ? [asRect(r)] : []; }));
+  const own = wrapper.getAttribute("data-node-id") === ROOT_ID ? wrapper : wrapper.firstElementChild;
+  const rect = rectOf(wrapper);
+  if (!own || !rect) return [];
+  // Computed padding is in the element's own px, before the world's scale; the box is on the screen, after it.
+  const style = getComputedStyle(own);
+  const px = (value: string): number => (Number.parseFloat(value) || 0) * zoom;
+  return paddingRing(asRect(rect), { top: px(style.paddingTop), right: px(style.paddingRight), bottom: px(style.paddingBottom), left: px(style.paddingLeft) });
+}
 const hundredths = (n: number): number => Math.round(n * 100) / 100;
 const fraction = (n: number): number => Math.min(1, Math.max(0, n));
 
-export function Surface({ doc, labels, selected, selectedBy, onSelect, onPoint, children }: Props) {
+export function Surface({ doc, labels, selected, selectedBy, hint, onSelect, onPoint, children }: Props) {
   const view = useRef<HTMLElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const hintId = useId();
@@ -127,13 +153,18 @@ export function Surface({ doc, labels, selected, selectedBy, onSelect, onPoint, 
       ...(hovered !== null && hovered !== selected ? [{ id: hovered, kind: "hovered" as const, label: labels.get(hovered) ?? "" }] : []),
       ...[...selectedBy].flatMap(([id, peers]) => peers.map((p) => ({ id, kind: "peer" as const, label: p.name === "" ? p.actor.kind : p.name, colour: colourOf(p.peerId) }))),
     ];
-    const next = wanted.flatMap((w) => {
-      const wrapper = el.querySelector(`[data-node-id="${CSS.escape(w.id)}"]`);
-      const rect = wrapper ? rectOf(wrapper) : undefined;
-      if (!rect) return [];
+    const toOutline = (w: Pick<Outline, "id" | "kind" | "label" | "colour">, rect: Rect): Outline => {
       const at = toWorld(viewport, { x: rect.left - box.left, y: rect.top - box.top });
-      return [{ ...w, x: hundredths(at.x), y: hundredths(at.y), width: hundredths(rect.width / viewport.zoom), height: hundredths(rect.height / viewport.zoom) }];
+      return { ...w, x: hundredths(at.x), y: hundredths(at.y), width: hundredths((rect.right - rect.left) / viewport.zoom), height: hundredths((rect.bottom - rect.top) / viewport.zoom) };
+    };
+    const wrapperOf = (id: string): Element | null => el.querySelector(`[data-node-id="${CSS.escape(id)}"]`);
+    const next = wanted.flatMap((w) => {
+      const wrapper = wrapperOf(w.id);
+      const rect = wrapper ? rectOf(wrapper) : undefined;
+      return rect ? [toOutline(w, asRect(rect))] : [];
     });
+    const shaded = hint ? wrapperOf(hint.nodeId) : null;
+    if (hint && shaded) next.push(...shadesOf(shaded, hint.space, viewport.zoom).map((rect) => toOutline({ id: hint.nodeId, kind: "shade", label: "" }, rect)));
     setOutlines((current) => (JSON.stringify(current) === JSON.stringify(next) ? current : next));
   });
 
@@ -211,9 +242,9 @@ export function Surface({ doc, labels, selected, selectedBy, onSelect, onPoint, 
             <span className="node-props">{propsText(root)}</span>
           </div>
           <div className="editor-layer" aria-hidden="true">
-            {outlines.map((o) => (
-              <div key={`${o.kind}:${o.id}:${o.label}`} className={`outline outline-${o.kind}`} data-outline={o.kind} style={{ left: o.x, top: o.y, width: o.width, height: o.height, ...(o.colour === undefined ? {} : { "--peer-colour": o.colour }) }}>
-                <span className="outline-label">{o.label}</span>
+            {outlines.map((o, i) => (
+              <div key={`${o.kind}:${o.id}:${o.label}:${String(i)}`} className={`outline outline-${o.kind}`} data-outline={o.kind} style={{ left: o.x, top: o.y, width: o.width, height: o.height, ...(o.colour === undefined ? {} : { "--peer-colour": o.colour }) }}>
+                {o.label !== "" && <span className="outline-label">{o.label}</span>}
               </div>
             ))}
           </div>

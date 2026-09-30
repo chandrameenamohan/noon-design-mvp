@@ -45,11 +45,11 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
   await button(page, "Add Text").click();
   await button(page, "Add Button").click();
 
-  // A prop, typed: the form comes from the manifest (Text.value is a string, Text.size an enum).
+  // A prop, typed: the form comes from the manifest (Text.value is a string, Text.size an enum of three: a segmented choice, E10.4).
   await layer(page, "Text 1").click();
   await page.getByLabel("value", { exact: true }).fill("Hello");
   await page.getByLabel("value", { exact: true }).blur();
-  await page.getByLabel("size", { exact: true }).selectOption("lg");
+  await page.getByRole("radiogroup", { name: "size", exact: true }).getByRole("radio", { name: "lg", exact: true }).check();
   await expect(other.locator("[data-component=Text] > .node-props")).toHaveText("value=Hello size=lg");
 
   // Move INTO a container.
@@ -64,9 +64,9 @@ test("props, move, reorder and remove from the UI all reach the other browser, a
   await button(page, "Move down").click();
   await expect(other.locator("[data-node-id=root] [data-node-id]").first()).toHaveAttribute("data-component", "Card");
 
-  // Clearing an optional prop removes it (set_prop with null).
+  // Clearing an optional prop removes it (set_prop with null): Reset, offered while the prop is set.
   await layer(page, "Text 1").click();
-  await page.getByLabel("size", { exact: true }).selectOption("");
+  await button(page, "Reset size").click();
   await expect(other.locator("[data-component=Text] > .node-props")).toHaveText("value=Hello");
 
   // Remove, from the OTHER browser: the subtree goes with it.

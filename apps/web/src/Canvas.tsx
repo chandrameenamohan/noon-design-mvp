@@ -5,7 +5,7 @@ import { ROOT_ID } from "@noon/doc-model";
 import { colourOf } from "./colour.ts";
 import { AiPanel } from "./AiPanel.tsx";
 import { ConflictBanner } from "./ConflictBanner.tsx";
-import { Inspector } from "./Inspector.tsx";
+import { Inspector, type Hint } from "./Inspector.tsx";
 import { LayersPanel } from "./LayersPanel.tsx";
 import type { Row } from "./layer-moves.ts";
 import { Preview } from "./Preview.tsx";
@@ -54,6 +54,8 @@ export function Canvas({ documentId }: { documentId: string }) {
   const [wanted, setSelected] = useState(ROOT_ID);
   // The AI panel is open until the person closes it (the top bar's AI button); not remembered, a session's choice.
   const [aiOpen, setAiOpen] = useState(true);
+  // A gap or padding control is hovered or focused in the inspector: the canvas shades that space (E10.4).
+  const [hint, setHint] = useState<Hint | null>(null);
   // A ref, not state: the pointer moves sixty times a second and nothing on OUR screen depends on it.
   const cursor = useRef<Presence["cursor"]>(null);
   const selection = peer && wanted !== ROOT_ID && peer.doc.nodes[wanted] ? wanted : null;
@@ -76,11 +78,18 @@ export function Canvas({ documentId }: { documentId: string }) {
   const holdsChildren = (each: DocNode): boolean => each.parentId === null || componentOf(each.component)?.acceptsChildren === true;
   const containers = [...labels].flatMap(([id, label]) => { const each = doc.nodes[id]; return each && holdsChildren(each) ? [{ id, label }] : []; });
 
-  /** Every edit goes through here: the replica's verdict comes back at once, the room's later (onRejected). */
+  /**
+   * Every edit goes through here: the replica's verdict comes back at once, the room's later (onRejected).
+   * A new edit of a prop supersedes the refusal its last edit met: the inspector shows one complaint per
+   * prop, the latest, and a fixed value clears it.
+   */
   const submit = (op: Op): void => {
+    if (op.type === "set_prop") for (const each of refusals) if (each.op?.type === "set_prop" && each.op.nodeId === op.nodeId && each.op.key === op.key) dismiss(each.id);
     const result = peer.submit(op);
-    if (!result.ok) refuse(result.reason);
+    if (!result.ok) refuse(result.reason, op);
   };
+  // The selected node's refused prop edits, latest per prop, for the inspector to repeat beside the control.
+  const propRefusals = new Map(refusals.flatMap((each) => (each.op?.type === "set_prop" && each.op.nodeId === node.id ? [[each.op.key, each.reason] as const] : [])));
   // New nodes go INTO the selection when it can hold children, otherwise onto the page.
   const parent = holdsChildren(node) ? node : root;
   // The id is minted HERE, random and never reused (SPEC §2.4). `index` is the node's final position: the end.
@@ -135,7 +144,7 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       centre={
         <>
-          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} onSelect={setSelected} onPoint={point}>
+          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} onSelect={setSelected} onPoint={point}>
             {peer.others.map((p) => p.cursor && (
               <span key={p.peerId} data-presence-cursor aria-hidden="true" className="presence-cursor" style={{ left: `${String(p.cursor.x * 100)}%`, top: `${String(p.cursor.y * 100)}%`, background: colourOf(p.peerId) }}>{p.name}</span>
             ))}
@@ -145,7 +154,7 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       right={
         <>
-          <Inspector key={node.id} doc={doc} node={node} label={labels.get(node.id) ?? node.component} component={componentOf(node.component)} containers={containers} submit={submit} />
+          <Inspector key={node.id} doc={doc} node={node} label={labels.get(node.id) ?? node.component} component={componentOf(node.component)} containers={containers} refusals={propRefusals} submit={submit} onHint={setHint} />
           <AiPanel documentId={documentId} hidden={!aiOpen} />
         </>
       }
