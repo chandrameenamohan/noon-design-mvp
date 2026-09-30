@@ -7,7 +7,8 @@ import { connection, createProducer, describeError, JobRef, QUEUES, type QueueNa
 /** `cancelled` is aborted when the user asks for the job to stop (F10): end quickly, keep what was done. */
 /** A handler may return what the job CONSUMED (F12); the worker records it against the job's org. */
 /** A process drains ONLY the queues it has a handler for: the AI worker never holds the Docker socket the sandbox needs. */
-export type Handlers = Partial<Record<QueueName, (job: Job, cancelled: AbortSignal) => Promise<UsageAmount | undefined>>>;
+/** `job.attempt`: the claim this run holds (F28); whatever the handler reports under it lands only while it is the latest. */
+export type Handlers = Partial<Record<QueueName, (job: Job & { attempt: number }, cancelled: AbortSignal) => Promise<UsageAmount | undefined>>>;
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */

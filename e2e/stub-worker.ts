@@ -44,7 +44,7 @@ const worker = await startWorker({
   redisUrl: config.redisUrl,
   sweepMs: 2000,
   cancelPollMs: 500,
-  handlers: { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: "stub", ready: Promise.resolve(), stopping: stopping.signal, stillMember: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId)) !== undefined, runAgent: scripted }) },
+  handlers: { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: "stub", ready: Promise.resolve(), stopping: stopping.signal, stillMember: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId)) !== undefined, runAgent: scripted, report: (job, progress) => db.jobStore().report({ queue: "ai", jobId: job.id, orgId: job.orgId, attempt: job.attempt }, progress) }) },
 });
 // Playwright waits for a URL to answer: this is that URL, and nothing else.
 createServer((_, res) => res.end("ready")).listen(Number(process.env["READY_PORT"] ?? "3102"));

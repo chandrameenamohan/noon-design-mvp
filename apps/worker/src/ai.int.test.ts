@@ -12,7 +12,7 @@ const ctx = useSyncServer();
 const job = (instruction = "add a card"): Job => ({ id: randomUUID(), orgId: TEST_ORG, documentId: randomUUID(), queue: "ai", input: { instruction }, createdBy: randomUUID() });
 const usage = { model: "stub", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
 const never = new AbortController().signal;
-const base = () => ({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: new AbortController().signal });
+const base = () => ({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: new AbortController().signal, report: () => Promise.resolve() });
 const handlerWith = (runAgent: RunAgent) => createAiHandler({ ...base(), runAgent });
 /** A model that never finishes by itself: it ends only when the run's signal says so, as the real SDK does. */
 const forever: RunAgent = ({ signal }) => new Promise((_, reject) => { signal.addEventListener("abort", () => { reject(new Error("aborted")); }); });

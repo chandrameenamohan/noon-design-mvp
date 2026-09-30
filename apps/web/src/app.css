@@ -27,6 +27,8 @@ input, select { font: inherit; padding: 0.2rem 0.4rem; border: 1px solid #5b6472
 .ai-actions { display: flex; gap: 0.5rem; }
 .ai-panel button:disabled { color: #5b6472; cursor: not-allowed; }
 #ai-status { margin: 0; min-height: 1.5rem; }
+.ai-steps { margin: 0; padding-inline-start: 1.5rem; max-height: 10rem; overflow-y: auto; font-size: 0.9rem; }
+.ai-steps [data-ok="false"] { color: #9f1239; }
 .preview { margin-block: 1rem; }
 .preview iframe { display: block; width: 100%; height: 32rem; border: 1px solid #c9ced6; background: #fff; }
 .conflict { background: #fff4e5; border: 1px solid #93370d; padding: 0.5rem 0.75rem; border-radius: 4px; }

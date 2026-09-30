@@ -31,7 +31,7 @@ function aiHandlers(): Handlers {
   // still reach a terminal status the user can read): it fails every run as `tools_missing`.
   const ready = probeTools(buildTools({ submit: () => ({ ok: false, reason: "not_ready" }), get doc(): never { throw new Error("the probe calls no tool"); } }, manifest));
   ready.then(() => process.stdout.write("agent tools registered and isolated\n"), (err: unknown) => { log(`agent tool probe failed: ${describeError(err)}`); });
-  return { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, stillMember, runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
+  return { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, stillMember, report: (job, progress) => db.jobStore().report({ queue: "ai", jobId: job.id, orgId: job.orgId, attempt: job.attempt }, progress), runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
 }
 function sandboxHandlers(): Handlers {
   const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool, proxyPort: config.sandbox.proxyPort, previewKey: config.sandbox.previewKey, seed: config.sandbox.seed };

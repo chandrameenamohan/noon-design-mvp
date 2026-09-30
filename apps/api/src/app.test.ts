@@ -44,6 +44,7 @@ test("every org and document route declares the role it needs, and they are thes
     "POST /documents/:id/runs": "editor",
     "POST /documents/:id/runs/:runId/cancel": "editor",
     "GET /documents/:id/runs/:runId": "viewer",
+    "GET /documents/:id/run": "viewer",
     "POST /documents/:id/preview": "viewer",
     "GET /documents/:id/preview": "viewer",
     "GET /documents/:id/conflict": "viewer",

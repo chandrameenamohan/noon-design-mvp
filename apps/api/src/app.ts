@@ -10,7 +10,7 @@ import {
   CreateRunBody,
   CreateWorkspaceBody,
   DocumentConflict,
-  DocumentShip,
+  DocumentRun, DocumentShip,
   IdempotencyKey,
   includes,
   PageQuery,
@@ -427,6 +427,13 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   document.get("/runs/:runId", need("viewer"), async (c) => {
     const run = await db.forOrg(c.var.doc.orgId).getRun(c.var.doc.id, c.req.param("runId"));
     return run ? c.json(run) : notFound(c);
+  });
+  // F30: the newest run, with its steps so far. A page that reloads mid-run asks this and carries on polling that run.
+  // ponytail: progress rides the 1 s poll the panel already makes (no SSE, nothing new through the ngrok host). A
+  // second of lag per step; a push channel if a run's steps ever need to arrive faster than that.
+  document.get("/run", need("viewer"), async (c) => {
+    const run = await db.forOrg(c.var.doc.orgId).getLatestRun(c.var.doc.id);
+    return run === undefined ? notFound(c) : c.json(DocumentRun.parse({ run }));
   });
 
   // F15: the document's running page. The canvas POSTs to make sure a preview is on its way and GETs,

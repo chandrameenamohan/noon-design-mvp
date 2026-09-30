@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type PoolClient, type QueryResultRow } from "pg";
-import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, IdempotencyKey, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, IdempotencyKey, Member, Name, Org, Preview, PreviewOutput, Role, Run, RunProgress, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -89,7 +89,7 @@ export class Fenced extends Error {}
 
 const QUEUES = ["ai", "sandbox", "ship"] as const;
 /** `attempt`: the claim a worker holds (claim() returns it). Given, a write lands only while that claim is the job's latest. */
-type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string; attempt?: number };
+type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string; attempt?: number | undefined };
 /** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
 export type Job = { id: string; orgId: string; documentId: string; queue: JobKey["queue"]; input: Record<string, unknown>; /** Undefined once that user has been deleted. */ createdBy: string | undefined };
 type JobStore = {
@@ -119,9 +119,10 @@ type JobStore = {
   recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
   /**
    * What a RUNNING job has to say before it ends: a sandbox's preview URL (null while it restarts), a ship's
-   * commit and pull request. Validated by the key's queue; a job that is not running is left as it is.
+   * commit and pull request, an AI run's steps (F30). Validated by the key's queue; a job that is not running is left
+   * as it is, and with an `attempt`, so is one another attempt now holds (a slow dead attempt's steps never show).
    */
-  report(key: JobKey, output: PreviewOutput | ShipOutput | null): Promise<void>;
+  report(key: JobKey, output: PreviewOutput | ShipOutput | RunProgress | null): Promise<void>;
   /**
    * Documents whose sandbox must stay, across ALL orgs: a sandbox job queued or running, or finished
    * less than `graceMs` ago (a quick reopen finds it warm). The reaper removes every other sandbox.
@@ -199,6 +200,8 @@ type OrgScope = {
    */
   createRun(input: { documentId: string; instruction: string; createdBy: string | undefined; idempotencyKey?: string | undefined }): Promise<Run | "busy" | "key_reused" | undefined>;
   getRun(documentId: string, id: string): Promise<Run | undefined>;
+  /** F30: the document's newest run (what a reloaded page picks up); null when it never had one, undefined when there is no such document in THIS org. */
+  getLatestRun(documentId: string): Promise<Run | null | undefined>;
   /**
    * Makes sure the document has a preview on its way: a queued sandbox job, unless one is already
    * unfinished (the unique index decides; never two). `created` is the new job's key, to enqueue.
@@ -271,10 +274,13 @@ const JOURNAL_COLUMNS = "seq, op_id, actor_kind, actor_id, run_id, op";
 const ConflictRow = z.object({ commit_sha: z.string().nullable(), file: z.string().nullable(), reason: z.string().nullable(), detail: z.string().nullable(), created_at: z.date().nullable() })
   .transform((r): Conflict | null => (r.commit_sha === null ? null : Conflict.parse({ commit: r.commit_sha, file: r.file, reason: r.reason, detail: r.detail, at: r.created_at?.toISOString() })));
 const nullableTimestamp = z.date().nullable().transform((d) => d?.toISOString() ?? null);
+// A run's progress is written by our own worker but quotes the model: read as untrusted, and a row that does not parse shows no steps.
 const RunRow = z
-  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), status: z.string(), input: z.object({ instruction: z.string() }), error: z.string().nullable(), created_at: timestamp, started_at: nullableTimestamp, finished_at: nullableTimestamp })
-  .transform((r): Run =>
-    Run.parse({ id: r.id, orgId: r.org_id, documentId: r.document_id, status: r.status, instruction: r.input.instruction, error: r.error, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at }));
+  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), status: z.string(), input: z.object({ instruction: z.string() }), error: z.string().nullable(), output: z.unknown(), created_at: timestamp, started_at: nullableTimestamp, finished_at: nullableTimestamp })
+  .transform((r): Run => {
+    const progress = RunProgress.safeParse(r.output);
+    return Run.parse({ id: r.id, orgId: r.org_id, documentId: r.document_id, status: r.status, instruction: r.input.instruction, error: r.error, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at, steps: progress.success ? progress.data.steps : [] });
+  });
 // bigint and numeric arrive as STRINGS from the driver (learning-tests/postgres): converted once, here.
 // Safe because UsageAmount caps what may be WRITTEN at Number.MAX_SAFE_INTEGER, so no stored token count
 // (and no sum of them worth reading) leaves the range a JS number holds exactly.
@@ -620,7 +626,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         // (0011: one waiting ship per document); it reads the document afresh, so it ships what they would have.
         // A job someone asked to stop is not run again: it ends as `cancelled` (F10), as its worker would have ended it.
         // A sandbox's address dies with its worker (the next attempt reports one); a ship's commit stays, as the git
-        // peer asks it "did Ship push this?" (E5.5), and the push may still be on its way.
+        // peer asks it "did Ship push this?" (E5.5), and the push may still be on its way. An AI run's steps are the
+        // dead attempt's (F30): the next attempt starts its list afresh, so a reload never shows steps nobody is taking.
         const counted = await one(
           z.object({ requeued: z.number().int(), lost: z.number().int() }),
           `with stale as (
@@ -632,7 +639,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
              where not cancel and attempts < $2 and not (queue = 'ship' and exists (select 1 from jobs w where w.queue = 'ship' and w.status = 'queued' and w.document_id = s.document_id))
              order by case when queue = 'ship' then document_id else id end, created_at desc),
            requeued as (
-             update jobs set status = 'queued', started_at = null, heartbeat_at = null, output = case when queue = 'sandbox' then null else output end
+             update jobs set status = 'queued', started_at = null, heartbeat_at = null, output = case when queue in ('sandbox', 'ai') then null else output end
              where id in (select id from again) returning 1),
            lost as (
              update jobs set status = case when stale.cancel then 'cancelled' else 'failed' end, error = case when stale.cancel then null else 'worker_lost' end, finished_at = now()
@@ -660,10 +667,10 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           "select id, org_id, queue from jobs where status = 'queued' and queue = any($2) order by created_at, id limit $1",
           [limit, QUEUES],
         ),
-      async report({ queue, jobId, orgId }, output) {
-        const valid = (queue === "ship" ? ShipOutput : PreviewOutput).nullable().parse(output); // the contract the reader will use, BEFORE the write
+      async report({ queue, jobId, orgId, attempt }, output) {
+        const valid = (queue === "ship" ? ShipOutput : queue === "ai" ? RunProgress : PreviewOutput).nullable().parse(output); // the contract the reader will use, BEFORE the write
         if (!isId(jobId) || !isId(orgId)) return;
-        await pool.query("update jobs set output = $3 where org_id = $1 and id = $2 and status = 'running'", [orgId, jobId, JSON.stringify(valid)]);
+        await pool.query("update jobs set output = $3 where org_id = $1 and id = $2 and status = 'running' and ($4::int is null or attempts = $4)", [orgId, jobId, JSON.stringify(valid), attempt ?? null]);
       },
       sandboxesInUse: (graceMs) =>
         rows(
@@ -980,6 +987,12 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           if (!orgExists || !isId(documentId)) return undefined;
           const ship = await newestShip(documentId);
           if (ship) return ship;
+          return (await one(z.object({ id: z.string() }), "select id from documents where org_id = $1 and id = $2", [orgId, documentId])) ? null : undefined;
+        },
+        async getLatestRun(documentId) {
+          if (!orgExists || !isId(documentId)) return undefined;
+          const run = await one(RunRow, "select * from jobs where org_id = $1 and document_id = $2 and queue = 'ai' order by created_at desc, id desc limit 1", [orgId, documentId]);
+          if (run) return run;
           return (await one(z.object({ id: z.string() }), "select id from documents where org_id = $1 and id = $2", [orgId, documentId])) ? null : undefined;
         },
         getRun: async (documentId, id) =>

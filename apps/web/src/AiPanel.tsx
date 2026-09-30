@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Run } from "@noon/contracts";
-import { cancelRun, readRun, startRun } from "./api.ts";
+import { cancelRun, readLatestRun, readRun, startRun } from "./api.ts";
+import { stepText } from "./progress.ts";
 
 // Why a run failed, in the user's words. The vocabulary is OPEN (the worker may name a reason this
 // build has never heard of), so an unknown name gets an honest general sentence, never a blank.
@@ -26,10 +27,10 @@ const active = (run: Run | undefined): run is Run => run?.status === "queued" ||
 
 /**
  * Ask the AI for a change (F9) and stop it (F10). The run is a row on the server; this panel only
- * starts it, asks how it is doing once a second, and asks for it to stop. The EDITS do not come
- * through here at all: the agent is a peer in the document, so its nodes arrive on the canvas the
- * same way another person's do.
- * ponytail: polling, and the run is forgotten on reload. Streamed progress that survives a reload is E9.4.
+ * starts it, asks how it is doing once a second (status and steps, F30), and asks for it to stop. The
+ * EDITS do not come through here at all: the agent is a peer in the document, so its nodes arrive on
+ * the canvas the same way another person's do. A reload picks the document's newest run up again.
+ * ponytail: the steps ride that 1 s poll (a step shows up to a second late); a push channel if that is ever too slow.
  */
 export function AiPanel({ documentId }: { documentId: string }) {
   const [instruction, setInstruction] = useState("");
@@ -37,6 +38,8 @@ export function AiPanel({ documentId }: { documentId: string }) {
   const [problem, setProblem] = useState("");
   const running = active(run);
 
+  // The newest run, after a reload too (F30). A run started before this answers is not replaced by an older one.
+  useEffect(() => { readLatestRun(documentId).then((latest) => { if (latest) setRun((current) => current ?? latest); }, () => undefined); }, [documentId]);
   useEffect(() => {
     if (!running) return;
     const timer = setInterval(() => { readRun(run).then(setRun, () => undefined); }, 1000); // a failed look is tried again in a second
@@ -61,6 +64,12 @@ export function AiPanel({ documentId }: { documentId: string }) {
       </div>
       {/* Not role="status": the page already has one (the connection), and this one is said politely too. */}
       <p id="ai-status" aria-live="polite" data-run-status={run?.status ?? ""}>{run ? sentence(run) : ""}</p>
+      {run && run.steps.length > 0 && (
+        <ol className="ai-steps" aria-label="What the AI has done">
+          {/* Text only: `detail` is the model's own words. The key is the position: steps are only ever appended (the oldest drop off past 50). */}
+          {run.steps.map((step, at) => <li key={at} data-ok={step.ok}>{stepText(step)}</li>)}
+        </ol>
+      )}
       {problem !== "" && <p role="alert" className="refusal">{problem}</p>}
     </form>
   );

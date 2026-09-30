@@ -97,7 +97,7 @@ test("with the ai queue saturated by long runs, one on the pushed document, a pu
     await t.rawQuery("insert into jobs (org_id, document_id, queue, input, created_by) values ($1, $2, 'ai', $3, $4)", [org.id, documentId, JSON.stringify({ instruction: "keep busy" }), user.id]);
     await new Promise((r) => setTimeout(r, 5)); // created_at orders the sweep
   }
-  const ai = createAiHandler({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", runAgent: busyAgent, ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: stopping.signal });
+  const ai = createAiHandler({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", runAgent: busyAgent, ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: stopping.signal, report: () => Promise.resolve() });
   worker = await startWorker({ db: t.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai }, concurrency: { ai: CONCURRENCY }, sweepMs: 5000 });
   const byStatus = async (): Promise<Record<string, number>> => Object.fromEntries(((await t.rawQuery("select status, count(*)::int as n from jobs where org_id = $1 group by status", [org.id])) as { rows: { status: string; n: number }[] }).rows.map((r) => [r.status, r.n]));
   const agentOps = (): number => person.inbox.filter((m) => m.type === "op" && m.actor.kind === "agent").length;

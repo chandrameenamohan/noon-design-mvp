@@ -1,4 +1,4 @@
-import { AuditPage, Document, DocumentConflict, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, User, Workspace } from "@noon/contracts";
+import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, User, Workspace } from "@noon/contracts";
 import { z } from "zod";
 
 // The caller is whoever signed in (E8.1): the session is an HttpOnly cookie the browser sends by itself on
@@ -99,6 +99,12 @@ export async function readRun(run: Run): Promise<Run> {
   const res = await fetch(`/api/documents/${run.documentId}/runs/${run.id}`, { headers: devHeaders });
   if (!res.ok) throw new Error(`GET run answered ${String(res.status)}`);
   return Run.parse(await res.json());
+}
+/** F30: the document's newest run, or null when the AI was never asked here. What the panel picks up after a reload. */
+export async function readLatestRun(documentId: string): Promise<Run | null> {
+  const res = await fetch(`/api/documents/${documentId}/run`, { headers: devHeaders });
+  if (!res.ok) throw new Error(`GET run answered ${String(res.status)}`);
+  return DocumentRun.parse(await res.json()).run;
 }
 
 // --- The preview (F15) -----------------------------------------------------------------------------

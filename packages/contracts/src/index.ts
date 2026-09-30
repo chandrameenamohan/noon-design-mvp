@@ -88,11 +88,27 @@ export const FailureReason = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
  * `error` is present exactly when the status is `failed`. `instruction` is a plain string on the way
  * OUT: if the input rule is ever tightened, the runs already stored must still be readable.
  */
+/**
+ * F30: one tool call of a run, as the panel lists it. `tool` is one of OUR tool names; `detail` comes from the
+ * MODEL's arguments (a component name, a prop key, a node id): untrusted text, shown as text, never as markup.
+ */
+export const RunStep = z.strictObject({ tool: FailureReason, ok: z.boolean(), detail: z.string().max(80) });
+export type RunStep = z.infer<typeof RunStep>;
+/** Keeps the last this-many steps: a progress view, not a transcript (SPEC §6: no persisted full transcript). */
+export const MAX_RUN_STEPS = 50;
+/** What a running `ai` job reports (jobs.output): the steps of its CURRENT attempt only. */
+export const RunProgress = z.strictObject({ steps: z.array(RunStep).max(MAX_RUN_STEPS) });
+export type RunProgress = z.infer<typeof RunProgress>;
 export const Run = z.object({
   id: Id, orgId: Id, documentId: Id, status: RunStatus, instruction: z.string(), error: FailureReason.nullable(),
   createdAt: Timestamp, startedAt: Timestamp.nullable(), finishedAt: Timestamp.nullable(),
+  /** F30: what the run has done so far, oldest first; kept when it ends, so a reload afterwards still shows it. */
+  steps: RunProgress.shape.steps,
 });
 export type Run = z.infer<typeof Run>;
+/** GET /documents/:id/run: the document's newest run, or null when the AI was never asked. What a reloaded page picks up. */
+export const DocumentRun = z.strictObject({ run: Run.nullable() });
+export type DocumentRun = z.infer<typeof DocumentRun>;
 
 /**
  * What a running `sandbox` job reports: where the document's preview answers. Only http(s): the

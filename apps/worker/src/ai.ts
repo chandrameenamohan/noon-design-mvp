@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import type { Manifest, Op, UsageAmount } from "@noon/contracts";
+import type { Manifest, Op, RunProgress, UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { roomUrl, type SyncSessions } from "./live.ts";
+import { withProgress } from "./progress.ts";
 import type { RunAgent } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
@@ -36,7 +37,7 @@ export function replayIds(jobId: string): { opId: (op: Op) => string; nodeId: ()
  * @noon/peer-client like a browser tab does (the single write path), so its ops get the same
  * validation, the same ordering, the same rate limit and the same rollback as a person's.
  */
-export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, stillMember, stopping, connectTimeoutMs = 10_000, runTimeoutMs = 5 * 60_000 }: {
+export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, stillMember, stopping, report, connectTimeoutMs = 10_000, runTimeoutMs = 5 * 60_000 }: {
   /** How THIS process reaches the document's room (inside Docker: ws://sync:3001), not the browsers' address. */
   sessions: SyncSessions;
   manifest: Manifest;
@@ -48,11 +49,13 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
   stillMember: (documentId: string, userId: string) => Promise<boolean>;
   /** Aborted when the worker is told to stop (SIGTERM). */
   stopping: AbortSignal;
+  /** F30: the run's steps so far, after every tool call. Given the job's `attempt`, so a stale attempt's steps land nowhere. */
+  report: (job: Job & { attempt?: number }, progress: RunProgress) => Promise<void>;
   /** How long the sync server may be unreachable, at the start or in the middle of a run. */
   connectTimeoutMs?: number;
   /** The whole run, connect to last op. ponytail: one number for every run; per-org limits are F31 (E9). */
   runTimeoutMs?: number;
-}): (job: Job, cancelled: AbortSignal) => Promise<UsageAmount> {
+}): (job: Job & { attempt?: number }, cancelled: AbortSignal) => Promise<UsageAmount> {
   return async (job, cancelled) => {
     // Fail FAST and by name, before anything is connected or spent. A missing token does not make
     // the SDK throw: it answers with a polite "please log in", which would look like a run that
@@ -96,6 +99,9 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       }, 50);
     });
     ended.catch(() => undefined); // when the agent finishes first, nobody is left to hear this one
+    // One write at a time, in order: a later list never lands before an earlier one. A failed write is left: the next carries every step.
+    let reporting = Promise.resolve();
+    const tools = withProgress(buildTools(peer, manifest, ids.nodeId), (steps) => { reporting = reporting.then(() => report(job, { steps })).catch(() => undefined); });
     try {
       const live = (async () => {
         // `!abort.signal.aborted`: when the run ends first, this wait must end too (it ticked for ever: a closed peer is never "live").
@@ -104,13 +110,14 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       await Promise.race([live, ended]);
       peer.setPresence({ cursor: null, selection: null }); // no pointer, but it tells the people already here that the AI has arrived
       const instruction = typeof job.input["instruction"] === "string" ? job.input["instruction"] : "";
-      const agent = runAgent({ instruction, tools: buildTools(peer, manifest, ids.nodeId), signal: abort.signal });
+      const agent = runAgent({ instruction, tools, signal: abort.signal });
       agent.catch(() => undefined); // if `ended` wins, the aborted agent rejects later, to nobody
       return await Promise.race([agent, ended]); // what the run consumed (F12): the worker records it
     } finally {
       clearInterval(watchdog);
       abort.abort(); // stops the model, and removes the listener on `stopping`
       peer.close(); // an op still waiting is answered `connection_closed`; everything the agent was told succeeded, did
+      await reporting; // before the worker finishes the row: a step written after that would land nowhere (report needs `running`)
     }
   };
 }
