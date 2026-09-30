@@ -2,7 +2,7 @@
 //
 // Give a workspace an optional `description`. You will touch four places, in this order:
 //   1. packages/contracts/src/index.ts   the Workspace contract and CreateWorkspaceBody
-//   2. packages/db/migrations/           a NEW file, 0003_...sql (never edit an applied migration)
+//   2. packages/db/migrations/           a NEW file, numbered after the last one there (never edit an applied migration)
 //   3. packages/db/src/index.ts          WorkspaceRow, createWorkspace, and the OrgScope type
 //   4. apps/api/src/app.ts               probably nothing: why? (that is the lesson)
 // Then run:  make check   and   sh drills/lesson-1/check.sh
