@@ -384,7 +384,7 @@ test("another org sees none of it: its own usage is empty, and asking for someon
   const theirs = await aDocument("usage-eve@example.com");
 
   const eveOwn = UsageReport.parse(await (await as("usage-eve@example.com", "GET", `/orgs/${theirs.orgId}/usage`)).json());
-  expect(eveOwn).toEqual({ totals: { runs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 }, items: [], nextCursor: null });
+  expect(eveOwn).toEqual({ totals: { runs: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 }, byUser: [], byDay: [], items: [], nextCursor: null });
   const peek = await as("usage-eve@example.com", "GET", `/orgs/${mine.orgId}/usage`);
   expect(peek.status).toBe(404);
   expect(await peek.text()).toBe(await (await as("usage-eve@example.com", "GET", `/orgs/${crypto.randomUUID()}/usage`)).text()); // the same bytes as an org that does not exist
