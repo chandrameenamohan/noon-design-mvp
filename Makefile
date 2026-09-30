@@ -23,7 +23,7 @@ drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh && sh drill
 # Outside `make check`: the chaos checks (SPEC §4a) break the REAL compose stack (./init.sh first) and prove
 # the system's guarantees hold. Each prints one JSON line and exits non-zero on FAIL.
 .PHONY: chaos
-chaos: ; node scripts/chaos/postgres-down-read-only.ts && node scripts/chaos/kill-sync-no-loss.ts && node scripts/chaos/kill-owner-failover.ts && node scripts/chaos/fenced.ts zombie && node scripts/chaos/fenced.ts partition && node scripts/chaos/kill-worker-resumes.ts
+chaos: ; node scripts/chaos/postgres-down-read-only.ts && node scripts/chaos/kill-sync-no-loss.ts && node scripts/chaos/kill-owner-failover.ts && node scripts/chaos/fenced.ts zombie && node scripts/chaos/fenced.ts partition && node scripts/chaos/kill-worker-resumes.ts && node scripts/chaos/redis-wipe-rebuild.ts
 
 # Outside `make check` (minutes, builds an image): F1 on a fresh clone of the committed HEAD.
 .PHONY: clean-clone

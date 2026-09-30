@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
-import { createProducer, type Producer } from "@noon/queue";
+import { Queue } from "bullmq";
+import { connection, createProducer, type Producer } from "@noon/queue";
 import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { startWorker, type Handlers, type RunningWorker } from "./worker.ts";
@@ -8,6 +9,8 @@ import { startWorker, type Handlers, type RunningWorker } from "./worker.ts";
 // E9.2a (F28), the worker's half: a job a dead worker left `running` is given another attempt once its heartbeat is
 // stale, and a worker that was only SLOW, and was given up on, stops without writing over the attempt after it.
 // The end-to-end version (a real `kill -9` of a worker container mid-run) is scripts/chaos/kill-worker-resumes.ts.
+// E9.2b (§4 "Redis lost"): the queue's keys vanish under a working worker, and every job still runs exactly once
+// (end to end, with the sync nodes' leases too: scripts/chaos/redis-wipe-rebuild.ts).
 const prefix = `test-${randomBytes(6).toString("hex")}`;
 let db: TestDb, producer: Producer;
 let running: RunningWorker[] = [];
@@ -23,8 +26,8 @@ afterAll(async () => {
   await producer.close();
   await db.drop();
 });
-const work = async (ai: NonNullable<Handlers["ai"]>, staleMs: number): Promise<RunningWorker> => {
-  const worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai }, sweepMs: 100, cancelPollMs: 100, staleMs });
+const work = async (ai: NonNullable<Handlers["ai"]>, staleMs: number, concurrency?: number): Promise<RunningWorker> => {
+  const worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai }, sweepMs: 100, cancelPollMs: 100, staleMs, ...(concurrency === undefined ? {} : { concurrency: { ai: concurrency } }) });
   running.push(worker);
   return worker;
 };
@@ -90,4 +93,31 @@ test("a slow worker that was given up on stops its attempt when it wakes, and wr
   await new Promise((r) => setTimeout(r, 300)); // its finish(cancelled) has had time to land, if it could
   expect(await row(key.jobId)).toMatchObject({ status: "running", attempts: 2 });
   await db.db.jobStore().finish({ ...key, attempt: 2 }, "succeeded");
+});
+
+test("Redis wiped under a working worker: the running job ends once, the waiting ones are offered again from Postgres and run once", async () => {
+  const held = await aJob();
+  const waiting = [await aJob(), await aJob()];
+  const calls: string[] = [];
+  let release = (): void => undefined;
+  // One at a time: `held` runs, the other two wait in Redis, and only there.
+  await work((job) => {
+    calls.push(job.id);
+    return job.id === held.jobId ? new Promise((resolve) => { release = () => { resolve(undefined); }; }) : Promise.resolve(undefined);
+  }, 60_000, 1);
+  const inspect = new Queue("ai", { connection: connection(TEST_REDIS_URL), prefix });
+  try {
+    await until(async () => (await row(held.jobId)).status === "running" && (await inspect.getWaitingCount()) === 2, "one job runs, two wait in Redis");
+    // The wipe: every key of this file's prefix, as FLUSHALL would (the test Redis is shared, so not FLUSHALL itself).
+    // One script, so it is atomic as FLUSHALL is: nothing lands between listing the keys and deleting them.
+    const redis = await inspect.client;
+    redis.defineCommand("wipe", { numberOfKeys: 0, lua: "local keys = redis.call('KEYS', ARGV[1]) for _, key in ipairs(keys) do redis.call('DEL', key) end return #keys" });
+    expect(await redis.runCommand("wipe", [`${prefix}:*`])).toBeGreaterThan(0);
+    release(); // BullMQ can no longer record this job's end; Postgres can, and that is the one that counts
+    await until(async () => (await Promise.all([held, ...waiting].map(async (key) => (await row(key.jobId)).status))).every((s) => s === "succeeded"), "all three succeeded");
+  } finally {
+    await inspect.close();
+  }
+  expect(calls.toSorted()).toEqual([held, ...waiting].map((key) => key.jobId).toSorted()); // each ran once: no duplicate job
+  for (const key of [held, ...waiting]) expect(await row(key.jobId)).toMatchObject({ status: "succeeded", attempts: 1 });
 });
