@@ -18,7 +18,7 @@ async function newDocument(page: Page): Promise<string> {
   await page.goto(`/?user=${user}`);
   await button(page, "New document").click();
   await expect(page.getByRole("status")).toHaveText("live");
-  await button(page, "Show the running page").click();
+  await button(page, "Preview").click(); // the top bar's toggle (E10.7): the running page opens beside the canvas
   return new URL(page.url()).searchParams.get("doc") ?? "";
 }
 async function labelButton(page: Page, label: string): Promise<void> {

@@ -6,6 +6,7 @@ import { useTheme } from "./useTheme.ts";
  * canvas centre, inspector right. Later beads fill the panes (E10.2 canvas, E10.3 layers, E10.4 inspector,
  * E10.5 library, E10.8 Share); this file owns only where things GO and the theme toggle.
  * ponytail: fixed pane widths (tokens --pane-width, --inspector-width); resizable panes are out of scope for E10.
+ * The one divider that moves is the preview split's (Preview.tsx, E10.7).
  */
 
 /** Follows the OS until pressed; then the choice is remembered per browser (useTheme.ts). A toggle button, not a menu: one press, one state. */

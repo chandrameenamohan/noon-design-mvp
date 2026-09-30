@@ -4,6 +4,7 @@ import { manifest } from "@noon/design-system";
 import { components, THUMB, thumbStylesheet } from "./designSystem.ts";
 import { placementAt, type Placement } from "./layer-moves.ts";
 import { previewProps, slotForDrop, slotForSelection, type Slot } from "./library-adds.ts";
+import { actionFor } from "./shortcuts.ts";
 import { slotUnder } from "./Surface.tsx";
 
 /**
@@ -130,17 +131,18 @@ export function LibraryPanel({ doc, selected, labels, isContainer, disabled, onC
     endDrag();
   };
 
-  // --- the keyboard (WAI-ARIA APG listbox: arrows, Home, End; Enter and Space add) -----------------------
+  // --- the keyboard (WAI-ARIA APG listbox: arrows, Home, End; Enter and Space add); the keys are the registry's (shortcuts.ts) ---
   const onKeyDown = (event: ReactKeyboardEvent<HTMLUListElement>): void => {
     const name = (event.target as HTMLElement).closest<HTMLElement>("[role=option]")?.dataset["name"];
-    if (name === undefined || event.ctrlKey || event.metaKey || event.altKey) return;
+    const action = actionFor("library", event);
+    if (name === undefined || action === null) return;
     const at = shown.findIndex((c) => c.name === name);
-    if (event.key === "ArrowDown" || event.key === "ArrowRight") { const next = shown[at + 1]; if (next) focusTile(next.name); }
-    else if (event.key === "ArrowUp" || event.key === "ArrowLeft") { const previous = shown[at - 1]; if (previous) focusTile(previous.name); }
-    else if (event.key === "Home") { const first = shown[0]; if (first) focusTile(first.name); }
-    else if (event.key === "End") { const last = shown.at(-1); if (last) focusTile(last.name); }
-    else if (event.key === "Enter" || event.key === " ") { const component = componentOf(name); if (component) addToSelection(component); }
-    else if (event.key === "Escape" && press.current) endDrag();
+    if (action === "next") { const next = shown[at + 1]; if (next) focusTile(next.name); }
+    else if (action === "previous") { const previous = shown[at - 1]; if (previous) focusTile(previous.name); }
+    else if (action === "first") { const first = shown[0]; if (first) focusTile(first.name); }
+    else if (action === "last") { const last = shown.at(-1); if (last) focusTile(last.name); }
+    else if (action === "add") { const component = componentOf(name); if (component) addToSelection(component); }
+    else if (press.current) endDrag(); // "cancel"
     else return;
     event.preventDefault();
   };
@@ -155,7 +157,7 @@ export function LibraryPanel({ doc, selected, labels, isContainer, disabled, onC
         placeholder="Search"
         value={query}
         onChange={(event) => { setQuery(event.target.value); }}
-        onKeyDown={(event) => { if (event.key === "ArrowDown" && tabStop !== undefined) { event.preventDefault(); focusTile(tabStop); } }}
+        onKeyDown={(event) => { if (actionFor("search", event) === "list" && tabStop !== undefined) { event.preventDefault(); focusTile(tabStop); } }}
       />
       <ul
         ref={list}

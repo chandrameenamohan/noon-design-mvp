@@ -10,7 +10,7 @@ const user = `e2e-${String(Date.now())}-library@example.com`;
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading");
+const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
 const library = (page: Page) => page.getByRole("region", { name: "Library" });
 /** The page's direct children on the canvas, in order. */
 const pageChildren = (page: Page) => page.locator(".page-frame > [data-node-id]");

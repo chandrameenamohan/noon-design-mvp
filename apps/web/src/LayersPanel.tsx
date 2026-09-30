@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Doc, Op } from "@noon/contracts";
 import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Drop, type KeyMove, type Placement, type Row } from "./layer-moves.ts";
+import { actionFor, type ActionOf } from "./shortcuts.ts";
 
 /**
  * The layers (E10.3): the document as an ARIA tree whose selection IS the canvas's selection, both ways.
@@ -40,7 +41,9 @@ type Insertion = { targetId: string; placement: Placement; allowed: boolean };
 type Drag = { nodeId: string; over: (Drop & { allowed: boolean }) | null };
 type Press = { id: string; x: number; y: number };
 
-const KEY_MOVES: Record<string, KeyMove> = { ArrowUp: "up", ArrowDown: "down", ArrowRight: "nest", ArrowLeft: "outdent" };
+/** The registry's four Alt moves (shortcuts.ts, scope "layers") as layer-moves.ts names them. */
+const KEY_MOVES = { "move-up": "up", "move-down": "down", nest: "nest", outdent: "outdent" } as const satisfies Partial<Record<ActionOf<"layers">, KeyMove>>;
+const isMove = (action: ActionOf<"layers">): action is keyof typeof KEY_MOVES => action in KEY_MOVES;
 const rowUnder = (x: number, y: number): HTMLElement | null => document.elementFromPoint(x, y)?.closest<HTMLElement>("[role=treeitem]") ?? null;
 
 export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit, insertion = null }: Props) {
@@ -109,36 +112,35 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
     endDrag();
   };
 
-  // --- the keyboard (WAI-ARIA APG tree, plus Alt for moving and Delete) ---------------------------
+  // --- the keyboard (WAI-ARIA APG tree, plus Alt for moving and Delete); the keys are the registry's (shortcuts.ts) ---
   const onKeyDown = (event: ReactKeyboardEvent<HTMLUListElement>): void => {
     const id = (event.target as HTMLElement).closest<HTMLElement>("[role=treeitem]")?.dataset["nodeId"];
-    if (id === undefined || event.ctrlKey || event.metaKey) return;
+    const action = actionFor("layers", event);
+    if (id === undefined || action === null) return;
     const at = shown.findIndex((row) => row.id === id);
     const node = doc.nodes[id];
-    if (event.altKey) {
-      const to = KEY_MOVES[event.key];
-      if (!to) return;
+    if (isMove(action)) {
       // What moves is what is selected: a row focused but not selected (Tab landed on it) becomes the selection as it goes.
-      move(keyMoveOp(doc, id, to));
+      move(keyMoveOp(doc, id, KEY_MOVES[action]));
       select(id);
-    } else if (event.key === "ArrowDown") { const next = shown[at + 1]; if (next) select(next.id); }
-    else if (event.key === "ArrowUp") { const previous = shown[at - 1]; if (previous) select(previous.id); }
-    else if (event.key === "ArrowRight") {
+    } else if (action === "down") { const next = shown[at + 1]; if (next) select(next.id); }
+    else if (action === "up") { const previous = shown[at - 1]; if (previous) select(previous.id); }
+    else if (action === "right") {
       // Closed: open it. Open: into its first child. A leaf: nothing.
       if (hasChildren(id) && collapsed.has(id)) toggle(id);
       else if (hasChildren(id)) select(node?.children[0] ?? id);
-    } else if (event.key === "ArrowLeft") {
+    } else if (action === "left") {
       // Open: close it. Closed, or a leaf: up to the parent.
       if (hasChildren(id) && !collapsed.has(id)) toggle(id);
       else if (node?.parentId != null) select(node.parentId);
-    } else if (event.key === "Home") { const first = shown[0]; if (first) select(first.id); }
-    else if (event.key === "End") { const last = shown.at(-1); if (last) select(last.id); }
-    else if (event.key === " " || event.key === "Enter") select(id);
-    else if ((event.key === "Delete" || event.key === "Backspace") && node?.parentId != null) {
+    } else if (action === "first") { const first = shown[0]; if (first) select(first.id); }
+    else if (action === "last") { const last = shown.at(-1); if (last) select(last.id); }
+    else if (action === "select") select(id);
+    else if (action === "remove" && node?.parentId != null) {
       submit({ type: "remove_node", nodeId: id });
       setSaid(`${labelOf(id)} removed`);
       focusNext.current = true; // the selection falls back to the page (derived in Canvas.tsx); so does the focus
-    } else if (event.key === "Escape" && drag) endDrag();
+    } else if (action === "cancel" && drag) endDrag();
     else return;
     event.preventDefault();
   };

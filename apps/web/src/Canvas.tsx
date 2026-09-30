@@ -11,10 +11,12 @@ import { LayersPanel } from "./LayersPanel.tsx";
 import type { Row } from "./layer-moves.ts";
 import { addOpAt, type Slot } from "./library-adds.ts";
 import { LibraryPanel, type Carry } from "./LibraryPanel.tsx";
-import { Preview } from "./Preview.tsx";
+import { PreviewSplit } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
 import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
 import { ShipPanel } from "./ShipPanel.tsx";
+import { ShortcutSheet } from "./ShortcutSheet.tsx";
+import { actionFor, typingIn } from "./shortcuts.ts";
 import { Surface, type CursorMark, type Reveal } from "./Surface.tsx";
 import { usePeer } from "./usePeer.ts";
 
@@ -66,6 +68,24 @@ export function Canvas({ documentId }: { documentId: string }) {
   }, [anyCursor]);
   // The AI panel is open until the person closes it (the top bar's AI button); not remembered, a session's choice.
   const [aiOpen, setAiOpen] = useState(true);
+  // The running page beside the canvas (E10.7): closed until asked (it holds a container), by the bar's button or P.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // The `?` sheet of shortcuts (E10.7).
+  const [sheetOpen, setSheetOpen] = useState(false);
+  // The global shortcuts (shortcuts.ts, scope "global"): anywhere in the editor, unless the person is typing
+  // or the sheet is up. A widget's own handler runs first and, finding no action of its own, lets the key bubble here.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (sheetOpen || (event.target instanceof HTMLElement && typingIn(event.target))) return;
+      const action = actionFor("global", event);
+      if (action === "help") setSheetOpen(true);
+      else if (action === "preview") setPreviewOpen((open) => !open);
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => { window.removeEventListener("keydown", onKeyDown); };
+  }, [sheetOpen]);
   // A gap or padding control is hovered or focused in the inspector: the canvas shades that space (E10.4).
   const [hint, setHint] = useState<Hint | null>(null);
   // A component is carried from the library over the tree or the canvas (E10.5): whichever it is over shows where it would land.
@@ -161,7 +181,9 @@ export function Canvas({ documentId }: { documentId: string }) {
           <p aria-live="polite" className="visually-hidden">{summaryOf(peer.others)}</p>
           <div className="top-bar-actions">
             <ShipPanel documentId={documentId} />
+            <button type="button" aria-pressed={previewOpen} aria-keyshortcuts="p" onClick={() => { setPreviewOpen((open) => !open); }}>Preview</button>
             <button type="button" aria-pressed={aiOpen} aria-controls="ai-panel" onClick={() => { setAiOpen((open) => !open); }}>AI</button>
+            <button type="button" aria-label="Keyboard shortcuts (?)" aria-haspopup="dialog" aria-keyshortcuts="?" onClick={() => { setSheetOpen(true); }}>?</button>
           </div>
         </TopBar>
       }
@@ -193,8 +215,11 @@ export function Canvas({ documentId }: { documentId: string }) {
       }
       centre={
         <>
-          <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} isContainer={isContainer} insertion={carry?.kind === "canvas" ? carry.slot : null} onSelect={setSelected} onPoint={point} cursors={marks} reveal={reveal} />
-          <Preview documentId={documentId} />
+          {/* The running page beside the canvas, in a device frame (E10.7), while Preview is on. */}
+          <PreviewSplit open={previewOpen} documentId={documentId}>
+            <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} isContainer={isContainer} insertion={carry?.kind === "canvas" ? carry.slot : null} onSelect={setSelected} onPoint={point} cursors={marks} reveal={reveal} />
+          </PreviewSplit>
+          <ShortcutSheet open={sheetOpen} onClose={() => { setSheetOpen(false); }} />
         </>
       }
       right={

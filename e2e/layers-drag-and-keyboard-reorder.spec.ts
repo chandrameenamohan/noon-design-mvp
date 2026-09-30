@@ -10,7 +10,7 @@ const button = (page: Page, name: string) => page.getByRole("button", { name, ex
 /** A component in the library (E10.5): a click adds it into the selection, as the "Add X" buttons did. */
 const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading");
+const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
 /** The page's direct children on the canvas, in order. */
 const pageChildren = (page: Page) => page.locator(".page-frame > [data-node-id]");
 const componentsOf = async (rows: Locator): Promise<string[]> => rows.evaluateAll((els) => els.map((el) => el.getAttribute("data-component") ?? ""));

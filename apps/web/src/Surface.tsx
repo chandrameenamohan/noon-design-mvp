@@ -7,6 +7,7 @@ import { components, FRAME, frameStylesheet } from "./designSystem.ts";
 import type { Hint } from "./Inspector.tsx";
 import { indexAlong, insertLineAt, slotOnCanvas, type Axis, type Slot } from "./library-adds.ts";
 import { hitTest, step, type Box, type Step } from "./selection.ts";
+import { actionFor } from "./shortcuts.ts";
 import { gapsBetween, paddingRing, type Rect, type Sides } from "./spaces.ts";
 import { centreOn, fit, panBy, percent, toWorld, wheelZoom, zoomAt, zoomStep, type Point, type Viewport } from "./viewport.ts";
 
@@ -305,18 +306,19 @@ export function Surface({ doc, labels, selected, selectedBy, hint, isContainer, 
   };
   const onPointerLeave = (): void => { onPoint(null); setHovered(null); };
 
-  const STEPS: Record<string, Step> = { ArrowRight: "next", ArrowDown: "next", ArrowLeft: "previous", ArrowUp: "previous" };
+  // The keys are the registry's (shortcuts.ts, scope "canvas"); a key that is no action here bubbles on (P, ?).
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
-    if (event.target !== event.currentTarget || event.ctrlKey || event.metaKey || event.altKey) return;
-    const to = STEPS[event.key];
-    if (to) onSelect(step(doc, selected, to));
-    else if (event.key === "Enter") onSelect(step(doc, selected, event.shiftKey ? "out" : "in"));
-    else if (event.key === "Escape") onSelect(ROOT_ID);
-    else if (event.key === "+" || event.key === "=") zoomBy(1);
-    else if (event.key === "-" || event.key === "_") zoomBy(-1);
-    else if (event.key === "0") setViewport(fitted());
-    else if (event.key === " ") setPanMode(true);
-    else return;
+    if (event.target !== event.currentTarget) return;
+    const action = actionFor("canvas", event);
+    if (action === null) return;
+    switch (action) {
+      case "next": case "previous": case "in": case "out": onSelect(step(doc, selected, action satisfies Step)); break;
+      case "page": onSelect(ROOT_ID); break;
+      case "zoom-in": zoomBy(1); break;
+      case "zoom-out": zoomBy(-1); break;
+      case "fit": setViewport(fitted()); break;
+      case "pan": setPanMode(true); break;
+    }
     event.preventDefault();
   };
 

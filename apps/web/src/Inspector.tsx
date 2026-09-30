@@ -2,6 +2,7 @@ import { useId, useState, type FocusEvent as ReactFocusEvent, type KeyboardEvent
 import type { Doc, DocNode, Manifest, Op, PropValue } from "@noon/contracts";
 import { controlFor, glyphFor, spaceOf, splitProps, type Control, type Prop, type Space } from "./controls.ts";
 import { sentenceFor } from "./reasons.ts";
+import { actionFor } from "./shortcuts.ts";
 
 /**
  * The inspector (E10.4): the manifest, rendered, in three sections. Component (the name, and where the node
@@ -53,7 +54,7 @@ function TextField({ control, value, ids, onChange }: { control: Extract<Control
     setDraft(undefined);
     onChange(draft === "" ? null : draft);
   };
-  return <input id={ids.id} type="text" className="mono" aria-describedby={ids.describedBy} placeholder={control.placeholder} value={draft ?? (typeof value === "string" ? value : "")} onChange={(event) => { setDraft(event.target.value); }} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") commit(); }} />;
+  return <input id={ids.id} type="text" className="mono" aria-describedby={ids.describedBy} placeholder={control.placeholder} value={draft ?? (typeof value === "string" ? value : "")} onChange={(event) => { setDraft(event.target.value); }} onBlur={commit} onKeyDown={(event) => { if (actionFor("inspector", event) === "commit") commit(); }} />;
 }
 
 /**
@@ -77,9 +78,11 @@ function NumberField({ control, value, ids, onChange }: { control: Extract<Contr
     if (draft === "") onChange(null);
     else if (Number.isFinite(Number(draft))) onChange(plain(Number(draft)));
   };
+  // The keys are the registry's (shortcuts.ts, scope "inspector"); which way a step goes, and how far, the event still says.
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
-    if (event.key === "Enter") commit(event.currentTarget);
-    else if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); stepBy(event.key === "ArrowUp" ? 1 : -1, event.shiftKey); }
+    const action = actionFor("inspector", event);
+    if (action === "commit") commit(event.currentTarget);
+    else if (action === "step") { event.preventDefault(); stepBy(event.key === "ArrowUp" ? 1 : -1, event.shiftKey); }
   };
   const press = (direction: 1 | -1) => (event: ReactMouseEvent): void => { stepBy(direction, event.shiftKey); };
   return (

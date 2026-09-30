@@ -10,7 +10,7 @@ const button = (page: Page, name: string) => page.getByRole("button", { name, ex
 const tile = (page: Page, name: string) => page.getByRole("option", { name, exact: true });
 const layer = (page: Page, name: string) => page.getByRole("treeitem", { name, exact: true });
 const canvasOf = (page: Page) => page.getByRole("region", { name: "Canvas" });
-const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading");
+const heading = (page: Page) => page.getByRole("complementary", { name: "Selected element" }).getByRole("heading", { level: 2 });
 const zoomOf = async (page: Page): Promise<number> => Number(await page.locator(".world").getAttribute("data-zoom"));
 const box = async (page: Page, selector: string): Promise<{ x: number; y: number; width: number; height: number }> => {
   const found = await page.locator(selector).first().boundingBox();
