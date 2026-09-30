@@ -5,12 +5,13 @@ import { tmpdir } from "node:os";
 import { createServer as createHttpServer } from "node:http";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
 import { chromium } from "@playwright/test";
 import type { Doc, Op, PropValue } from "@noon/contracts";
 import { generate } from "@noon/codegen";
 import { manifest } from "@noon/design-system";
 import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
+import { seedCommit } from "../../../scripts/gitea.ts";
 import { previewToken } from "./sandbox-proxy.ts";
 import { buildImage, DOCKER, docker, dockerEnv, IMAGE, makeTestSeed, removePool, TEST_PREVIEW_KEY, TEST_SEED, testPool } from "./sandbox-testing.ts";
 import { isRunning, pagePath, previewUrl, pushPage, reapSandboxes, sandboxName, startSandbox, type SandboxOptions } from "./sandbox.ts";
@@ -51,8 +52,23 @@ async function variant(tag: string, line: string): Promise<void> {
   await build;
 }
 
+/**
+ * Each test's sandboxes go when it ends, their networks with them: every sandbox network spends one of
+ * the daemon's ~30 address pools (sandbox.ts ensureNetwork), and this file starts more sandboxes than that.
+ * Kept to the end of the file, they ran the daemon out ("all predefined address pools have been fully subnetted").
+ */
+afterEach(async () => {
+  const ids = made.splice(0);
+  if (ids.length > 0) await docker("rm", "--force", ...ids.map(sandboxName)).catch(() => undefined);
+  for (const net of ids.map(sandboxName)) {
+    // A pool's proxy is the network's other member, and a network with a member cannot be removed.
+    const members = (await docker("network", "inspect", "--format", "{{range .Containers}}{{.Name}} {{end}}", net).catch(() => "")).split(" ").filter(Boolean);
+    for (const member of members) await docker("network", "disconnect", "--force", net, member).catch(() => undefined);
+    await docker("network", "rm", net).catch(() => undefined);
+  }
+});
+
 afterAll(async () => {
-  if (made.length > 0) await docker("rm", "--force", ...made.map(sandboxName)).catch(() => undefined);
   for (const each of pools) await removePool(each);
 });
 
@@ -96,7 +112,7 @@ test("the sandbox works in ITS OWN clone of the seed repo, on the document's wor
   await Promise.all([startSandbox(a, options), startSandbox(b, options)]);
   const git = (id: string, ...args: string[]): Promise<string> => docker("exec", sandboxName(id), "git", ...args);
   expect(await git(a, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`noon/${a}`);
-  expect(await git(a, "log", "--format=%s", "-1")).toBe("seed");
+  expect(await git(a, "rev-parse", "HEAD")).toBe(await seedCommit()); // the seed commit itself, nothing on top
   // Baked node_modules and the preview entry are not changes; the document's own page is the one new file.
   expect(await git(a, "status", "--porcelain")).toBe(`?? ${pagePath(a)}`);
   // Own clone: a file written in one sandbox is not in the other.
@@ -150,7 +166,7 @@ test("a clone that died halfway is done again on the next start, not served as i
   await docker("kill", sandboxName(id));
   await startSandbox(id, options);
   expect(await docker("exec", sandboxName(id), "git", "rev-parse", "--abbrev-ref", "HEAD")).toBe(`noon/${id}`);
-  expect(await docker("exec", sandboxName(id), "git", "log", "--format=%s", "-1")).toBe("seed");
+  expect(await docker("exec", sandboxName(id), "git", "rev-parse", "HEAD")).toBe(await seedCommit());
 }, 60_000);
 
 test("a sandbox of an older image, or signed with an older key, is made anew with a new token, never started as it was", async () => {
