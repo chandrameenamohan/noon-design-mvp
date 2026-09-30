@@ -103,7 +103,7 @@ process.stdout.write(config.queue === "ai"
       : `worker draining queues: sandbox (image ${config.sandbox.image}, at most ${String(config.sandbox.concurrency)} at once)\n`);
 
 // Tell the runs in flight to end NOW (as failed/worker_stopped: a row left `running` would block its
-// document's next run for ever), stop taking jobs, wait for those endings to be written, close the pool.
+// document's next run until its heartbeat went stale, 15 s later), stop taking jobs, wait for those endings to be written, close the pool.
 const shutdown = createShutdown({ steps: [() => { clearInterval(reaper); stopping.abort(); return worker.close(); }, () => sync.close(), () => db.close()], timeoutMs: 8000, exit: (code) => process.exit(code) });
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGINT", () => void shutdown());

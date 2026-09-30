@@ -1,0 +1,93 @@
+import { randomBytes } from "node:crypto";
+import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
+import { createProducer, type Producer } from "@noon/queue";
+import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
+import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
+import { startWorker, type Handlers, type RunningWorker } from "./worker.ts";
+
+// E9.2a (F28), the worker's half: a job a dead worker left `running` is given another attempt once its heartbeat is
+// stale, and a worker that was only SLOW, and was given up on, stops without writing over the attempt after it.
+// The end-to-end version (a real `kill -9` of a worker container mid-run) is scripts/chaos/kill-worker-resumes.ts.
+const prefix = `test-${randomBytes(6).toString("hex")}`;
+let db: TestDb, producer: Producer;
+let running: RunningWorker[] = [];
+beforeAll(async () => {
+  db = await createTestDb();
+  producer = createProducer({ redisUrl: TEST_REDIS_URL, prefix });
+});
+afterEach(async () => {
+  await Promise.all(running.map((w) => w.close())); // one test's worker must not drain the next test's jobs
+  running = [];
+});
+afterAll(async () => {
+  await producer.close();
+  await db.drop();
+});
+const work = async (ai: NonNullable<Handlers["ai"]>, staleMs: number): Promise<RunningWorker> => {
+  const worker = await startWorker({ db: db.db, redisUrl: TEST_REDIS_URL, prefix, handlers: { ai }, sweepMs: 100, cancelPollMs: 100, staleMs });
+  running.push(worker);
+  return worker;
+};
+async function aJob(): Promise<{ queue: "ai"; jobId: string; orgId: string }> {
+  const doc = await db.createDocument("Crash");
+  const res = (await db.rawQuery("insert into jobs (org_id, document_id, queue, input) values ($1, $2, 'ai', '{}') returning id", [doc.orgId, doc.id])) as { rows: [{ id: string }] };
+  return { queue: "ai", jobId: res.rows[0].id, orgId: doc.orgId };
+}
+const row = async (jobId: string) => ((await db.rawQuery("select status, error, attempts from jobs where id = $1", [jobId])) as { rows: [{ status: string; error: string | null; attempts: number }] }).rows[0];
+async function until(check: () => Promise<boolean>, what: string, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error(`timed out: ${what}`);
+    await new Promise((r) => setTimeout(r, 50));
+  }
+}
+
+test("a job left running by a dead worker runs again once its heartbeat is stale, and succeeds as attempt 2", async () => {
+  const key = await aJob();
+  // The dead worker: it claimed the job (attempt 1) and its message is gone with it; then it beat no more.
+  await db.db.jobStore().claim(key);
+  const attempts: number[] = [];
+  const startedAt = Date.now();
+  await work(async (job) => {
+    attempts.push((await row(job.id)).attempts);
+    return undefined;
+  }, 1000);
+  await until(async () => (await row(key.jobId)).status === "succeeded", "the job succeeded");
+  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(900); // not before its beat went stale: a live worker's job is never taken
+  expect(attempts).toEqual([2]);
+  expect(await row(key.jobId)).toMatchObject({ status: "succeeded", error: null, attempts: 2 });
+});
+
+test("while its worker beats, a long job is never taken from it, however long it runs", async () => {
+  const key = await aJob();
+  let release = (): void => undefined;
+  const calls: number[] = [];
+  await work(() => {
+    calls.push(1);
+    return new Promise((resolve) => { release = () => { resolve(undefined); }; });
+  }, 500);
+  await producer.enqueue(key);
+  await until(async () => (await row(key.jobId)).status === "running", "the job runs");
+  await new Promise((r) => setTimeout(r, 2000)); // four stale windows
+  expect(await row(key.jobId)).toMatchObject({ status: "running", attempts: 1 });
+  release();
+  await until(async () => (await row(key.jobId)).status === "succeeded", "the job succeeded");
+  expect(calls).toHaveLength(1);
+});
+
+test("a slow worker that was given up on stops its attempt when it wakes, and writes nothing over the next one", async () => {
+  const key = await aJob();
+  let sawStop = false;
+  await work((_job, cancelled) => new Promise((_, reject) => {
+    cancelled.addEventListener("abort", () => { sawStop = true; reject(new Error("stopped")); }, { once: true });
+  }), 60_000);
+  await producer.enqueue(key);
+  await until(async () => (await row(key.jobId)).status === "running", "attempt 1 runs");
+  // What the sweep does to a worker silent past staleMs AND another worker's claim after it, as one step: this
+  // worker must not get the chance to claim the job again itself in between.
+  await db.rawQuery("update jobs set attempts = attempts + 1, started_at = now(), heartbeat_at = now() where id = $1", [key.jobId]);
+  await until(() => Promise.resolve(sawStop), "attempt 1 was told to stop");
+  await new Promise((r) => setTimeout(r, 300)); // its finish(cancelled) has had time to land, if it could
+  expect(await row(key.jobId)).toMatchObject({ status: "running", attempts: 2 });
+  await db.db.jobStore().finish({ ...key, attempt: 2 }, "succeeded");
+});

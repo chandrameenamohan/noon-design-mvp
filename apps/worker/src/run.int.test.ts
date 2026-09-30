@@ -163,7 +163,7 @@ test("eight claims racing for one job: exactly one wins, and a late report canno
   const jobs = db.db.jobStore();
   expect(await jobs.claim({ ...key, orgId: doc.id })).toBeUndefined(); // the wrong org names nothing
   const claims = await Promise.all(Array.from({ length: 8 }, () => jobs.claim(key)));
-  expect(claims.filter(Boolean)).toEqual([{ id: run.id, orgId: run.orgId, documentId: doc.id, queue: "ai", input: { instruction: "race" } }]);
+  expect(claims.filter(Boolean)).toEqual([{ id: run.id, orgId: run.orgId, documentId: doc.id, queue: "ai", input: { instruction: "race" }, attempt: 1 }]);
 
   await jobs.finish(key, "succeeded");
   const done = await readRun("ann@example.com", run);

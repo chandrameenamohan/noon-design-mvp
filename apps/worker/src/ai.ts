@@ -1,4 +1,5 @@
-import type { Manifest, UsageAmount } from "@noon/contracts";
+import { createHash } from "node:crypto";
+import type { Manifest, Op, UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
@@ -8,6 +9,27 @@ import { buildTools } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
 
 export type { RunAgent };
+
+/**
+ * The ids a run mints, the same on every attempt of its job (F28): the n-th node is always the same id, and the n-th
+ * op the same opId when it is the same op. A retry after a crash replays the dead attempt's steps first; a node it
+ * finds already there is that step done, and an op the room journaled already gets its original answer (the
+ * journal's key is (sender, opId)), so the document never holds anything twice. The op's content is in its id: a
+ * model that does something ELSE at step n on the retry sends a new op, never one the room would take for the old.
+ */
+export function replayIds(jobId: string): { opId: (op: Op) => string; nodeId: () => string } {
+  let ops = 0;
+  let nodes = 0;
+  const digest = (text: string): string => createHash("sha256").update(text).digest("hex");
+  return {
+    // Shaped as a version-8 (custom) UUID, which the contract's z.uuid() accepts.
+    opId: (op) => {
+      const h = digest(`${jobId}:op:${String(ops++)}:${JSON.stringify(op)}`);
+      return `${h.slice(0, 8)}-${h.slice(8, 12)}-8${h.slice(13, 16)}-${((parseInt(h.slice(16, 17), 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    },
+    nodeId: () => `n_${digest(`${jobId}:node:${String(nodes++)}`).slice(0, 12)}`,
+  };
+}
 
 /**
  * One AI run: join the document as a peer, hand the model our tools, leave. The agent edits through
@@ -43,8 +65,10 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     // wait in the queue, and being removed from the org must take effect on what has not started yet.
     if (userId === undefined || !(await stillMember(job.documentId, userId))) throw new JobFailure("owner_missing");
 
+    const ids = replayIds(job.id);
     const peer = connectPeer({
       manifest,
+      mintOpId: ids.opId,
       // The worker holds the signing secret, so it mints its own session. The ROOM stamps every op
       // with this actor; nothing the agent sends can claim to be a person, or another run.
       session: async () => ({
@@ -80,7 +104,7 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       await Promise.race([live, ended]);
       peer.setPresence({ cursor: null, selection: null }); // no pointer, but it tells the people already here that the AI has arrived
       const instruction = typeof job.input["instruction"] === "string" ? job.input["instruction"] : "";
-      const agent = runAgent({ instruction, tools: buildTools(peer, manifest), signal: abort.signal });
+      const agent = runAgent({ instruction, tools: buildTools(peer, manifest, ids.nodeId), signal: abort.signal });
       agent.catch(() => undefined); // if `ended` wins, the aborted agent rejects later, to nobody
       return await Promise.race([agent, ended]); // what the run consumed (F12): the worker records it
     } finally {

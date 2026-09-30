@@ -88,18 +88,33 @@ export type DocumentStore = {
 export class Fenced extends Error {}
 
 const QUEUES = ["ai", "sandbox", "ship"] as const;
-type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string };
+/** `attempt`: the claim a worker holds (claim() returns it). Given, a write lands only while that claim is the job's latest. */
+type JobKey = { queue: (typeof QUEUES)[number]; jobId: string; orgId: string; attempt?: number };
 /** A job as the worker sees it. `input` is whatever the creating route validated and stored. */
 export type Job = { id: string; orgId: string; documentId: string; queue: JobKey["queue"]; input: Record<string, unknown>; /** Undefined once that user has been deleted. */ createdBy: string | undefined };
 type JobStore = {
-  /** queued -> running, atomically. Undefined when there is nothing to claim: unknown, already claimed, finished, or a job of ANOTHER queue. */
-  claim(key: JobKey): Promise<Job | undefined>;
+  /**
+   * queued -> running, atomically, as the job's next `attempt` (1 for the first). Undefined when there is nothing to
+   * claim: unknown, already claimed, finished, or a job of ANOTHER queue.
+   */
+  claim(key: JobKey): Promise<(Job & { attempt: number }) | undefined>;
   /** running -> a terminal status. `reason` is what the user will read: anything that is not a plain name is stored as `internal`. */
   finish(key: JobKey, status: "succeeded" | "failed" | "cancelled", reason?: string): Promise<void>;
   /** The oldest jobs still waiting, across ALL orgs: what the worker offers to the queue again. */
   queued(limit: number): Promise<JobKey[]>;
-  /** Has someone asked for this running job to stop? The worker asks once a second. */
-  cancelRequested(key: JobKey): Promise<boolean>;
+  /**
+   * "Still alive", from the worker running this attempt, once a second (F28), and the answer to "has someone asked
+   * you to stop?" (F10). `lost`: the job is not this attempt's any more (finished, or given to another worker
+   * after this one went silent): stop, and write nothing.
+   */
+  heartbeat(key: JobKey & { attempt: number }): Promise<"running" | "cancel" | "lost">;
+  /**
+   * Running jobs, across ALL orgs, whose heartbeat is older than `staleMs`: their worker died. Each goes back to
+   * `queued` for another attempt, or, after `maxAttempts` claims, fails as `worker_lost` (one whose cancel was asked
+   * for ends `cancelled`). `lost` counts both kinds of ending. A running ship with a
+   * ship already waiting for its document fails too (the waiting one ships everything, and two may not wait).
+   */
+  requeueStale(staleMs: number, maxAttempts: number): Promise<{ requeued: number; lost: number }>;
   /** What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per job. */
   recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
   /**
@@ -273,8 +288,8 @@ const UsageTotalsRow = z
   .object({ runs: count, input_tokens: count, output_tokens: count, cache_read_tokens: count, cache_write_tokens: count, cost_usd: money })
   .transform((r): UsageReport["totals"] => ({ runs: r.runs, inputTokens: r.input_tokens, outputTokens: r.output_tokens, cacheReadTokens: r.cache_read_tokens, cacheWriteTokens: r.cache_write_tokens, costUsd: r.cost_usd }));
 const JobRow = z
-  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.enum(QUEUES), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable() })
-  .transform((r): Job => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined }));
+  .object({ id: z.string(), org_id: z.string(), document_id: z.string(), queue: z.enum(QUEUES), input: z.record(z.string(), z.unknown()), created_by: z.string().nullable(), attempts: z.number().int() })
+  .transform((r): Job & { attempt: number } => ({ id: r.id, orgId: r.org_id, documentId: r.document_id, queue: r.queue, input: r.input, createdBy: r.created_by ?? undefined, attempt: r.attempts }));
 
 // A ship's output is written by our own worker, but read as untrusted all the same: a row that does not parse reads as "nothing yet".
 const ShipRow = z
@@ -579,17 +594,54 @@ export function createDb({ connectionString, schema }: { connectionString: strin
       // names a git job would mark it running and then fail to parse it: running for ever.
       claim: async ({ queue, jobId, orgId }) =>
         isId(jobId) && isId(orgId)
-          ? one(JobRow, "update jobs set status = 'running', started_at = now() where org_id = $1 and id = $2 and queue = $3 and status = 'queued' returning *", [orgId, jobId, queue])
+          ? one(JobRow, "update jobs set status = 'running', started_at = now(), heartbeat_at = now(), attempts = attempts + 1 where org_id = $1 and id = $2 and queue = $3 and status = 'queued' returning *", [orgId, jobId, queue])
           : undefined,
-      async finish({ jobId, orgId }, status, reason) {
+      async finish({ jobId, orgId, attempt }, status, reason) {
         if (!isId(jobId) || !isId(orgId)) return;
-        // `status = 'running'`: a finished job stays finished, whoever reports late.
-        await pool.query("update jobs set status = $3, error = $4, finished_at = now() where org_id = $1 and id = $2 and status = 'running'", [
-          orgId, jobId, status, status === "failed" ? (FailureReason.safeParse(reason).success ? reason : "internal") : null,
+        // `status = 'running'`: a finished job stays finished, whoever reports late. `attempts`: a worker that went
+        // silent, was given up on and woke up later does not end the attempt another worker is running now.
+        await pool.query("update jobs set status = $3, error = $4, finished_at = now() where org_id = $1 and id = $2 and status = 'running' and ($5::int is null or attempts = $5)", [
+          orgId, jobId, status, status === "failed" ? (FailureReason.safeParse(reason).success ? reason : "internal") : null, attempt ?? null,
         ]);
       },
-      cancelRequested: async ({ jobId, orgId }) =>
-        isId(jobId) && isId(orgId) && (await pool.query("select 1 from jobs where org_id = $1 and id = $2 and cancel_requested_at is not null", [orgId, jobId])).rowCount === 1,
+      async heartbeat({ jobId, orgId, attempt }) {
+        if (!isId(jobId) || !isId(orgId)) return "lost";
+        const beat = await one(
+          z.object({ cancel: z.boolean() }),
+          "update jobs set heartbeat_at = now() where org_id = $1 and id = $2 and status = 'running' and attempts = $3 returning cancel_requested_at is not null as cancel",
+          [orgId, jobId, attempt],
+        );
+        return beat === undefined ? "lost" : beat.cancel ? "cancel" : "running";
+      },
+      async requeueStale(staleMs, maxAttempts) {
+        // ONE statement, `skip locked`: every worker process sweeps, and two sweeps never both take a row.
+        // coalesce(heartbeat_at, started_at): a row left running by a worker from before heartbeats (0019) is stale too.
+        // `distinct on`: of the ships of one document that went silent together, only the newest may wait again
+        // (0011: one waiting ship per document); it reads the document afresh, so it ships what they would have.
+        // A job someone asked to stop is not run again: it ends as `cancelled` (F10), as its worker would have ended it.
+        // A sandbox's address dies with its worker (the next attempt reports one); a ship's commit stays, as the git
+        // peer asks it "did Ship push this?" (E5.5), and the push may still be on its way.
+        const counted = await one(
+          z.object({ requeued: z.number().int(), lost: z.number().int() }),
+          `with stale as (
+             select id, queue, document_id, attempts, created_at, cancel_requested_at is not null as cancel from jobs
+             where status = 'running' and coalesce(heartbeat_at, started_at) < now() - make_interval(secs => $1::float8 / 1000)
+             for update skip locked),
+           again as (
+             select distinct on (case when queue = 'ship' then document_id else id end) id from stale s
+             where not cancel and attempts < $2 and not (queue = 'ship' and exists (select 1 from jobs w where w.queue = 'ship' and w.status = 'queued' and w.document_id = s.document_id))
+             order by case when queue = 'ship' then document_id else id end, created_at desc),
+           requeued as (
+             update jobs set status = 'queued', started_at = null, heartbeat_at = null, output = case when queue = 'sandbox' then null else output end
+             where id in (select id from again) returning 1),
+           lost as (
+             update jobs set status = case when stale.cancel then 'cancelled' else 'failed' end, error = case when stale.cancel then null else 'worker_lost' end, finished_at = now()
+             from stale where jobs.id = stale.id and stale.id not in (select id from again) returning 1)
+           select (select count(*) from requeued)::int as requeued, (select count(*) from lost)::int as lost`,
+          [staleMs, maxAttempts],
+        );
+        return counted ?? { requeued: 0, lost: 0 };
+      },
       async recordUsage({ jobId, orgId }, amount) {
         if (!isId(jobId) || !isId(orgId)) return;
         const a = UsageAmount.parse(amount); // the same contract the reader uses, BEFORE the write

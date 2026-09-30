@@ -27,8 +27,12 @@ function outline(doc: Doc, id: string): unknown {
   return { id: node.id, component: node.component, props: node.props, children: node.children.map((child) => outline(doc, child)) };
 }
 
-/** The agent's whole world: the four ops, the tree, the manifest. No file, shell or web tool exists. */
-export function buildTools(peer: AgentPeer, manifest: Manifest): AgentTool[] {
+/**
+ * The agent's whole world: the four ops, the tree, the manifest. No file, shell or web tool exists.
+ * `mintNodeId`: where add_node's ids come from. An AI run mints them per (job, step), so an attempt retried after a
+ * crash (F28) adds the nodes the dead attempt added under the same ids, and the room keeps one of each.
+ */
+export function buildTools(peer: AgentPeer, manifest: Manifest, mintNodeId: () => string = () => `n_${randomBytes(6).toString("hex")}`): AgentTool[] {
   const components = manifest.components.map((c) => c.name).join(", ");
   // A Map, not an object: a reason named "constructor" must find nothing, not Object.prototype's.
   const hints = new Map(Object.entries({
@@ -43,9 +47,14 @@ export function buildTools(peer: AgentPeer, manifest: Manifest): AgentTool[] {
     read_only: "The document is read-only: the server cannot save edits right now. Stop and report that the edit could not be made.",
   }));
 
-  /** One op, start to finish: the replica's verdict, then the ROOM's. Either refusal is a tool error (F11). */
-  async function apply(op: Op, done: unknown): Promise<ToolResult> {
+  /**
+   * One op, start to finish: the replica's verdict, then the ROOM's. Either refusal is a tool error (F11).
+   * `replayed`: asked when the replica says the node already exists. True = this step's node, added by an
+   * earlier attempt of the same run: the step is done, not refused.
+   */
+  async function apply(op: Op, done: unknown, replayed = (): boolean => false): Promise<ToolResult> {
     const submitted = peer.submit(op);
+    if (!submitted.ok && submitted.reason === "duplicate_node" && replayed()) return ok(done);
     if (!submitted.ok) return refused(submitted.reason, hints.get(submitted.reason));
     const outcome = await submitted.settled;
     return outcome.ok ? ok(done) : refused(outcome.reason, hints.get(outcome.reason));
@@ -80,8 +89,10 @@ export function buildTools(peer: AgentPeer, manifest: Manifest): AgentTool[] {
       `Adds a component instance under a parent and returns its new nodeId. Components: ${components}.`,
       { parentId: nodeId, component: z.string(), props: z.object({}).catchall(value).default({}).describe("prop name -> value; may be omitted"), index: z.number().int().optional().describe("position among the parent's children; omit to append") },
       ({ parentId, component, props, index }) => {
-        const id = `n_${randomBytes(6).toString("hex")}`; // the tool mints ids: a model would reuse "card1" across runs
-        return apply({ type: "add_node", nodeId: id, parentId, component, props, index: index ?? nodeOf(peer.doc, parentId)?.children.length ?? 0 }, { nodeId: id });
+        const id = mintNodeId(); // the tool mints ids: a model would reuse "card1" across runs
+        // Same component under the same parent: the dead attempt's node for this step (a model that changed its mind gets the refusal, and a new id next time).
+        const replayed = (): boolean => { const there = nodeOf(peer.doc, id); return there?.component === component && there.parentId === parentId; };
+        return apply({ type: "add_node", nodeId: id, parentId, component, props, index: index ?? nodeOf(peer.doc, parentId)?.children.length ?? 0 }, { nodeId: id }, replayed);
       },
     ),
     tool("set_prop", "Sets one prop of a node. A null value removes the prop, so the component's default applies.", { nodeId, key: z.string(), value: value.nullable() }, ({ nodeId: id, key, value: next }) =>

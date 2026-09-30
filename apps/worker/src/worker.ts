@@ -23,7 +23,7 @@ export class JobFailure extends Error {
 const log = (level: "warn" | "error", message: string, extra: Record<string, unknown> = {}) =>
   process.stderr.write(`${JSON.stringify({ level, source: "worker", message, ...extra })}\n`);
 
-export async function startWorker({ db, redisUrl, prefix, handlers, concurrency = {}, sweepMs = 30_000, cancelPollMs = 1000, onAlive }: {
+export async function startWorker({ db, redisUrl, prefix, handlers, concurrency = {}, sweepMs = 30_000, cancelPollMs = 1000, staleMs = 15_000, maxAttempts = 3, onAlive }: {
   db: Db;
   redisUrl: string;
   prefix?: string;
@@ -35,8 +35,16 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
    */
   concurrency?: Partial<Record<QueueName, number>>;
   sweepMs?: number;
-  /** How often a running job's row is asked "has someone cancelled you?". F10 allows 3 s in all. */
+  /** How often a running job beats (F28) and asks "has someone cancelled you?" (F10 allows 3 s in all). */
   cancelPollMs?: number;
+  /**
+   * A running job whose last beat is older than this was left by a dead worker (`kill -9` says nothing): the sweep
+   * gives it another attempt. Many beats long, so a busy event loop or a slow query is not taken for a death; and
+   * if it is, the attempt fence makes the slow worker stop instead of finishing twice.
+   */
+  staleMs?: number;
+  /** Claims a job may have in all. A job that kills its worker every time must still END: then it fails as `worker_lost`. */
+  maxAttempts?: number;
   /** Called after every sweep in which Postgres AND Redis answered: the container healthcheck hangs on it. */
   onAlive?: () => void;
 }): Promise<RunningWorker> {
@@ -52,12 +60,18 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
     // message finds nothing to claim and ends here, so a job runs at most once per claim.
     const job = await jobs.claim(ref);
     if (!job) return;
-    // ponytail: a poll per running job (a handful at most). Redis pub/sub if a second ever matters.
+    // Everything this attempt writes names it: once the job is someone else's, it writes nothing.
+    const mine = { ...ref, attempt: job.attempt };
+    // ponytail: a beat per running job per second (a handful at most). Redis pub/sub if a second ever matters.
     // The signal only ASKS. "Ends within 3 s" is the handler's promise (ai.ts races its work against it):
     // a handler for a new queue that ignores the signal holds its slot, and a polite shutdown, for ever.
+    // `lost` aborts it too: this worker went silent for longer than staleMs and the job was given to another.
     const cancel = new AbortController();
     const watch = setInterval(() => {
-      jobs.cancelRequested(ref).then((asked) => { if (asked) cancel.abort(); }, () => undefined); // a failed look is tried again in a second
+      jobs.heartbeat(mine).then((state) => {
+        if (state === "lost" && !cancel.signal.aborted) log("warn", "job taken over after a silence: stopping this attempt", { jobId: ref.jobId, attempt: job.attempt });
+        if (state !== "running") cancel.abort();
+      }, () => undefined); // a failed beat is tried again in a second; staleMs is many of them
     }, cancelPollMs);
     try {
       const handler = handlers[job.queue]; // the row's queue, not the message's
@@ -67,23 +81,24 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
       // spent tokens too, which the SDK only totals in its final message. Per-turn accounting is E9.5.
       if (consumed) await jobs.recordUsage(ref, consumed).catch((err: unknown) => log("error", `usage not recorded: ${describeError(err)}`, { jobId: ref.jobId })); // a run that worked is not failed over its bookkeeping
       // Asked to stop but finished anyway: the user said cancel, and cancel is what they are told.
-      await jobs.finish(ref, cancel.signal.aborted ? "cancelled" : "succeeded");
+      await jobs.finish(mine, cancel.signal.aborted ? "cancelled" : "succeeded");
     } catch (err) {
       if (cancel.signal.aborted) {
-        await jobs.finish(ref, "cancelled");
+        await jobs.finish(mine, "cancelled");
         return;
       }
       // The raw error may hold a path, a query or a secret: it goes to the log, a NAME goes to the user
       // (finish() stores anything that is not a plain name as `internal`).
       log("error", describeError(err), { jobId: ref.jobId });
-      await jobs.finish(ref, "failed", err instanceof JobFailure ? err.reason : "internal");
+      await jobs.finish(mine, "failed", err instanceof JobFailure ? err.reason : "internal");
     } finally {
       clearInterval(watch);
     }
   }
 
-  // ponytail: one attempt, no retries, and a job left `running` by a killed worker stays there.
-  // Retries, heartbeats and resuming stale jobs are E9 (F28).
+  // BullMQ's own retries and stalled-job checks are not what brings a job back: Postgres is (the sweep below).
+  // A message whose worker died is either re-delivered by BullMQ (claim() refuses it while the row still says
+  // running, then takes it once the sweep has put the row back) or dropped, and the sweep offers the row again.
   const workers = QUEUES.filter((name) => handlers[name] !== undefined).map((name) => {
     const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: concurrency[name] ?? 4, ...scoped });
     worker.on("error", (err) => log("warn", describeError(err), { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
@@ -94,12 +109,16 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
   // Redis is not the truth (SPEC §2.9): it can be flushed, and the api can die between its INSERT
   // and its enqueue. Whatever Postgres still calls `queued` is offered again; jobId + claim() make
   // a second offer harmless. ponytail: a poll; LISTEN/NOTIFY or an outbox if `sweepMs` is ever too slow.
+  // First, F28: a job whose worker died (its beat went stale) is made `queued` again, so this same pass offers it.
+  // Every worker process sweeps every queue: the AI worker brings back a dead sandbox worker's job, and the other way round.
   const producer = createProducer({ redisUrl, ...scoped });
   let sweeping: Promise<void> | undefined;
   const sweep = (): Promise<void> => (sweeping ??= sweepOnce().finally(() => (sweeping = undefined)));
   async function sweepOnce(): Promise<void> {
     try {
       await producer.ping(); // with nothing queued the loop below never touches Redis, and "alive" would mean "Postgres is up"
+      const stale = await jobs.requeueStale(staleMs, maxAttempts);
+      if (stale.requeued + stale.lost > 0) log("warn", "jobs left running by a dead worker", stale);
       // One refused offer must not hide the 99 behind it: it stays `queued` and is offered again next time.
       for (const ref of await jobs.queued(100)) await producer.enqueue(ref).catch((err: unknown) => log("warn", `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
       onAlive?.();

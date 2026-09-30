@@ -26,6 +26,8 @@ export type PeerOptions = {
   /** We are waiting (for a welcome, or for an answer to an op) and the server has said NOTHING for this long: the connection is dead even if it looks open. */
   ackTimeoutMs?: number;
   maxPending?: number;
+  /** Where each op's id comes from (default: a random UUID). An AI run mints the same ids on every attempt of its job (F28). */
+  mintOpId?: (op: Op) => string;
   /** Presence timing: send our own at most every `sendEveryMs`, repeat it every `refreshMs`, forget a peer silent for `forgetAfterMs`. */
   presence?: { sendEveryMs: number; refreshMs: number; forgetAfterMs: number };
 };
@@ -43,8 +45,8 @@ const KNOWN_TYPES: ReadonlySet<unknown> = new Set(ServerMessage.options.map((opt
  * all edit through this. The thinking is in replica.ts; this file is only the wire: connect, wait
  * for the welcome, send, reconnect.
  */
-export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
-  const replica = createReplica({ manifest, ...(maxPending === undefined ? {} : { maxPending }) });
+export function connectPeer({ manifest, session, onChange, onRejected, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, mintOpId, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
+  const replica = createReplica({ manifest, ...(maxPending === undefined ? {} : { maxPending }), ...(mintOpId === undefined ? {} : { mintOpId }) });
   let status: PeerStatus = "closed"; // until open() below, a line from now; this way the first onStatus is "connecting"
   let closedBecause: string | undefined;
   let socket: WebSocket | undefined;
