@@ -101,6 +101,23 @@ test("the webhook and the reconcile meet at one event for one push, whichever is
   expect((await events()).filter((e) => e.after_sha === first || e.after_sha === second)).toHaveLength(2);
 });
 
+test("missed non-tip push is folded into the next event: its page still reaches apply (noon-wv8.3.1)", async () => {
+  const { seen, apply } = collect();
+  const { peer: p } = peer(apply);
+  await p.reconcile();
+  while (await p.processNext());
+  const lost = await commit({ [pagePath(DOC)]: "v1\n" }, "its delivery was lost (the api was restarting)");
+  const delivered = await commit({ [pagePath(OTHER)]: "w1\n" }, "its delivery arrived");
+  expect(await t.db.gitStore().record({ ref: "refs/heads/main", before: lost, after: delivered, deliveryId: "d-2" })).toBe(true);
+  expect(await p.reconcile()).toBe(0); // the tip is recorded: the lost push never gets an event of its own
+  expect(await p.processNext()).toBe(true);
+  expect(seen.map((s) => s.page).sort((a, b) => a.documentId.localeCompare(b.documentId))).toEqual([
+    { documentId: DOC, path: pagePath(DOC), tsx: "v1\n" },
+    { documentId: OTHER, path: pagePath(OTHER), tsx: "w1\n" },
+  ]);
+  expect((await events()).map((e) => e.status)).toEqual(["done", "done"]);
+});
+
 test("a new branch, which the webhook ignores as it ignores the registration push, is found by the reconcile", async () => {
   const { seen, apply } = collect();
   const { peer: p } = peer(apply);

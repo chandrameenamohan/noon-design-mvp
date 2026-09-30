@@ -151,6 +151,11 @@ export type GitStore = {
   /** The newest recorded commit of every branch: what the reconcile compares the mirror with. */
   heads(): Promise<Map<string, string>>;
   /**
+   * noon-wv8.3.1: the commit of the branch's newest done event, what the canvas was last brought up to. The git
+   * peer diffs a push from it, so a push recorded by nobody (its delivery lost behind a later one) is not skipped.
+   */
+  lastDone(ref: string): Promise<string | undefined>;
+  /**
    * The oldest waiting event -> running, as its next `attempt`. Waiting: pending, or (noon-91u) running with no
    * heartbeat for `staleMs` (its git peer died), which is resumed. One that died with its peer `maxResumes` times
    * fails instead. Two peers never claim one event: the database decides, in one statement. Undefined: none.
@@ -766,6 +771,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           "select distinct on (ref) ref, after_sha from git_events order by ref, created_at desc, id desc",
           [],
         )),
+      lastDone: async (ref) =>
+        (await one(z.object({ after_sha: z.string() }), "select after_sha from git_events where ref = $1 and status = 'done' order by created_at desc, id desc limit 1", [ref]))?.after_sha,
       async claim(staleMs, maxResumes) {
         // coalesce(heartbeat_at, created_at): a row left running by a peer from before heartbeats (0021) is stale too.
         const stale = "status = 'running' and coalesce(heartbeat_at, created_at) < now() - make_interval(secs => $1::float8 / 1000)";

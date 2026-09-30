@@ -21,6 +21,8 @@ export type PageBase = { tsx: string | undefined; earlierIds: ReadonlySet<string
 export type Apply = (event: GitEvent, page: ChangedPage, base: () => Promise<PageBase>) => Promise<unknown>;
 /** Thrown by `apply` when the push cannot be applied YET (the document's room is read-only, E6.1b): the event waits, it does not fail. */
 export class WaitAgain extends Error {}
+/** What the git peer needs of the store. */
+export type PeerStore = Pick<GitStore, "record" | "heads" | "lastDone" | "claim" | "heartbeat" | "finish" | "takeReconcileRequest">;
 type Moved = { ref: string; before: string; after: string };
 
 const PAGE = /^src\/pages\/noon-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tsx$/u; // sandbox.ts's pagePath
@@ -78,7 +80,7 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
   seed: SeedRepo;
   /** The peer's own directory: the mirror and the jobs' worktrees. Nothing else may use it. */
   dir: string;
-  store: GitStore;
+  store: PeerStore;
   apply: Apply;
   log: (message: string) => void;
   /** Each git command's end from outside: a wedged Gitea must not hold the peer for ever. */
@@ -103,20 +105,32 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
   }
 
   async function reconcile(): Promise<number> {
+    // Read BEFORE the fetch: a head recorded by then is at or behind the mirror. After it, a webhook landing
+    // in between would be ahead of the mirror, and the "move" back to the mirror's tip recorded backwards.
+    const recordedHeads = await store.heads();
     await fetch();
     const heads = parseHeads(await git("-C", mirror, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/"));
     let recorded = 0;
-    for (const event of moved(heads, await store.heads())) if (await store.record(event)) recorded += 1;
+    for (const event of moved(heads, recordedHeads)) if (await store.record(event)) recorded += 1;
     return recorded;
   }
 
   /**
-   * The pages the commit touched, read from the job's worktree. Against `before` when the mirror has it;
-   * otherwise (a new branch, a force-push that dropped it) every generated page at `after`.
+   * noon-wv8.3.1: what the push is diffed from. The branch's last applied commit when it is behind `after`: a push
+   * whose delivery was lost while a later one's arrived is never recorded (the reconcile finds the tip known), so
+   * it is folded into this one. Otherwise (the first event, a force-push past it) `before` when the mirror has it.
+   * Undefined: neither (a new branch, a force-push that dropped `before`).
    */
-  async function changedPages(event: GitEvent, worktree: string): Promise<ChangedPage[]> {
-    const listed = !ZERO.test(event.before) && (await has(event.before))
-      ? await git("-C", mirror, "diff", "--name-only", "-z", "--no-renames", event.before, event.after, "--", "src/pages/")
+  async function diffBase(event: GitEvent): Promise<string | undefined> {
+    const done = await store.lastDone(event.ref);
+    if (done !== undefined && (await has(done)) && (await git("-C", mirror, "merge-base", "--is-ancestor", done, event.after).then(() => true, () => false))) return done;
+    return !ZERO.test(event.before) && (await has(event.before)) ? event.before : undefined;
+  }
+
+  /** The pages the commit touched since `from`, read from the job's worktree; no `from`: every generated page at `after`. */
+  async function changedPages(event: GitEvent, from: string | undefined, worktree: string): Promise<ChangedPage[]> {
+    const listed = from !== undefined
+      ? await git("-C", mirror, "diff", "--name-only", "-z", "--no-renames", from, event.after, "--", "src/pages/")
       : await git("-C", mirror, "ls-tree", "-r", "--name-only", "-z", event.after, "--", "src/pages/");
     const pages: ChangedPage[] = [];
     for (const path of listed.split("\0")) {
@@ -127,12 +141,12 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
   }
 
   /**
-   * What the push is diffed against: `before` when the mirror has it; otherwise (a new branch, a force-push
-   * that dropped it) the tip's first parent, so the push's last commit is the change. None: a root commit.
+   * The page as it was before the push: at `from` (diffBase); without one, the tip's first parent, so the push's
+   * last commit is the change. None: a root commit.
    * ponytail: a new branch of several commits is taken as its last one; upgrade: its merge-base with main.
    */
-  async function baseCommit(event: GitEvent): Promise<string | undefined> {
-    if (!ZERO.test(event.before) && (await has(event.before))) return event.before;
+  async function baseCommit(event: GitEvent, from: string | undefined): Promise<string | undefined> {
+    if (from !== undefined) return from;
     return (await git("-C", mirror, "rev-list", "--parents", "-n", "1", event.after)).trim().split(" ")[1];
   }
 
@@ -177,10 +191,11 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
       }
       await mkdir(worktrees, { recursive: true });
       await git("-C", mirror, "worktree", "add", "--quiet", "--detach", worktree, event.after);
+      const from = await diffBase(event);
       let base: Promise<string | undefined> | undefined;
-      for (const page of await changedPages(event, worktree)) {
+      for (const page of await changedPages(event, from, worktree)) {
         if (resumed.signal.aborted) throw new Lost(`${event.ref} ${event.after}: another peer has resumed it`);
-        await apply(event, page, async () => pageBase(await (base ??= baseCommit(event)), page.path));
+        await apply(event, page, async () => pageBase(await (base ??= baseCommit(event, from)), page.path));
       }
       await store.finish(event, "done");
     } catch (err) {

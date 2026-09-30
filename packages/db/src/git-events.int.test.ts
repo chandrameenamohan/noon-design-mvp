@@ -40,6 +40,18 @@ test("heads are the newest recorded commit per branch", async () => {
   expect(await git.heads()).toEqual(new Map([[main, C], ["refs/heads/x", A]]));
 });
 
+test("noon-wv8.3.1: the last done commit is the branch's newest event that is done, whatever is recorded after it", async () => {
+  const git = t.db.gitStore();
+  expect(await git.lastDone(main)).toBeUndefined();
+  await git.record({ ref: main, before: A, after: B });
+  await git.record({ ref: main, before: B, after: C });
+  await git.record({ ref: "refs/heads/x", before: A, after: A });
+  for (let e = await git.claim(STALE, 3); e; e = await git.claim(STALE, 3)) await git.finish(e, e.after === C ? "failed" : "done");
+  expect(await git.lastDone(main)).toBe(B); // C failed: not done
+  expect(await git.lastDone("refs/heads/x")).toBe(A);
+  expect(await git.lastDone("refs/heads/none")).toBeUndefined();
+});
+
 test("an event is claimed once, oldest first; handed back it waits again; finished it stays finished", async () => {
   const git = t.db.gitStore();
   await git.record({ ref: main, before: A, after: B });
