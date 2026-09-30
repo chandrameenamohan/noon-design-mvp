@@ -1,0 +1,104 @@
+<title>TypeScript Lesson Four</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap">
+{{STYLE}}
+<style>
+/* Lesson 1 to 4 additions: case studies use the accent, not the "broken" red of Lesson 0's break-it boxes. */
+.break { border-color: var(--accent); background: var(--accent-wash); padding: 10px 16px 12px; }
+.break .label { color: var(--accent); margin-top: 4px; }
+.break ul { font-size: 0.95rem; margin: 8px 0 0; } .break p { max-width: none; }
+.drill { border: 1px solid var(--rule); background: var(--surface); padding: 14px 18px; margin: 16px 0; }
+.drill p { margin: 0 0 8px; font-size: 0.97rem; } .drill p:last-child { margin: 0; }
+h2 { scroll-margin-top: 24px; }
+</style>
+
+<main>
+  <p class="eyebrow">Lesson 4 · Epic 4</p>
+  <h1>The document becomes code, and the code runs</h1>
+  <p class="lede">The win: you can explain, to an interviewer or to yourself, how a tree of nodes becomes one file whose bytes never surprise anyone, how one container per document is started exactly once even when ten callers ask at the same moment, why a child process needs an end from outside and what Node 24 does when you ask for one, how a page framed under an opaque origin is served and healed, and why a reaper must look before it asks; and you can point at the line of code for every claim.</p>
+
+  <div class="aside">
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">{{COMMIT}}</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4, 6 and 8 are the ones an architect interview will dig into.</p>
+    <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + Redis + api + sync + worker + worker-sandbox; builds noon-sandbox:dev<br>docker compose logs -f worker-sandbox&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "worker draining queues: sandbox", then each preview job<br>pnpm exec vitest run apps/worker/src/sandbox.int.test.ts&nbsp;&nbsp;&nbsp;&nbsp;# real Docker: starts, races, deadlines, the reaper<br>pnpm exec playwright test e2e/preview.spec.ts&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the canvas, the real sandbox worker, a container killed under it</p>
+    <p>Try it: open a document, press <em>Show the running page</em>, add a Button and type a label; it appears in the frame within a moment and the frame is not reloaded. Then <span class="mono">docker rm --force noon-sandbox-&lt;document id&gt;</span> and watch "Rebuilding the preview…" turn back into your page, on its own. Never run two Docker-using suites at once: each one's cleanup removes the other's containers.</p>
+  </div>
+
+  <ol class="toc">{{TOC}}<li><a href="#drills">Your turn: three drills</a></li><li><a href="#test">Recall, then test yourself</a></li></ol>
+
+  {{SECTIONS}}
+
+  <section id="drills">
+    <h2>Your turn: three drills</h2>
+    <p>Do these alone. They live in <span class="mono">drills/lesson-4/</span> and both coded drills start RED; <span class="mono">sh drills/lesson-4/check.sh</span> shows your progress.</p>
+    <div class="drill"><p><strong>D1 · Extend the projection, end to end.</strong> Today the generated file exists in exactly one place: inside the document's container, where the sandbox worker pushed it. Epic 5 will open a pull request with it, and an engineer will want to read it before that. Give the api <code>GET /documents/:id/code</code>: the document's generated TSX as <code>text/plain</code>, byte-for-byte what <code>generate()</code> makes from the <em>saved</em> document. You will touch the api's dependencies (it does not know codegen yet: a package that imports what it does not declare works on your machine and breaks in the image), the error contract (<code>not_generated</code>: a document the design system can no longer generate is refused by a name, never served half), and the route itself (membership only, like the preview routes; a document nobody has opened yet has no content, which is the empty document, not an error). <span class="mono">make check</span> must stay green: the gate applies to you too.</p>
+      <p>Predict first: the route reads the tree with <code>documentStore().load</code>, the same call the sync server uses. Which of section 1's promises does that rest on, and what would break if the route generated from the room's optimistic tree instead?</p></div>
+    <div class="drill"><p><strong>D2 · Fix a planted bug.</strong> <span class="mono">drills/lesson-4/d2-reaper/reaper.ts</span> is a 50-line reaper with one bug from this chapter planted in it: the order in which it asks two systems that both change under it, over a fake Docker and a fake Postgres. Its test starts a sandbox between the two questions. Form a theory from the failing assertion before you read the code; the fix moves one line.</p></div>
+    <div class="drill"><p><strong>D3 · Explain a decision before reading mine.</strong> Answer out loud or on paper, then open the answer.</p>
+      <details class="recall"><summary>1. Why does the worker choose the host port itself, once, from the document id, instead of letting Docker pick a free one? And if the port never changes, why must the canvas still re-read the URL?</summary>
+        <p>Because Vite's client heals a lost connection only on the <em>same origin</em>: it polls the server it was loaded from and calls <code>location.reload()</code> when it answers again (measured in the sandbox learning test). Docker's own choice (<code>-p 127.0.0.1::5173</code>) is re-rolled on every <code>docker start</code> (measured: 49755, then 49767), so a restarted container would come back on a port nobody was watching. Choosing the port here and writing it into the container's configuration makes a restart land on the same origin. It is not a guarantee, only a preference: a <em>stopped</em> container does not hold its port, and if another document (or a host process) takes it meanwhile, <code>docker start</code> fails with "port taken" and the sandbox is recreated on the next candidate. That is why the URL is read after ready, from the container that answered, and why the canvas asks once a second instead of keeping the first answer. Epic 4.3 then added a second reason: inside the canvas's opaque-origin frame Vite cannot heal at all, so every start announces a distinct URL anyway. The stable port still matters for a tab opened on the preview directly.</p></details>
+      <details class="recall"><summary>2. Why does a worker process drain exactly one queue (<code>WORKER_QUEUE=ai|sandbox</code>), when the code can drain both and one process would be simpler to run?</summary>
+        <p>Because of what each queue needs. The sandbox queue talks to the Docker daemon, and the daemon's socket is root on the host: whoever holds it can start any container with any mount. The AI queue runs a model's subprocess, whose input is other people's documents and prompts, under a capability ceiling that took a whole section of lesson 3 to build. Put both in one process and the ceiling is decoration: one escape from the subprocess, one bug in the SDK, and the model is holding the Docker socket. So the split is not about load, it is about blast radius: <code>worker-sandbox</code> is the only compose service with <code>/var/run/docker.sock</code>, and the AI worker never has it. The handler map being <em>partial</em> is what makes this cheap: a process drains only the queues it has handlers for, and a message for the other queue is left alone before any claim. Concurrency per queue falls out too: an AI run costs a model call, a sandbox job holds 1 CPU and 1 GiB for as long as a document is open, and neither should starve the other.</p></details>
+      <details class="recall"><summary>3. "One unfinished sandbox job per document" is a partial unique index. "At most four previews per org" is a count inside the <code>INSERT</code>, and its comment admits a small overshoot. Why are the two rules built differently?</summary>
+        <p>Because they cost different things to get exactly right, and they cost different things to get wrong. One per document is a uniqueness rule, and Postgres has a primitive for exactly that: a unique index over a predicate. One statement, no window, and Postgres decides who was first; violating it is the concurrency check. At most four per org is a <em>counting</em> rule, and there is no index for "fewer than N rows match". Making it exact means serialising every open in an org (an advisory lock on the org, or <code>SELECT ... FOR UPDATE</code> on its row), which is a queue in front of every preview for the sake of a limit that exists to protect a shared pool, not to bill anyone. A count inside the same <code>INSERT ... SELECT</code> leaves a window the width of one statement: two opens in the same instant can both count three and both pass, so an org can hold five or six for a moment, never unbounded. The rule for the per-document index is that the wrong outcome (two containers fighting over one port and removing each other) is a bug; the wrong outcome for the cap is one container too many. The comment names the ceiling and the upgrade, which is what a ponytail shortcut owes the next reader.</p></details></div>
+  </section>
+
+  <section id="test">
+    <h2>Recall first</h2>
+    <p>Look away. Name the three things that make "one starter per document" true, each at its own scope. Then name the two systems the reaper asks and the order it must ask them in, and why. Then check.</p>
+    <details class="recall"><summary>Check yourself</summary>
+      <p>One starter: inside a process, <code>startSandbox</code> is single-flight (a <code>Map</code> of the attempt in flight per document, so ten callers share one); across processes, the partial unique index <code>jobs_one_unfinished_sandbox_per_document</code> means only the one process holding the document's unfinished sandbox job ever starts it; and Docker's container name is the document's, which stops two <em>containers</em> but, on its own, never stopped two starters from removing each other's. The reaper: it lists Docker first, then asks Postgres what is in use. The other way round, a job that starts a sandbox between the two answers is in the list and not in the answer, and its container is removed mid-start. Listing first means a listed container existed before the answer, so any job that made it is in the answer.</p>
+    </details>
+
+    <h2>Then test it</h2>
+    <p id="score" aria-live="polite">Eight questions. Options are shuffled each visit.</p>
+
+    <div class="quiz"><p class="q">1. A component name with a lying <code>toString</code> answered "Button" to the identifier check and code to the template. What is the fix?</p>
+      <button id="q1a" data-correct>Refuse anything that is not <code>typeof "string"</code> before it is looked at, and choose every literal from the value's own type</button><button id="q1b">Call <code>toString()</code> once and cache the result</button><button id="q1c">Escape the output with an HTML escaper</button><button id="q1d">Validate the manifest with Zod at load time</button>
+      <p class="why" hidden>A value converted twice can answer twice. The generator asks <code>typeof</code> and writes a literal from what the value IS, never from what the manifest says it is, so no <code>toString</code> is ever consulted.</p></div>
+    <div class="quiz"><p class="q">2. Docker refuses a second container with the same name. Why did ten concurrent starts of one document still remove each other's containers?</p>
+      <button id="q2a" data-correct>A loser found the winner's container starting, got "port not available" from <code>docker start</code> (the winner held it), and removed it as a stale leftover</button><button id="q2b">Docker's name check is eventually consistent</button><button id="q2c">The losers each got their own container on another port</button><button id="q2d">The image was rebuilt between the starts</button>
+      <p class="why" hidden>Uniqueness is not ownership. "Taken" can mean taken by the winner. Fix: one starter per document, single-flight in-process and a unique job across processes.</p></div>
+    <div class="quiz"><p class="q">3. A shell script starts with <code>set -e</code> and runs <code>git init && git fetch && git checkout</code> on one line. The fetch fails. What happens?</p>
+      <button id="q3a" data-correct>The script carries on: <code>set -e</code> ignores a failure inside an <code>&amp;&amp;</code> chain except in its last command</button><button id="q3b">The script exits at once, as <code>set -e</code> promises</button><button id="q3c">The checkout runs and then the script exits with the fetch's code</button><button id="q3d">It depends on the shell</button>
+      <p class="why" hidden>Measured: a failed clone went on to serve an empty app. One command per line, so each one is a statement <code>set -e</code> can see.</p></div>
+    <div class="quiz"><p class="q">4. On Node 24 you pass <code>execFile(cmd, args, { signal, killSignal: "SIGKILL" })</code> and abort the signal. What does the child receive?</p>
+      <button id="q4a" data-correct>SIGTERM, whatever <code>killSignal</code> says (measured); a child that ignores it outlives the call and keeps the event loop alive</button><button id="q4b">SIGKILL, as configured</button><button id="q4c">Nothing: the promise rejects and the child is left alone</button><button id="q4d">SIGINT, like Ctrl-C</button>
+      <p class="why" hidden>So <code>dockerCli</code> listens for the abort itself and calls <code>child.kill("SIGKILL")</code>. The test stub traps TERM and proves the pid is gone.</p></div>
+    <div class="quiz"><p class="q">5. Why is the AI worker kept from the sandbox queue by a separate process, rather than by a flag?</p>
+      <button id="q5a" data-correct>The sandbox queue needs the Docker socket, which is root on the host; a model's subprocess must never share a process with it</button><button id="q5b">BullMQ allows one queue per connection</button><button id="q5c">Docker CLI calls block the event loop</button><button id="q5d">The AI worker has no network access to Docker</button>
+      <p class="why" hidden>Blast radius, not load. <code>worker-sandbox</code> is the only compose service with the socket; the handler map is partial so a process drains only what it handles.</p></div>
+    <div class="quiz"><p class="q">6. The reaper asks Postgres "which documents are in use?" and lists the containers with <code>docker ps</code>. Which order is safe, and why?</p>
+      <button id="q6a" data-correct>List first, then ask: a listed container existed before the answer, so any job that made it is in the answer</button><button id="q6b">Ask first, then list: the freshest container list wins</button><button id="q6c">Either, as long as both happen inside one transaction</button><button id="q6d">Ask, list, then ask again and take the intersection</button>
+      <p class="why" hidden>Ask-then-list lost a container to a job that started in between (found by the re-verify). <code>reapSandboxes</code> takes a function so the order is its own.</p></div>
+    <div class="quiz"><p class="q">7. The canvas frames the preview with <code>sandbox="allow-scripts"</code> and no <code>allow-same-origin</code>. What did the dev server see, and what was done about it?</p>
+      <button id="q7a" data-correct>Every module request carried <code>Origin: null</code>; Vite's default CORS refused them and nothing rendered, so an injected config allows exactly "null" and no real origin</button><button id="q7b">Nothing changed: an iframe's requests carry the parent's origin</button><button id="q7c">The requests had no Origin header, so CORS did not apply</button><button id="q7d">Vite allowed them by default because they came from localhost</button>
+      <p class="why" hidden>The E4.2a note said "lock cors to the canvas origin", which could never work: requests never come from the canvas origin. Measured, then fixed; the test checks the echoed header for "null", an evil origin and localhost.</p></div>
+    <div class="quiz"><p class="q">8. After a container restart, why does the worker announce a URL with a fresh <code>&amp;started=</code> even when the port is unchanged?</p>
+      <button id="q8a" data-correct>Inside the opaque-origin frame Vite cannot reconnect by itself (its client's SharedWorker is refused to origin "null"), so the canvas must load a new URL, and it does exactly when the URL changes</button><button id="q8b">To bust the browser's HTTP cache</button><button id="q8c">Because Postgres rejects an identical <code>output</code> value</button><button id="q8d">To let the reaper tell old containers from new ones</button>
+      <p class="why" hidden>The iframe is keyed on the URL. A new address is a new page; the same address would have left a frame polling a server it can never rejoin.</p></div>
+  </section>
+
+  <footer>Next: Lesson 5, after epic 5. The git peer and ship: an engineer pushes a commit that changes the generated file, and the canvas updates with ops whose actor is <code>git</code>; a push that breaks the fixed shape is a conflict, not a guess; and Ship turns a document into a branch and a pull request.</footer>
+</main>
+
+<script>
+(() => {
+  const quizzes = [...document.querySelectorAll('.quiz')];
+  const score = document.getElementById('score');
+  let right = 0, answered = 0;
+  for (const quiz of quizzes) {
+    const buttons = [...quiz.querySelectorAll('button')];
+    const why = quiz.querySelector('.why');
+    for (const b of [...buttons].sort(() => Math.random() - 0.5)) quiz.insertBefore(b, why);
+    quiz.addEventListener('click', (e) => {
+      const picked = e.target.closest('button');
+      if (!picked || picked.disabled) return;
+      const ok = picked.hasAttribute('data-correct');
+      for (const b of buttons) { b.disabled = true; if (b.hasAttribute('data-correct')) b.classList.add('right'); }
+      if (!ok) picked.classList.add('wrong');
+      why.hidden = false;
+      answered++; if (ok) right++;
+      score.textContent = `${right} of ${answered} right, ${quizzes.length - answered} to go`;
+    });
+  }
+})();
+</script>
