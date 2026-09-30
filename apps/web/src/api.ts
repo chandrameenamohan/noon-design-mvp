@@ -17,15 +17,29 @@ class Refused extends Error {
 }
 
 /** POSTs and checks the ANSWER against the shared contract: the server is another program, not a type. */
-async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown): Promise<z.infer<S>> {
+async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown, headers: Record<string, string> = {}): Promise<z.infer<S>> {
   const res = await fetch(`/api${path}`, {
     method: "POST",
-    headers: { ...devHeaders, "content-type": "application/json" },
+    headers: { ...devHeaders, ...headers, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new Refused(`POST ${path} answered ${String(res.status)}`, res.status);
   if (!res.ok) throw new Error(`POST ${path} answered ${String(res.status)}`);
   return schema.parse(await res.json());
+}
+
+/**
+ * F27: a POST that makes a job. One press, one Idempotency-Key: when the answer is lost or is a 5xx, the retry sends
+ * the same key and the api answers with the job the first attempt made, never a second one. A refusal is not retried.
+ */
+async function postJob<S extends z.ZodType>(path: string, schema: S, body?: unknown): Promise<z.infer<S>> {
+  const key = { "idempotency-key": crypto.randomUUID() };
+  try {
+    return await post(path, schema, body, key);
+  } catch (problem) {
+    if (problem instanceof Refused) throw problem;
+    return post(path, schema, body, key);
+  }
 }
 
 // --- Signing in (F23) ------------------------------------------------------------------------------
@@ -74,7 +88,7 @@ export async function openSession(documentId: string): Promise<SessionResponse |
 /** "busy": this document already has a run going (409). Anything else that fails is thrown. */
 export async function startRun(documentId: string, instruction: string): Promise<Run | "busy"> {
   try {
-    return await post(`/documents/${documentId}/runs`, Run, { instruction });
+    return await postJob(`/documents/${documentId}/runs`, Run, { instruction });
   } catch (problem) {
     if (problem instanceof Refused && problem.status === 409) return "busy";
     throw problem;
@@ -118,7 +132,7 @@ export async function readConflict(documentId: string): Promise<DocumentConflict
 
 // --- Ship (F17) ------------------------------------------------------------------------------------
 /** Presses Ship: the ship still waiting for this document, or a new one. Parsed with the contract (the pull request link goes into an href). */
-export const startShip = (documentId: string): Promise<Ship> => post(`/documents/${documentId}/ship`, Ship);
+export const startShip = (documentId: string): Promise<Ship> => postJob(`/documents/${documentId}/ship`, Ship);
 /** The document's newest ship, or null when it was never shipped. */
 export async function readShip(documentId: string): Promise<Ship | null> {
   const res = await fetch(`/api/documents/${documentId}/ship`, { headers: devHeaders });

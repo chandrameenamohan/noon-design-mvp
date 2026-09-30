@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { AuditEntry, HealthResponse, includes, Preview, Role, SandboxUrl, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
+import { AuditEntry, HealthResponse, IdempotencyKey, includes, Preview, Role, SandboxUrl, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
 
 const valid = { status: "ok", service: "api" };
 
@@ -94,4 +94,15 @@ test("an audit entry's detail is flat text, and its action and actor kind are on
   expect(AuditEntry.safeParse({ ...entry, action: "made_up" }).success).toBe(false);
   expect(AuditEntry.safeParse({ ...entry, actor: { ...entry.actor, kind: "robot" } }).success).toBe(false);
   expect(AuditEntry.safeParse({ ...entry, extra: 1 }).success).toBe(false);
+});
+
+// E9.1: the key is stored in a text column whose check is the same rule, and goes into a unique key: no looser than it.
+test("an idempotency key is 1 to 255 printable ASCII characters, as the column that stores it demands", () => {
+  expect(IdempotencyKey.safeParse(crypto.randomUUID()).success).toBe(true);
+  expect(IdempotencyKey.safeParse("!".repeat(255)).success).toBe(true);
+  expect(IdempotencyKey.safeParse("").success).toBe(false);
+  expect(IdempotencyKey.safeParse("k".repeat(256)).success).toBe(false);
+  expect(IdempotencyKey.safeParse("a key").success).toBe(false); // a space is not printable here
+  expect(IdempotencyKey.safeParse("clé").success).toBe(false);
+  expect(IdempotencyKey.safeParse("a\nb").success).toBe(false);
 });

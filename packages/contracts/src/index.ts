@@ -73,6 +73,11 @@ export const SetMemberBody = z.strictObject({ email: User.shape.email, role: Rol
 export const ShareBody = z.strictObject({ email: User.shape.email, role: z.enum(["editor", "viewer"]) });
 
 // --- AI runs (F9) ----------------------------------------------------------------
+/**
+ * F27: the `Idempotency-Key` header of POST /documents/:id/runs and /ship. Optional; a retry with the same key gets
+ * the same job. 1 to 255 printable ASCII characters (a UUID per press is what the canvas sends), as Stripe allows.
+ */
+export const IdempotencyKey = z.string().regex(/^[\x21-\x7e]{1,255}$/, "1 to 255 printable ASCII characters");
 /** Newlines and tabs are fine in an instruction; other control characters are not (jsonb cannot hold NUL). */
 const Instruction = z.string().trim().min(1).max(4000).regex(/^(?:\P{Cc}|[\n\t])*$/u, "must not contain control characters");
 export const CreateRunBody = z.strictObject({ instruction: Instruction });
@@ -220,7 +225,7 @@ export type AuditPage = z.infer<typeof AuditPage>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "idempotency_key_reused", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;

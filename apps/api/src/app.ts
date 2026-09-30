@@ -11,6 +11,7 @@ import {
   CreateWorkspaceBody,
   DocumentConflict,
   DocumentShip,
+  IdempotencyKey,
   includes,
   PageQuery,
   SetMemberBody,
@@ -42,7 +43,7 @@ const MAX_WEBHOOK_BYTES = 1024 * 1024;
 const WEBHOOK_PATH = "/webhooks/gitea";
 
 type ErrorCode = ErrorBody["error"];
-const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 429 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
+const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 413 | 415 | 422 | 429 | 500 | 503, error: ErrorCode, issues?: ErrorBody["issues"]) =>
   c.json((issues ? { error, issues } : { error }) satisfies ErrorBody, status);
 const notFound = (c: Context) => fail(c, 404, "not_found");
 
@@ -92,6 +93,14 @@ async function body<S extends z.ZodType>(c: Context, schema: S): Promise<z.infer
   const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
   throw new HTTPException(400, { res: fail(c, 400, "invalid_body", issuesOf(parsed.error, "body")) });
+}
+
+/** F27: the request's `Idempotency-Key`, if it sent one. A malformed one is refused, never ignored: the retry it was meant to make safe would not be. */
+function idempotencyKey(c: Context): string | undefined {
+  const key = c.req.header("idempotency-key");
+  if (key === undefined) return undefined;
+  if (IdempotencyKey.safeParse(key).success) return key;
+  throw new HTTPException(400, { res: fail(c, 400, "invalid_body", [{ field: "idempotency-key", message: "1 to 255 printable ASCII characters" }]) });
 }
 
 function pageQuery(c: Context): PageQuery {
@@ -392,17 +401,21 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
 
   // An AI run (F9) is a job: the row in Postgres IS the run; the queue only tells a worker to look. It edits the
   // document and costs money: editors and owners. Its ops carry its creator's role into the room (E8.2).
+  // F27: a retry with the same Idempotency-Key answers 201 with the run the first request made, read from its row
+  // (enqueued again: BullMQ drops an add for a job id it holds, and a claimed job cannot be claimed twice).
   document.post("/runs", need("editor"), async (c) => {
     const { doc } = c.var;
+    const key = idempotencyKey(c);
     const { instruction } = await body(c, CreateRunBody);
-    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id });
+    const run = await db.forOrg(doc.orgId).createRun({ documentId: doc.id, instruction, createdBy: c.var.user.id, idempotencyKey: key });
     if (!run) return notFound(c); // the document was deleted in between
     if (run === "busy") return fail(c, 409, "run_in_progress");
+    if (run === "key_reused") return fail(c, 422, "idempotency_key_reused");
     try {
       await enqueue({ queue: "ai", jobId: run.id, orgId: run.orgId });
     } catch (err) {
-      // Still a 201: the run exists and the worker's sweep will pick it up. Failing the request would
-      // invite a retry, and a second run (idempotency keys are E9).
+      // Still a 201: the run exists and the worker's sweep will pick it up. A retry without the
+      // Idempotency-Key would make a second run.
       process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `enqueue failed, left to the sweep: ${describeError(err)}` })}\n`);
     }
     return c.json(run, 201);
@@ -446,9 +459,11 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // Gitea token) to look. Presses coalesce into the ship still waiting (201 when this press made it, 200 when it
   // joined it), so a double click or two tabs never make two; a press while one runs queues the next, which reads
   // the document afresh. It opens a pull request in the org's name: editors and owners.
+  // F27: a retry with the same Idempotency-Key answers 200 with the ship the first press made or joined, as it now is.
   document.post("/ship", need("editor"), async (c) => {
-    const started = await db.forOrg(c.var.doc.orgId).startShip({ documentId: c.var.doc.id, createdBy: c.var.user.id });
+    const started = await db.forOrg(c.var.doc.orgId).startShip({ documentId: c.var.doc.id, createdBy: c.var.user.id, idempotencyKey: idempotencyKey(c) });
     if (!started) return notFound(c);
+    if (started === "key_reused") return fail(c, 422, "idempotency_key_reused");
     if (started.created) {
       // Left to the sweep if Redis is away, as a run is: the job exists, and it will be found.
       await enqueue(started.created).catch((err: unknown) => {

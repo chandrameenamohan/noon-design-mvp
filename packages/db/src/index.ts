@@ -1,7 +1,7 @@
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type PoolClient, type QueryResultRow } from "pg";
-import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
+import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, IdempotencyKey, Member, Name, Org, Preview, PreviewOutput, Role, Run, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
 
 const MIGRATIONS_DIR = new URL("../migrations/", import.meta.url);
@@ -177,8 +177,12 @@ type OrgScope = {
   createDocument(input: { workspaceId: string; title: string }): Promise<Document | undefined>;
   listDocuments(workspaceId: string, page?: PageInput): Promise<Page<Document> | undefined>;
   getDocument(id: string): Promise<Document | undefined>;
-  /** Undefined when the document does not exist in THIS org; "busy" when it already has an unfinished run. The run starts as `queued`. */
-  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined }): Promise<Run | "busy" | undefined>;
+  /**
+   * Undefined when the document does not exist in THIS org; "busy" when it already has an unfinished run. The run starts as `queued`.
+   * F27: with an `idempotencyKey` (and a `createdBy`, its scope), the same key again answers the run it made, as that row
+   * now is; "key_reused" when that key asked for something else.
+   */
+  createRun(input: { documentId: string; instruction: string; createdBy: string | undefined; idempotencyKey?: string | undefined }): Promise<Run | "busy" | "key_reused" | undefined>;
   getRun(documentId: string, id: string): Promise<Run | undefined>;
   /**
    * Makes sure the document has a preview on its way: a queued sandbox job, unless one is already
@@ -194,9 +198,10 @@ type OrgScope = {
   /**
    * F17: makes sure a ship is waiting for the document: a queued ship job, unless one is waiting already (the
    * unique index decides; presses coalesce into it). `created` is the new job's key, to enqueue. Undefined when
-   * the document does not exist in THIS org.
+   * the document does not exist in THIS org. F27: with an `idempotencyKey`, the same key again answers the ship that
+   * press made or joined (created: undefined), as that row now is; "key_reused" when that key asked for something else.
    */
-  startShip(input: { documentId: string; createdBy: string | undefined }): Promise<{ ship: Ship; created: JobKey | undefined } | undefined>;
+  startShip(input: { documentId: string; createdBy: string | undefined; idempotencyKey?: string | undefined }): Promise<{ ship: Ship; created: JobKey | undefined } | "key_reused" | undefined>;
   /** The document's newest ship; null: never shipped. Undefined when the document does not exist in THIS org. */
   getShip(documentId: string): Promise<Ship | null | undefined>;
   /** Queued: cancelled at once. Running: marked, and the worker ends it. Finished: unchanged. Always the run as it now is. */
@@ -332,8 +337,9 @@ export function createDb({ connectionString, schema }: { connectionString: strin
     process.stderr.write(`${JSON.stringify({ level: "warn", source: "db", message: `idle connection lost: ${err.message}` })}\n`);
   });
 
-  async function rows<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T[]> {
-    const result = await pool.query<QueryResultRow>(sql, params);
+  /** `via`: a client inside a transaction; the pool otherwise. */
+  async function rows<T>(parser: z.ZodType<T>, sql: string, params: unknown[], via: Pool | PoolClient = pool): Promise<T[]> {
+    const result = await via.query<QueryResultRow>(sql, params);
     return result.rows.map((row) => parser.parse(row));
   }
   /** `from` names the paged table as alias `t`; `where` must be ready for " and ..."; the cursor adds two params. */
@@ -377,8 +383,8 @@ export function createDb({ connectionString, schema }: { connectionString: strin
   /** One statement, returning ids, holding the org's preview lock: one at a time per org. */
   const inOrgTurn = (orgId: string, sql: string, params: unknown[]): Promise<{ id: string }[]> =>
     inTurn(`noon:preview:${orgId}`, async (client) => (await client.query<QueryResultRow>(sql, params)).rows.map((row) => z.object({ id: z.string() }).parse(row)));
-  async function one<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T | undefined> {
-    return (await rows(parser, sql, params))[0];
+  async function one<T>(parser: z.ZodType<T>, sql: string, params: unknown[], via: Pool | PoolClient = pool): Promise<T | undefined> {
+    return (await rows(parser, sql, params, via))[0];
   }
   async function exactlyOne<T>(parser: z.ZodType<T>, sql: string, params: unknown[]): Promise<T> {
     const row = await one(parser, sql, params);
@@ -685,8 +691,80 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         if (job) return job;
         return (await one(z.object({ id: z.string() }), "select id from documents where org_id = $1 and id = $2", [orgId, documentId])) ? { status: "none", url: null } : undefined;
       };
-      const newestShip = (documentId: string): Promise<Ship | undefined> =>
-        one(ShipRow, "select * from jobs where org_id = $1 and document_id = $2 and queue = 'ship' order by created_at desc, id desc limit 1", [orgId, documentId]);
+      const newestShip = (documentId: string, via: Pool | PoolClient = pool): Promise<Ship | undefined> =>
+        one(ShipRow, "select * from jobs where org_id = $1 and document_id = $2 and queue = 'ship' order by created_at desc, id desc limit 1", [orgId, documentId], via);
+      /** A press of Ship: the waiting ship is made, or joined (`created` undefined). */
+      const pressShip = async (documentId: string, createdBy: string | undefined, via: Pool | PoolClient): Promise<{ ship: Ship; created: JobKey | undefined } | undefined> => {
+        // `on conflict do nothing`: a ship already waiting for this document is the answer (jobs_one_queued_ship_per_document).
+        const inserted = await one(
+          z.object({ id: z.string() }),
+          // Audited only when this press made the ship: one that joins the waiting ship changes nothing.
+          "with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ship', '{}', $3 from documents d where d.org_id = $1 and d.id = $2 on conflict do nothing returning id, org_id, document_id, created_by), " +
+            `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf("j.created_by")}, 'ship_started', j.document_id, jsonb_build_object('ship', j.id::text) from j) ` +
+            "select id from j",
+          [orgId, documentId, createdBy ?? null],
+          via,
+        );
+        // A second statement, so it sees the winner's commit. Not "the queued one": it may have been claimed in
+        // between, and then it is running and has not read the document before this press. None: no such document.
+        const ship = await newestShip(documentId, via);
+        return ship && { ship, created: inserted ? { queue: "ship" as const, jobId: inserted.id, orgId } : undefined };
+      };
+      /**
+       * F27: `make` runs in a transaction that first claims (this user, `key`) in this org. A second request with the key
+       * waits on that row, then is answered with the job the first one made: `{ replay }` (its id), never a second job.
+       * "key_reused": the key was claimed for a different request. When `make` made no job (busy, no such document) the
+       * claim is rolled back, and the retry that follows is free to use the key. Keys live 24 hours (migration 0018).
+       */
+      const withKey = async <T>(userId: string, key: string, request: object, make: (via: PoolClient) => Promise<T>, jobOf: (made: T) => string | undefined): Promise<{ made: T } | { replay: string } | "key_reused"> => {
+        const params = [orgId, userId, IdempotencyKey.parse(key), JSON.stringify(request)];
+        const client = await pool.connect();
+        let broken: Error | undefined;
+        try {
+          await client.query("begin");
+          await client.query("delete from idempotency_keys where org_id = $1 and user_id = $2 and created_at < now() - interval '24 hours'", params.slice(0, 2));
+          if ((await client.query("insert into idempotency_keys (org_id, user_id, key, request) values ($1, $2, $3, $4) on conflict do nothing", params)).rowCount !== 1) {
+            // A statement of its own, so it sees the winner's row, committed while the insert waited on it (read committed).
+            const found = await one(z.object({ same: z.boolean(), job_id: z.string() }), "select request = $4::jsonb as same, job_id from idempotency_keys where org_id = $1 and user_id = $2 and key = $3", params, client);
+            await client.query("commit");
+            if (!found) throw new Error("idempotency key held by nobody");
+            return found.same ? { replay: found.job_id } : "key_reused";
+          }
+          const made = await make(client);
+          const jobId = jobOf(made);
+          if (jobId === undefined) {
+            await client.query("rollback");
+            return { made };
+          }
+          await client.query("update idempotency_keys set job_id = $5 where org_id = $1 and user_id = $2 and key = $3", [...params, jobId]);
+          await client.query("commit");
+          return { made };
+        } catch (err) {
+          await client.query("rollback").catch(() => undefined);
+          broken = err instanceof Error ? err : new Error(String(err));
+          throw err;
+        } finally {
+          client.release(broken);
+        }
+      };
+      /** One statement: the run, if the document is this org's and has no unfinished run, and its audit row. */
+      const insertRun = async (documentId: string, input: z.infer<typeof CreateRunBody>, createdBy: string | undefined, via: Pool | PoolClient): Promise<Run | "busy" | undefined> => {
+        try {
+          return await one(
+            RunRow,
+            // insert ... select: the row is only created if the document exists in this org. Audited in the same statement.
+            "with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *), " +
+              `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf("j.created_by")}, 'run_started', j.document_id, jsonb_build_object('run', j.id::text, 'instruction', j.input ->> 'instruction') from j) ` +
+              "select * from j",
+            [orgId, documentId, JSON.stringify(input), createdBy ?? null],
+            via,
+          );
+        } catch (err) {
+          // The unique index IS the check: "count, then insert" would let two requests at the same moment both in.
+          if (err instanceof Error && "constraint" in err && err.constraint === "jobs_one_unfinished_run_per_document") return "busy";
+          throw err;
+        }
+      };
       // An id that is not a UUID cannot name anything, so it means "not found" rather than a
       // Postgres 22P02 error (which would surface as a 500 and echo the caller's input).
       const orgExists = isId(orgId);
@@ -765,23 +843,14 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             : { items: [], nextCursor: null },
         getDocument: async (id) =>
           orgExists && isId(id) ? one(DocumentRow, "select * from documents where org_id = $1 and id = $2", [orgId, id]) : undefined,
-        createRun: async ({ documentId, instruction, createdBy }) => {
+        createRun: async ({ documentId, instruction, createdBy, idempotencyKey }) => {
           const input = CreateRunBody.parse({ instruction }); // the same contract the reader uses, BEFORE the write
           if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
-          try {
-            return await one(
-              RunRow,
-              // insert ... select: the row is only created if the document exists in this org. Audited in the same statement.
-              "with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ai', $3, $4 from documents d where d.org_id = $1 and d.id = $2 returning *), " +
-                `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf("j.created_by")}, 'run_started', j.document_id, jsonb_build_object('run', j.id::text, 'instruction', j.input ->> 'instruction') from j) ` +
-                "select * from j",
-              [orgId, documentId, JSON.stringify(input), createdBy ?? null],
-            );
-          } catch (err) {
-            // The unique index IS the check: "count, then insert" would let two requests at the same moment both in.
-            if (err instanceof Error && "constraint" in err && err.constraint === "jobs_one_unfinished_run_per_document") return "busy";
-            throw err;
-          }
+          if (idempotencyKey === undefined) return insertRun(documentId, input, createdBy, pool);
+          if (createdBy === undefined) throw new Error("an idempotency key needs the user it belongs to");
+          const keyed = await withKey(createdBy, idempotencyKey, { queue: "ai", documentId, input }, (via) => insertRun(documentId, input, createdBy, via), (run) => (typeof run === "object" ? run.id : undefined));
+          if (keyed === "key_reused") return keyed;
+          return "made" in keyed ? keyed.made : one(RunRow, "select * from jobs where org_id = $1 and id = $2 and queue = 'ai'", [orgId, keyed.replay]);
         },
         cancelRun: async (documentId, id) => {
           if (!orgExists || !isId(documentId) || !isId(id)) return undefined;
@@ -845,21 +914,15 @@ export function createDb({ connectionString, schema }: { connectionString: strin
           const found = await rows(ConflictRow, "select c.* from documents d left join document_conflicts c on c.document_id = d.id where d.org_id = $1 and d.id = $2", [orgId, documentId]);
           return found.length === 0 ? undefined : found[0] ?? null;
         },
-        startShip: async ({ documentId, createdBy }) => {
+        startShip: async ({ documentId, createdBy, idempotencyKey }) => {
           if (!orgExists || !isId(documentId) || (createdBy !== undefined && !isId(createdBy))) return undefined;
-          // `on conflict do nothing`: a ship already waiting for this document is the answer (jobs_one_queued_ship_per_document).
-          const inserted = await one(
-            z.object({ id: z.string() }),
-            // Audited only when this press made the ship: one that joins the waiting ship changes nothing.
-            "with j as (insert into jobs (org_id, document_id, queue, input, created_by) select d.org_id, d.id, 'ship', '{}', $3 from documents d where d.org_id = $1 and d.id = $2 on conflict do nothing returning id, org_id, document_id, created_by), " +
-              `a as (insert into audit_log ${AUDIT_COLUMNS} select j.org_id, ${actorOf("j.created_by")}, 'ship_started', j.document_id, jsonb_build_object('ship', j.id::text) from j) ` +
-              "select id from j",
-            [orgId, documentId, createdBy ?? null],
-          );
-          // A second statement, so it sees the winner's commit. Not "the queued one": it may have been claimed in
-          // between, and then it is running and has not read the document before this press. None: no such document.
-          const ship = await newestShip(documentId);
-          return ship && { ship, created: inserted ? { queue: "ship" as const, jobId: inserted.id, orgId } : undefined };
+          if (idempotencyKey === undefined) return pressShip(documentId, createdBy, pool);
+          if (createdBy === undefined) throw new Error("an idempotency key needs the user it belongs to");
+          const keyed = await withKey(createdBy, idempotencyKey, { queue: "ship", documentId, input: {} }, (via) => pressShip(documentId, createdBy, via), (started) => started?.ship.id);
+          if (keyed === "key_reused") return keyed;
+          if ("made" in keyed) return keyed.made;
+          const ship = await one(ShipRow, "select * from jobs where org_id = $1 and id = $2 and queue = 'ship'", [orgId, keyed.replay]);
+          return ship && { ship, created: undefined };
         },
         async getShip(documentId) {
           if (!orgExists || !isId(documentId)) return undefined;
