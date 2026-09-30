@@ -169,7 +169,7 @@ export function useTwoNodes({ ttlMs = 600 }: { ttlMs?: number } = {}) {
     const lookup = leases[0] as Leases;
     state = {
       servers, leases,
-      route: (documentId, pick) => syncRouter({ nodes, owner: (id) => lookup.owner(id), ...(pick === undefined ? {} : { pick: () => pick }) })(documentId),
+      route: (documentId, pick) => syncRouter({ nodes, owner: (id) => lookup.owner(id), alive: (nodeIds) => lookup.alive(nodeIds), ...(pick === undefined ? {} : { pick: () => pick }) })(documentId),
     };
   });
   afterAll(async () => {

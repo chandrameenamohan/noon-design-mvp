@@ -88,8 +88,7 @@ async function round(n: number): Promise<{ round: number; ops: number; journaled
     await until(() => all.every(([, p]) => p.status !== "live"), "both peers see the server gone", 30_000);
     edit(5); // made while the server is gone: held, sent after the next welcome
 
-    // Back under the same node id: its dead holder's lease must expire first (LEASE_TTL_MS), so peers bounce
-    // with 4409 until then. ponytail: no quicker reclaim; E7.2 moves the room to the live node instead.
+    // Back at once: the peers land on it or on the other node (E7.2); either waits the dead lease out (LEASE_TTL_MS).
     compose("start", victim);
     await until(() => all.every(([, p]) => p.status === "live" && p.pendingCount === 0), "both peers reconnected unaided, nothing pending", 60_000);
     await ledger.settle(15_000);

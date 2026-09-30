@@ -62,14 +62,18 @@ test("without a caller it is 401, and the response never carries a token", async
   expect(await res.text()).not.toMatch(/token|wsUrl/);
 });
 
-test("with several sync nodes the address is the room owner's, any node's while nobody owns it, and 503 when Redis cannot say", async () => {
+test("with several sync nodes the address is the room owner's, a live node's while the owner is dead or nobody owns it, and 503 when Redis cannot say", async () => {
   const doc = await aDocument("nodes@example.com");
   let owner: () => Promise<Holder | undefined> = () => Promise.resolve({ token: 4, nodeId: "sync-2" });
+  let alive: () => Promise<ReadonlySet<string>> = () => Promise.resolve(new Set(["sync", "sync-2"]));
   const nodes = new Map([["sync", "wss://noon.example.com/sync"], ["sync-2", "wss://noon.example.com/sync-2"]]);
-  const api = await startServer({ port: 0, db: ctx.db.db, identify: devHeaderIdentity, sessions: { ...TEST_SESSIONS, sync: { kind: "many", nodes } }, enqueue: () => Promise.resolve(), owner: () => owner() });
+  const api = await startServer({ port: 0, db: ctx.db.db, identify: devHeaderIdentity, sessions: { ...TEST_SESSIONS, sync: { kind: "many", nodes } }, enqueue: () => Promise.resolve(), owner: () => owner(), alive: () => alive() });
   try {
     const session = async () => fetch(`${api.url}/documents/${doc.id}/session`, { method: "POST", headers: { "x-dev-user": "nodes@example.com" } });
     expect(SessionResponse.parse(await (await session()).json()).wsUrl).toBe(`wss://noon.example.com/sync-2/documents/${doc.id}`);
+    alive = () => Promise.resolve(new Set(["sync"])); // sync-2 was killed: its lease outlives it, its peers must not wait on it
+    expect(SessionResponse.parse(await (await session()).json()).wsUrl).toBe(`wss://noon.example.com/sync/documents/${doc.id}`);
+    alive = () => Promise.resolve(new Set(["sync", "sync-2"]));
     owner = () => Promise.resolve(undefined);
     expect([...nodes.values()].map((url) => `${url}/documents/${doc.id}`)).toContain(SessionResponse.parse(await (await session()).json()).wsUrl);
     owner = () => Promise.reject(new Error("redis did not answer"));

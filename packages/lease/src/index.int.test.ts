@@ -78,3 +78,12 @@ test("with Redis unreachable every call fails within the deadline instead of han
   expect(Date.now() - started).toBeLessThan(2000);
   await away.close();
 });
+
+test("a node's heartbeat says it is alive for a third of a ttl, and silence makes it dead long before its leases expire", async () => {
+  const [one, two] = [`hb-${randomUUID().slice(0, 8)}`, `hb-${randomUUID().slice(0, 8)}`];
+  expect(await a.alive([])).toEqual(new Set());
+  await a.beat(one);
+  expect(await b.alive([one, two])).toEqual(new Set([one]));
+  await new Promise((resolve) => setTimeout(resolve, TTL / 3 + 50));
+  expect(await b.alive([one, two])).toEqual(new Set());
+});

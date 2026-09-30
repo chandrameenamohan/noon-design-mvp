@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatHolder, keepLease, parseHolder, parseSyncNodes, syncRouter, type Holder } from "./lease.ts";
+import { formatHolder, keepLease, parseHolder, parseSyncNodes, syncRouter, takeLease, type Holder } from "./lease.ts";
 
 describe("holder values", () => {
   it("round-trips, and anything that is not one of ours reads as nobody", () => {
@@ -109,29 +109,110 @@ describe("syncRouter", () => {
   if (!nodes) throw new Error("fixture");
   const doc = "11111111-1111-4111-8111-111111111111";
   const owned = (holder: Holder | undefined) => () => Promise.resolve(holder);
+  const beating = (...ids: string[]) => () => Promise.resolve<ReadonlySet<string>>(new Set(ids));
+  const all = beating("sync", "sync-2");
 
   it("sends every peer to the room's owner", async () => {
-    const route = syncRouter({ nodes, owner: owned({ token: 3, nodeId: "sync-2" }), pick: () => "sync" });
+    const route = syncRouter({ nodes, owner: owned({ token: 3, nodeId: "sync-2" }), alive: all, pick: () => "sync" });
     expect(await route(doc)).toBe(`ws://two:3001/documents/${doc}`);
   });
 
   it("with no owner yet, any node: its first peer takes the lease", async () => {
     const seen: (readonly string[])[] = [];
-    const route = syncRouter({ nodes, owner: owned(undefined), pick: (ids) => { seen.push(ids); return "sync"; } });
+    const route = syncRouter({ nodes, owner: owned(undefined), alive: all, pick: (ids) => { seen.push(ids); return "sync"; } });
     expect(await route(doc)).toBe(`ws://one:3001/documents/${doc}`);
     expect(seen).toEqual([["sync", "sync-2"]]);
   });
 
+  it("an owner that stopped beating (killed) still holds its lease, but its peers go to a live node, which waits it out", async () => {
+    const seen: (readonly string[])[] = [];
+    const route = syncRouter({ nodes, owner: owned({ token: 3, nodeId: "sync-2" }), alive: beating("sync"), pick: (ids) => { seen.push(ids); return ids[0] ?? ""; } });
+    expect(await route(doc)).toBe(`ws://one:3001/documents/${doc}`);
+    expect(seen).toEqual([["sync"]]);
+  });
+
+  it("a dead node is never picked for a free room while a live one exists", async () => {
+    const route = syncRouter({ nodes, owner: owned(undefined), alive: beating("sync-2"), pick: (ids) => { expect(ids).toEqual(["sync-2"]); return "sync-2"; } });
+    expect(await route(doc)).toBe(`ws://two:3001/documents/${doc}`);
+  });
+
+  it("nobody beating at all (Redis restarted, beats not yet written) routes as before heartbeats: the owner, else any node", async () => {
+    expect(await syncRouter({ nodes, owner: owned({ token: 3, nodeId: "sync-2" }), alive: beating(), pick: () => "sync" })(doc)).toBe(`ws://two:3001/documents/${doc}`);
+    expect(await syncRouter({ nodes, owner: owned(undefined), alive: beating(), pick: (ids) => { expect(ids).toEqual(["sync", "sync-2"]); return "sync"; } })(doc)).toBe(`ws://one:3001/documents/${doc}`);
+  });
+
   it("an owner the table does not name is an error, not a guess that would loop on 4409", async () => {
-    await expect(syncRouter({ nodes, owner: owned({ token: 1, nodeId: "sync-9" }) })(doc)).rejects.toThrow(/sync-9/);
+    await expect(syncRouter({ nodes, owner: owned({ token: 1, nodeId: "sync-9" }), alive: all })(doc)).rejects.toThrow(/sync-9/);
   });
 
   it("Redis unreachable is the caller's error to answer", async () => {
-    await expect(syncRouter({ nodes, owner: () => Promise.reject(new Error("redis away")) })(doc)).rejects.toThrow("redis away");
+    await expect(syncRouter({ nodes, owner: () => Promise.reject(new Error("redis away")), alive: all })(doc)).rejects.toThrow("redis away");
   });
 
   it("a single node needs no lookup at all", async () => {
-    const route = syncRouter({ nodes: { kind: "one", url: "ws://sync.test:3001" }, owner: () => Promise.reject(new Error("must not be asked")) });
+    const route = syncRouter({ nodes: { kind: "one", url: "ws://sync.test:3001" }, owner: () => Promise.reject(new Error("must not be asked")), alive: () => Promise.reject(new Error("must not be asked")) });
     expect(await route(doc)).toBe(`ws://sync.test:3001/documents/${doc}`);
+  });
+});
+
+describe("takeLease", () => {
+  const TTL = 1000;
+  /** A lease held by `holder` until `expiresAt` on the fake clock; sleeping advances the clock. */
+  function setup({ holder, expiresAt, beating }: { holder: Holder; expiresAt: number; beating: Set<string> }) {
+    let clock = 0;
+    let acquires = 0;
+    const slept: number[] = [];
+    const take = () => takeLease({
+      nodeId: "sync", ttlMs: TTL, now: () => clock,
+      acquire: () => {
+        acquires += 1;
+        clock += 1; // the round trip
+        return Promise.resolve(clock >= expiresAt ? { acquired: true, holder: { token: holder.token + 1, nodeId: "sync" } } : { acquired: false, holder });
+      },
+      alive: (id) => Promise.resolve(beating.has(id)),
+      sleep: (ms) => { slept.push(ms); clock += ms; return Promise.resolve(); },
+    });
+    return { take, acquires: () => acquires, slept, clock: () => clock };
+  }
+
+  it("a free room is taken at once, with the time read BEFORE the acquire was sent", async () => {
+    const { take, acquires } = setup({ holder: { token: 1, nodeId: "sync-2" }, expiresAt: 0, beating: new Set() });
+    expect(await take()).toEqual({ holder: { token: 2, nodeId: "sync" }, acquiredAt: 0 });
+    expect(acquires()).toBe(1);
+  });
+
+  it("held by a LIVE node: refused at once, never waited for (its peers belong with the owner)", async () => {
+    const { take, acquires, slept } = setup({ holder: { token: 1, nodeId: "sync-2" }, expiresAt: Infinity, beating: new Set(["sync", "sync-2"]) });
+    expect(await take()).toBeUndefined();
+    expect(acquires()).toBe(1);
+    expect(slept).toEqual([]);
+  });
+
+  it("held by a node that stopped beating (killed): waited out, and taken no later than a poll after it expires", async () => {
+    const { take, clock } = setup({ holder: { token: 4, nodeId: "sync-2" }, expiresAt: 700, beating: new Set(["sync"]) });
+    const taken = await take();
+    expect(taken?.holder).toEqual({ token: 5, nodeId: "sync" });
+    expect(clock()).toBeLessThanOrEqual(700 + TTL / 10 + 1);
+    expect(taken?.acquiredAt).toBeGreaterThanOrEqual(700 - TTL / 10);
+  });
+
+  it("our OWN id on it (this node was killed and restarted) is waited out too, though our id is beating", async () => {
+    const { take } = setup({ holder: { token: 4, nodeId: "sync" }, expiresAt: 300, beating: new Set(["sync"]) });
+    expect((await take())?.holder.token).toBe(5);
+  });
+
+  it("never waits more than about one ttl: a lease that does not expire was renewed after all, so it is refused", async () => {
+    const { take, clock } = setup({ holder: { token: 4, nodeId: "sync-2" }, expiresAt: Infinity, beating: new Set() });
+    expect(await take()).toBeUndefined();
+    expect(clock()).toBeLessThanOrEqual(TTL + 2 * (TTL / 10) + 20);
+  });
+
+  it("the dead holder coming back to life while we wait: refused at the next look", async () => {
+    const beating = new Set<string>();
+    const { take, acquires } = setup({ holder: { token: 4, nodeId: "sync-2" }, expiresAt: Infinity, beating });
+    const pending = take();
+    beating.add("sync-2");
+    expect(await pending).toBeUndefined();
+    expect(acquires()).toBeLessThanOrEqual(2);
   });
 });

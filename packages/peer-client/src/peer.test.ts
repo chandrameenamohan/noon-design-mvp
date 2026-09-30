@@ -18,9 +18,11 @@ function fakeNet(onOpen: (socket: FakeSocket, nth: number) => void) {
   const sockets: FakeSocket[] = [];
   class FakeSocket extends EventTarget {
     sent: string[] = [];
+    url: string;
     constructor(url: string) { // no `readonly url` shorthand: a parameter property is code TypeScript GENERATES, which type stripping cannot do
       super();
       if (!url.startsWith("ws://")) throw new SyntaxError("invalid URL"); // as the real constructor does
+      this.url = url;
       sockets.push(this);
       queueMicrotask(() => { onOpen(this, sockets.length); });
     }
@@ -30,7 +32,7 @@ function fakeNet(onOpen: (socket: FakeSocket, nth: number) => void) {
   }
   return { sockets, WebSocketImpl: FakeSocket as unknown as typeof WebSocket };
 }
-type FakeSocket = EventTarget & { sent: string[]; close(code?: number): void; say(message: unknown): void };
+type FakeSocket = EventTarget & { sent: string[]; url: string; close(code?: number): void; say(message: unknown): void };
 
 const options = (net: ReturnType<typeof fakeNet>, extra: Partial<PeerOptions> = {}): PeerOptions => ({
   manifest,
@@ -48,6 +50,20 @@ test("a server that welcomes and then drops the peer, again and again, is retrie
   // With the pause reset by every welcome this was 60+ connections (one per ~10 ms). Growing to 160 ms: about ten.
   expect(net.sockets.length).toBeLessThan(16);
   expect(net.sockets.length).toBeGreaterThan(3);
+});
+
+test("the room's node dies, or says the room moved (4409): the next connection dials whatever /session answers NOW (F21)", async () => {
+  const net = fakeNet((socket, nth) => {
+    socket.say(welcome);
+    if (nth === 1) socket.close(1006); // killed
+    if (nth === 2) socket.close(4409); // not the owner (yet)
+  });
+  const addresses = ["ws://node-a/documents/d", "ws://node-b/documents/d", "ws://node-c/documents/d"];
+  let asked = 0;
+  const peer = connectPeer(options(net, { session: () => Promise.resolve({ wsUrl: addresses[Math.min(asked++, 2)] ?? "", token: "t" }) }));
+  await until(() => net.sockets.length === 3 && peer.status === "live", "live on the third address");
+  expect(net.sockets.map((socket) => socket.url)).toEqual(addresses);
+  peer.close();
 });
 
 test("a connection that opens but never says welcome is given up on and replaced", async () => {

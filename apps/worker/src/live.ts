@@ -17,7 +17,7 @@ export const roomUrl = (sessions: SyncSessions, documentId: string): Promise<str
 export function syncSessions(config: { secret: string } & ({ syncUrl: string } | { nodes: ReadonlyMap<string, string> }), redisUrl: string): { sessions: SyncSessions; close: () => Promise<void> } {
   if (!("nodes" in config)) return { sessions: config, close: () => Promise.resolve() };
   const leases = createLeases({ redisUrl });
-  return { sessions: { secret: config.secret, route: syncRouter({ nodes: { kind: "many", nodes: config.nodes }, owner: (documentId) => leases.owner(documentId) }) }, close: () => leases.close() };
+  return { sessions: { secret: config.secret, route: syncRouter({ nodes: { kind: "many", nodes: config.nodes }, owner: (documentId) => leases.owner(documentId), alive: (nodeIds) => leases.alive(nodeIds) }) }, close: () => leases.close() };
 }
 
 /**

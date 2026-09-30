@@ -117,23 +117,47 @@ export const syncNodesField = (name: string) =>
   });
 
 /**
- * Where a peer of `documentId` dials: the room's owner if it has one, otherwise any node (`pick`), whose
- * first peer then tries to take the lease. Two nodes racing for a free room is fine: exactly one wins, and
- * the other closes its peers with 4409, sending them back here, where the owner is now known.
- * `owner` throws when Redis cannot be asked: the caller answers "try again" (no node could open the room).
- * ponytail: `pick` knows no liveness, so a dead node is picked as often as a live one and its peers just
- * retry; ceiling: a slower first join while a node is down. Upgrade (E7.2): nodes heartbeat into Redis.
+ * Where a peer of `documentId` dials: the room's owner if it has one and is alive, otherwise any live node
+ * (`pick`), whose first peer then tries to take the lease. Two nodes racing for a free room is fine: exactly one
+ * wins, and the other closes its peers with 4409, sending them back here, where the owner is now known.
+ * An owner that stopped beating (killed, E7.2) still holds its lease until it expires: its peers are sent to a
+ * live node, which waits that lease out and takes the room (takeLease below), instead of dialling a dead one.
+ * `owner` or `alive` throwing means Redis cannot be asked: the caller answers "try again".
+ * Liveness is only a hint for routing: a node wrongly thought dead costs a peer one 4409, never a second room.
  */
-export function syncRouter({ nodes, owner, pick = randomNode }: { nodes: SyncNodes; owner: (documentId: string) => Promise<Holder | undefined>; pick?: (ids: readonly string[]) => string }): (documentId: string) => Promise<string> {
+export function syncRouter({ nodes, owner, alive, pick = randomNode }: { nodes: SyncNodes; owner: (documentId: string) => Promise<Holder | undefined>; alive: (nodeIds: readonly string[]) => Promise<ReadonlySet<string>>; pick?: (ids: readonly string[]) => string }): (documentId: string) => Promise<string> {
   return async (documentId) => {
     if (nodes.kind === "one") return `${nodes.url}/documents/${documentId}`;
-    const holder = await owner(documentId);
-    const id = holder?.nodeId ?? pick([...nodes.nodes.keys()]);
-    const url = nodes.nodes.get(id);
+    const ids = [...nodes.nodes.keys()];
+    const [holder, beating] = await Promise.all([owner(documentId), alive(ids)]);
     // Owned by a node this table does not name: sending the peer anywhere else would loop on 4409 for ever.
-    if (url === undefined) throw new Error(`the room is owned by sync node "${id}", which is not in the routing table`);
-    return `${url}/documents/${documentId}`;
+    if (holder && !nodes.nodes.has(holder.nodeId)) throw new Error(`the room is owned by sync node "${holder.nodeId}", which is not in the routing table`);
+    const live = ids.filter((id) => beating.has(id));
+    // Nobody beating at all (Redis just restarted, or heartbeats cannot be written): route as if all were alive.
+    const id = holder && (beating.has(holder.nodeId) || live.length === 0) ? holder.nodeId : pick(live.length > 0 ? live : ids);
+    return `${nodes.nodes.get(id) ?? ""}/documents/${documentId}`;
   };
 }
 
 const randomNode = (ids: readonly string[]): string => ids[Math.floor(Math.random() * ids.length)] ?? "";
+
+/**
+ * A node's first peer of a room has arrived: take the lease. Held by a live node: refused at once (its peers
+ * go to the owner). Held by a node that stopped beating, or under OUR id by a run of this node that is gone
+ * (killed and restarted): that lease can only expire, so wait for it, polling, for at most one ttl, then take
+ * the room (F21). Never stolen early: until it expires, the dead holder's lease is the only truth there is.
+ * `acquiredAt` is read BEFORE the winning acquire was sent (keepLease's deadline counts from it).
+ * ponytail: polls every ttl/10 rather than waiting for the key's exact expiry; ceiling: the takeover lands up to
+ * ttl/10 after the lease expired. Upgrade: return the PTTL from the acquire script and sleep exactly that.
+ */
+export async function takeLease({ acquire, alive, nodeId, ttlMs, now, sleep }: { acquire: () => Promise<{ acquired: boolean; holder: Holder }>; alive: (nodeId: string) => Promise<boolean>; nodeId: string; ttlMs: number; now: () => number; sleep: (ms: number) => Promise<void> }): Promise<{ holder: Holder; acquiredAt: number } | undefined> {
+  const giveUpAt = now() + ttlMs + ttlMs / 10;
+  for (;;) {
+    const acquiredAt = now();
+    const taken = await acquire();
+    if (taken.acquired) return { holder: taken.holder, acquiredAt };
+    if (taken.holder.nodeId !== nodeId && (await alive(taken.holder.nodeId))) return undefined;
+    if (now() >= giveUpAt) return undefined; // it did not expire when it should have: renewed after all
+    await sleep(ttlMs / 10);
+  }
+}

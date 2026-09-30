@@ -83,6 +83,8 @@ export type AppDeps = {
   enqueue: (ref: JobRef) => Promise<void>;
   /** Which sync node owns a document's room (the lease in Redis, E7.1). Only asked with several nodes; a seam like `enqueue`. */
   owner?: (documentId: string) => Promise<Holder | undefined>;
+  /** Which sync nodes beat recently (E7.2): a dead owner's peers are sent to a live node. Asked with `owner`. */
+  alive?: (nodeIds: readonly string[]) => Promise<ReadonlySet<string>>;
   /** PREVIEW_PUBLIC_URL: the canvas's public origin, which carries previews as /preview/... (noon-l96). */
   previewOrigin?: string | undefined;
   /** GITEA_WEBHOOK_SECRET. Unset: the webhook is a 404, and the git peer's reconcile alone notices pushes. */
@@ -100,9 +102,9 @@ export function publicPreview(preview: Preview, origin: string | undefined): Pre
   return { ...preview, url: `${origin}${url.pathname}${url.search}` };
 }
 
-export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret }: AppDeps): Hono<{ Variables: { user: User } }> {
+export function buildApp({ db, identify, sessions, enqueue, owner = () => Promise.reject(new Error("no lease store")), alive = () => Promise.reject(new Error("no lease store")), previewOrigin, webhookSecret }: AppDeps): Hono<{ Variables: { user: User } }> {
   const app = new Hono<{ Variables: { user: User } }>();
-  const route = syncRouter({ nodes: sessions.sync, owner });
+  const route = syncRouter({ nodes: sessions.sync, owner, alive });
 
   app.use(async (c, next) => {
     await next();

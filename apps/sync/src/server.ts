@@ -4,7 +4,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { ClientMessage, type Doc, type HealthResponse, type SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
-import { keepLease, type Holder, type Leases } from "@noon/lease";
+import { keepLease, takeLease, type Holder, type Leases } from "@noon/lease";
 import { manifest } from "@noon/design-system";
 import { applyOpInto, checkDoc, emptyDoc } from "@noon/doc-model";
 import { verifySessionToken } from "@noon/session-token";
@@ -71,6 +71,12 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   const leaving = new Set<Promise<void>>();
   const peerCounts = new Map<string, () => number>(); // answered by the ROOM: who has joined, not which sockets exist
   let closing = false;
+  // "Alive" into Redis every tenth of a ttl (E7.2): /session stops sending peers to a node that went quiet,
+  // and a node knows which leases can only expire. A failed beat is not logged: Redis being away already is.
+  const beat = (): void => { if (lease && !closing) void lease.leases.beat(lease.nodeId).catch(() => undefined); };
+  const beating = lease ? setInterval(beat, lease.leases.ttlMs / 10) : undefined;
+  beating?.unref();
+  beat();
 
   const http = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
@@ -112,16 +118,17 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       return "closeCode" in loaded ? loaded : owned(loaded, () => Promise.resolve());
     }
     const { leases, nodeId } = lease;
-    const acquiredAt = performance.now(); // BEFORE the send: our deadline must never outlast Redis's (lease.ts)
     let holder: Holder;
+    let acquiredAt: number; // BEFORE the winning send: our deadline must never outlast Redis's (lease.ts)
     try {
-      const taken = await leases.acquire(documentId, nodeId);
-      // Another node owns the room: its peers are sent back to /session, which now names the owner.
-      // ponytail: a lease under OUR node id that this process does not hold (an acquire whose reply was lost, or
-      // the previous run of this node, killed) is waited out like anyone's; ceiling: up to one ttl of 4409s for
-      // that document. Upgrade: a per-process id in the holder, so a node can tell its own dead lease apart.
-      if (!taken.acquired) return { closeCode: CLOSE.roomElsewhere };
-      holder = taken.holder;
+      // Another live node owns the room: its peers are sent back to /session, which names the owner. A dead
+      // one's lease (or our own previous run's) is waited out here, up to one ttl, and then the room is ours (F21).
+      const taken = await takeLease({
+        acquire: () => leases.acquire(documentId, nodeId), alive: async (id) => (await leases.alive([id])).has(id),
+        nodeId, ttlMs: leases.ttlMs, now: () => performance.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()),
+      });
+      if (!taken) return { closeCode: CLOSE.roomElsewhere };
+      ({ holder, acquiredAt } = taken);
     } catch (err) {
       // Redis cannot say who owns it: opening anyway could make a second room. "Try again" instead.
       log(documentId, `lease not taken: ${err instanceof Error ? err.message : "unknown"}`);
@@ -413,6 +420,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
         peerCount: (documentId) => peerCounts.get(documentId)?.() ?? 0,
         close: async () => {
           closing = true;
+          clearInterval(beating);
           // FIRST snapshot every open room, while its peers are still connected. Terminating the sockets
           // first (under F8's save) lost everything: their 'close' handlers only run on a later tick, so
           // "nothing pending" was true and the database pool was closed.
