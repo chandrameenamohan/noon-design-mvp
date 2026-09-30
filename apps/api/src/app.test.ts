@@ -29,6 +29,7 @@ test("every org and document route declares the role it needs, and they are thes
   }
   expect(Object.fromEntries(guarded)).toEqual({
     "GET /orgs/:orgId": "viewer",
+    "GET /orgs/:orgId/members": "viewer",
     "PUT /orgs/:orgId/members": "owner",
     "POST /orgs/:orgId/workspaces": "editor",
     "GET /orgs/:orgId/workspaces": "viewer",
@@ -39,6 +40,7 @@ test("every org and document route declares the role it needs, and they are thes
     "GET /orgs/:orgId/usage": "owner",
     "GET /orgs/:orgId/audit": "owner",
     "POST /documents/:id/session": "viewer",
+    "GET /documents/:id/shares": "owner",
     "PUT /documents/:id/shares": "owner",
     "DELETE /documents/:id/shares/:userId": "owner",
     "POST /documents/:id/runs": "editor",

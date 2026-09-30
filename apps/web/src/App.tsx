@@ -3,6 +3,8 @@ import { HealthResponse, type Org, type User } from "@noon/contracts";
 import { createDocument, listOrgs, signIn, signOut, signUp, whoAmI } from "./api.ts";
 import { AuditView } from "./AuditView.tsx";
 import { Canvas } from "./Canvas.tsx";
+import { hrefTo } from "./links.ts";
+import { OrgView } from "./OrgView.tsx";
 import { Page } from "./Shell.tsx";
 import { refusalWords } from "./signIn.ts";
 import { UsageView } from "./UsageView.tsx";
@@ -10,11 +12,13 @@ import { UsageView } from "./UsageView.tsx";
 const selfCheck = HealthResponse.parse({ status: "ok", service: "web" });
 
 export function App() {
-  // ponytail: the address bar is the router. ?doc=<id> is a document, ?audit=<orgId> an org's audit trail, ?usage=<orgId>
-  // what its AI runs cost; anything else is home.
+  // ponytail: the address bar is the router. ?doc=<id> is a document, ?org=<orgId> an org's members (E10.8), ?audit=<orgId>
+  // its audit trail, ?usage=<orgId> what its AI runs cost; anything else is home.
   const params = new URLSearchParams(location.search);
   const documentId = params.get("doc");
   if (documentId) return <Canvas documentId={documentId} />;
+  const orgId = params.get("org");
+  if (orgId) return <OrgView orgId={orgId} />;
   const auditOrg = params.get("audit");
   if (auditOrg) return <AuditView orgId={auditOrg} />;
   const usageOrg = params.get("usage");
@@ -63,12 +67,20 @@ function Home() {
           <p>Signed in as {me.name} ({me.email})</p>
           <button type="button" className="primary" onClick={() => void create(me)}>New document</button>{" "}
           <button type="button" onClick={() => void leave()}>Sign out</button>
+          {/* E10.8: each org is a card with its three pages. Every member may open Members; the api tells a non-owner, in words, that the other two are the owners'. */}
           {orgs.length > 0 && (
             <section aria-labelledby="orgs-heading">
               <h2 id="orgs-heading">Your organisations</h2>
-              <ul>
+              <ul className="org-list">
                 {orgs.map((org) => (
-                  <li key={org.id}><a href={`/?audit=${org.id}`}>Audit trail of {org.name}</a>{" · "}<a href={`/?usage=${org.id}`}>AI usage of {org.name}</a></li>
+                  <li key={org.id}>
+                    <h3>{org.name}</h3>
+                    <nav aria-label={`Pages of ${org.name}`}>
+                      <a href={hrefTo({ org: org.id })}>Members of {org.name}</a>
+                      <a href={hrefTo({ audit: org.id })}>Audit trail of {org.name}</a>
+                      <a href={hrefTo({ usage: org.id })}>AI usage of {org.name}</a>
+                    </nav>
+                  </li>
                 ))}
               </ul>
             </section>

@@ -324,6 +324,13 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
 
   org.get("/", need("viewer"), (c) => c.json(c.var.org));
 
+  // E10.8: who is in the org, with their roles. Every member: the same people a member already meets in every document
+  // here, and the screen that lets an owner change roles is the one a viewer reads. Only THIS org's rows (the query says so).
+  org.get("/members", need("viewer"), async (c) => {
+    const page = await c.var.scope.listMembers(pageQuery(c));
+    return page ? c.json(page) : badCursor(c);
+  });
+
   // F24: only an owner changes roles, their own included (the last owner cannot step down: the org would have
   // none). A new member is added the same way: the api has no email to invite with, so it takes a user who signed up.
   // The change is committed BEFORE it is announced, so a sync node that hears of it reads the new role.
@@ -426,7 +433,16 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
       wsUrl,
       token,
       expiresAt: new Date((now + sessions.ttlSeconds) * 1000).toISOString(),
+      // E10.8: the role the middleware just read, beside the token and never in it: the editor shows Share to an owner only.
+      role: c.var.role,
     } satisfies SessionResponse);
+  });
+
+  // E10.8: who the document is shared with. Owners only, as sharing itself is (F25): the list names people outside the
+  // org, and an editor has no business with it. Only THIS document's shares, in the document's own org (the query says so).
+  document.get("/shares", need("owner"), async (c) => {
+    const page = await db.forOrg(c.var.doc.orgId).listShares(c.var.doc.id, pageQuery(c));
+    return page ? c.json(page) : badCursor(c);
   });
 
   // F25: an owner of the document's org shares it with someone outside the org (or changes the share), and revokes it.

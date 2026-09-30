@@ -3,8 +3,9 @@ import type { Org } from "@noon/contracts";
 import { readOrg } from "./api.ts";
 
 /**
- * An owner's paged report on one org (the audit trail, F26; AI usage, F31): the org's name, the pages read so far, and
- * why the api said no ("forbidden": not an owner; "gone": not found or not a member; "error": no answer).
+ * A paged report on one org (the audit trail, F26; AI usage, F31; the members, E10.8): the org's name, the pages read so
+ * far, and why the api said no ("forbidden": not an owner; "gone": not found or not a member; "error": no answer).
+ * `reload` reads the first page again (after a change the page itself made), so what is shown is always the api's answer.
  */
 export function useOrgReport<P extends { nextCursor: string | null }>(orgId: string, read: (orgId: string, cursor?: string) => Promise<P | "forbidden" | "gone">) {
   const [org, setOrg] = useState<Org>();
@@ -31,5 +32,5 @@ export function useOrgReport<P extends { nextCursor: string | null }>(orgId: str
   }, [orgId]);
 
   const next = pages.at(-1)?.nextCursor ?? null;
-  return { org, pages, refused, loading, next, more: () => { if (next !== null) void load(next); } };
+  return { org, pages, refused, loading, next, more: () => { if (next !== null) void load(next); }, reload: () => { setRefused(undefined); void load(); } };
 }

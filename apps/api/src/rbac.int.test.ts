@@ -36,6 +36,7 @@ test("every route, every role: reads for every member, writes for editors, roles
   // [method, path, body, least role]. Each write is one a viewer could do harm with; the stranger row is implied.
   const routes: [string, string, unknown, Role][] = [
     ["GET", `/orgs/${org.id}`, undefined, "viewer"],
+    ["GET", `/orgs/${org.id}/members`, undefined, "viewer"], // E10.8
     ["GET", `/orgs/${org.id}/workspaces`, undefined, "viewer"],
     ["GET", `/orgs/${org.id}/workspaces/${ws.id}`, undefined, "viewer"],
     ["GET", `/orgs/${org.id}/workspaces/${ws.id}/documents`, undefined, "viewer"],
@@ -54,7 +55,8 @@ test("every route, every role: reads for every member, writes for editors, roles
     ["GET", `/documents/${doc.id}/conflict`, undefined, "viewer"],
     ["POST", `/documents/${doc.id}/ship`, undefined, "editor"],
     ["GET", `/documents/${doc.id}/ship`, undefined, "viewer"],
-    // E8.3 (F25): the owner shares with the stranger (after every stranger row) and revokes it again.
+    // E8.3 (F25): the owner shares with the stranger (after every stranger row) and revokes it again. E10.8: and lists the shares.
+    ["GET", `/documents/${doc.id}/shares`, undefined, "owner"],
     ["PUT", `/documents/${doc.id}/shares`, { email: who.stranger, role: "viewer" }, "owner"],
     ["DELETE", `/documents/${doc.id}/shares/${strangerId}`, undefined, "owner"],
   ];

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { AuditEntry, HealthResponse, IdempotencyKey, includes, Preview, Role, SandboxUrl, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
+import { AuditEntry, HealthResponse, IdempotencyKey, includes, MemberPage, Preview, Role, SandboxUrl, SessionResponse, ShareBody, SignUpBody, UsageAmount } from "./index.ts";
 
 const valid = { status: "ok", service: "api" };
 
@@ -80,6 +80,18 @@ test("a document is shared at editor or viewer, and never at owner", () => {
   const share = (role: string) => ShareBody.safeParse({ email: "outside@example.com", role }).success;
   expect(["editor", "viewer", "owner", ""].map(share)).toEqual([true, true, false, false]);
   expect(ShareBody.safeParse({ email: "outside@example.com", role: "viewer", orgId: "x" }).success).toBe(false);
+});
+
+// E10.8: a member list is one page of members and nothing else; the session answer may name the caller's role, and only a role.
+test("a member page is items and a cursor, each item a member; a session's role is one of the three or absent", () => {
+  const member = { userId: "0f9c7a0e-1b2c-4d3e-8f00-000000000003", email: "o@example.com", name: "Olu", role: "viewer" };
+  expect(MemberPage.parse({ items: [member], nextCursor: null })).toEqual({ items: [member], nextCursor: null });
+  expect(MemberPage.safeParse({ items: [{ ...member, role: "admin" }], nextCursor: null }).success).toBe(false);
+  expect(MemberPage.safeParse({ items: [member], nextCursor: null, total: 1 }).success).toBe(false);
+  const session = { wsUrl: "ws://sync.test/documents/d", token: "t", expiresAt: "2026-09-30T00:00:00.000Z" };
+  expect(SessionResponse.parse({ ...session, role: "owner" })).toHaveProperty("role", "owner");
+  expect(SessionResponse.parse(session)).not.toHaveProperty("role");
+  expect(SessionResponse.safeParse({ ...session, role: "admin" }).success).toBe(false);
 });
 
 test("an audit entry's detail is flat text, and its action and actor kind are ones the view has words for", () => {

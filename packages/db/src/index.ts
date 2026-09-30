@@ -189,6 +189,10 @@ type OrgScope = {
    * that email. "last_owner": it would leave the org without an owner. One change at a time per org.
    */
   setMember(input: { email: string; role: Role; by: string | undefined }): Promise<Member | "no_user" | "last_owner">;
+  /** E10.8: one page of this org's members with their roles, oldest first (the founding owner leads). Undefined = a bad cursor. */
+  listMembers(page?: PageInput): Promise<Page<Member> | undefined>;
+  /** E10.8: one page of the shares of this org's document, oldest first. Undefined = a bad cursor; a document not this org's has none. */
+  listShares(documentId: string, page?: PageInput): Promise<Page<Member> | undefined>;
   /** E8.3 (F25): shares this org's document with the user with this email, or changes their share. Undefined: no such user (or document). */
   share(input: { documentId: string; email: string; role: ShareRole; by: string | undefined }): Promise<Member | undefined>;
   /** E8.3: the share goes. False: there was none. */
@@ -901,6 +905,17 @@ export function createDb({ connectionString, schema }: { connectionString: strin
             return member;
           });
         },
+        // Both lists page over a join given to page() as the table `t`: its keyset is (created_at, id), and here `id` is the
+        // user's, unique within one org's memberships and within one document's shares. The org (and the document) is in the
+        // WHERE: a list never reaches past the tenant the route already proved the caller may see.
+        listMembers: async (input) =>
+          orgExists
+            ? page(MemberRow, "(select m.org_id, m.role, m.created_at, u.id, u.email, u.name from memberships m join users u on u.id = m.user_id) t", "t.org_id = $1", [orgId], input)
+            : { items: [], nextCursor: null },
+        listShares: async (documentId, input) =>
+          orgExists && isId(documentId)
+            ? page(MemberRow, "(select s.org_id, s.document_id, s.role, s.created_at, u.id, u.email, u.name from document_shares s join users u on u.id = s.user_id) t", "t.org_id = $1 and t.document_id = $2", [orgId, documentId], input)
+            : { items: [], nextCursor: null },
         share: async ({ documentId, email, role, by }) => {
           const input = ShareBody.parse({ email, role });
           if (!orgExists || !isId(documentId) || (by !== undefined && !isId(by))) return undefined;

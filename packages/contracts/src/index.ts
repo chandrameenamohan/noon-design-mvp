@@ -43,6 +43,12 @@ const RANK: Record<Role, number> = { viewer: 0, editor: 1, owner: 2 };
 export const includes = (role: Role, need: Role): boolean => RANK[role] >= RANK[need];
 export const Member = z.object({ userId: Id, email: User.shape.email, name: Name, role: Role });
 export type Member = z.infer<typeof Member>;
+/**
+ * E10.8: one page of GET /orgs/:orgId/members (every member, oldest first) or of GET /documents/:id/shares (the
+ * document's shares, owners only: a share names someone outside the org). A share is a Member whose role is never owner.
+ */
+export const MemberPage = z.strictObject({ items: z.array(Member), nextCursor: z.string().nullable() });
+export type MemberPage = z.infer<typeof MemberPage>;
 
 // --- HTTP bodies -------------------------------------------------------------
 // --- Sign-in (F23) ----------------------------------------------------------------
@@ -262,8 +268,14 @@ export const ErrorBody = z.object({
 export type ErrorBody = z.infer<typeof ErrorBody>;
 
 // --- Live editing session (F3) ---------------------------------------------------
-/** Where to open the WebSocket for a document, and the short-lived token that lets you in. */
-export const SessionResponse = z.object({ wsUrl: z.url(), token: z.string().min(1), expiresAt: Timestamp });
+/**
+ * Where to open the WebSocket for a document, and the short-lived token that lets you in. `role` (E10.8): the caller's
+ * role on the document as the api read it for THIS answer (org role or share, whichever is higher), so the editor can
+ * show only the controls the person may use (Share is the owners'). A hint for the screen, never authority: the token
+ * still carries no role (E1.5), every route and the room read the row for themselves, and a change reaches the screen at
+ * the next session it mints. Optional: an api that predates it says nothing, and the editor shows nothing extra.
+ */
+export const SessionResponse = z.object({ wsUrl: z.url(), token: z.string().min(1), expiresAt: Timestamp, role: Role.optional() });
 export type SessionResponse = z.infer<typeof SessionResponse>;
 
 // --- Paging --------------------------------------------------------------------

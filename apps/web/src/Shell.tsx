@@ -1,4 +1,5 @@
 import { useId, type ReactNode } from "react";
+import { hrefTo } from "./links.ts";
 import { useTheme } from "./useTheme.ts";
 
 /**
@@ -58,7 +59,19 @@ export function Shell({ topBar, notices, left, centre, right }: { topBar: ReactN
   );
 }
 
-/** A reading page (home, audit, usage): the same bar and tokens, one column of content. */
+/** The pages of one org (E10.8), for the bar of each: members, the audit trail, AI usage. The current one is marked; the wordmark is the way home. */
+export function OrgNav({ orgId, current }: { orgId: string; current: "members" | "audit" | "usage" }) {
+  const pages = [["members", "org", "Members"], ["audit", "audit", "Audit trail"], ["usage", "usage", "AI usage"]] as const;
+  return (
+    <nav aria-label="Organisation" className="org-nav">
+      {pages.map(([id, param, title]) => (
+        <a key={id} href={hrefTo({ [param]: orgId })} aria-current={id === current ? "page" : undefined}>{title}</a>
+      ))}
+    </nav>
+  );
+}
+
+/** A reading page (home, audit, usage, members): the same bar and tokens, one column of content. */
 export function Page({ bar, children }: { bar?: ReactNode; children: ReactNode }) {
   return (
     <div className="shell">

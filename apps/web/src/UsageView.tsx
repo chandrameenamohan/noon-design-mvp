@@ -1,6 +1,7 @@
 import type { UsageReport } from "@noon/contracts";
 import { readUsage } from "./api.ts";
-import { Page } from "./Shell.tsx";
+import { hrefTo } from "./links.ts";
+import { OrgNav, Page } from "./Shell.tsx";
 import { tokens, usd } from "./usage.ts";
 import { useOrgReport } from "./useOrgReport.ts";
 
@@ -47,7 +48,7 @@ export function UsageView({ orgId }: { orgId: string }) {
   const runs = pages.flatMap((page) => page.items);
 
   return (
-    <Page bar={<a href="/">Home</a>}>
+    <Page bar={<OrgNav orgId={orgId} current="usage" />}>
       <h1>AI usage{org ? ` of ${org.name}` : ""}</h1>
       {refused !== undefined && <p role="alert" className="refusal">{REFUSED[refused]}</p>}
       {report && refused === undefined && (
@@ -92,7 +93,7 @@ export function UsageView({ orgId }: { orgId: string }) {
                 <tr key={run.id}>
                   <th scope="row"><time dateTime={run.createdAt}>{new Date(run.createdAt).toLocaleString()}</time></th>
                   <td>{run.email ?? "A deleted user"}</td>
-                  <td>{run.documentId === null ? "Deleted" : <a href={`/?doc=${run.documentId}`}><span className="visually-hidden">Document </span>{run.documentId.slice(0, 8)}</a>}</td>
+                  <td>{run.documentId === null ? "Deleted" : <a href={hrefTo({ doc: run.documentId })}><span className="visually-hidden">Document </span>{run.documentId.slice(0, 8)}</a>}</td>
                   <td>{run.model}</td>
                   <td className="number">{tokens(run.inputTokens)}</td>
                   <td className="number">{tokens(run.outputTokens)}</td>

@@ -1,6 +1,7 @@
 import { readAudit } from "./api.ts";
 import { auditWords } from "./audit.ts";
-import { Page } from "./Shell.tsx";
+import { hrefTo } from "./links.ts";
+import { OrgNav, Page } from "./Shell.tsx";
 import { useOrgReport } from "./useOrgReport.ts";
 
 const REFUSED = {
@@ -18,7 +19,7 @@ export function AuditView({ orgId }: { orgId: string }) {
   const entries = pages.flatMap((page) => page.items);
 
   return (
-    <Page bar={<a href="/">Home</a>}>
+    <Page bar={<OrgNav orgId={orgId} current="audit" />}>
       <h1>Audit trail{org ? ` of ${org.name}` : ""}</h1>
       {refused !== undefined && <p role="alert" className="refusal">{REFUSED[refused]}</p>}
       {refused === undefined && (
@@ -35,7 +36,7 @@ export function AuditView({ orgId }: { orgId: string }) {
                   <td><time dateTime={entry.at}>{new Date(entry.at).toLocaleString()}</time></td>
                   <td>{words.who}</td>
                   <td>{words.what}</td>
-                  <td>{entry.documentId === null ? "" : <a href={`/?doc=${entry.documentId}`}><span className="visually-hidden">Document </span>{entry.documentId.slice(0, 8)}</a>}</td>
+                  <td>{entry.documentId === null ? "" : <a href={hrefTo({ doc: entry.documentId })}><span className="visually-hidden">Document </span>{entry.documentId.slice(0, 8)}</a>}</td>
                 </tr>
               );
             })}

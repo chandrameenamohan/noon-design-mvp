@@ -1,5 +1,6 @@
-import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Org, Preview, Run, SessionResponse, Ship, UsageReport, User, Workspace } from "@noon/contracts";
+import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Member, MemberPage, Org, Preview, Run, SessionResponse, Ship, UsageReport, User, Workspace, type Role } from "@noon/contracts";
 import { z } from "zod";
+import type { MemberRefusal, ShareRefusal } from "./members.ts";
 import type { AuthRefusal } from "./signIn.ts";
 
 // The caller is whoever signed in (E8.1): the session is an HttpOnly cookie the browser sends by itself on
@@ -31,18 +32,19 @@ const retryAfter = (res: Response): number => {
   return Number.isInteger(seconds) && seconds >= 1 ? seconds : 60;
 };
 
-/** POSTs and checks the ANSWER against the shared contract: the server is another program, not a type. */
-async function post<S extends z.ZodType>(path: string, schema: S, body?: unknown, headers: Record<string, string> = {}): Promise<z.infer<S>> {
+/** POSTs (or PUTs) and checks the ANSWER against the shared contract: the server is another program, not a type. */
+async function send<S extends z.ZodType>(method: "POST" | "PUT", path: string, schema: S, body?: unknown, headers: Record<string, string> = {}): Promise<z.infer<S>> {
   const res = await fetch(`/api${path}`, {
-    method: "POST",
+    method,
     headers: { ...devHeaders, ...headers, "content-type": "application/json" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  if (res.status === 429) throw new Limited(`POST ${path} answered 429`, retryAfter(res));
-  if (res.status >= 400 && res.status < 500 && res.status !== 408) throw new Refused(`POST ${path} answered ${String(res.status)}`, res.status);
-  if (!res.ok) throw new Error(`POST ${path} answered ${String(res.status)}`);
+  if (res.status === 429) throw new Limited(`${method} ${path} answered 429`, retryAfter(res));
+  if (res.status >= 400 && res.status < 500 && res.status !== 408) throw new Refused(`${method} ${path} answered ${String(res.status)}`, res.status);
+  if (!res.ok) throw new Error(`${method} ${path} answered ${String(res.status)}`);
   return schema.parse(await res.json());
 }
+const post = <S extends z.ZodType>(path: string, schema: S, body?: unknown, headers: Record<string, string> = {}): Promise<z.infer<S>> => send("POST", path, schema, body, headers);
 
 /**
  * F27: a POST that makes a job. One press, one Idempotency-Key: when the answer is lost or is a 5xx, the retry sends
@@ -197,6 +199,58 @@ export async function readAudit(orgId: string, cursor?: string): Promise<AuditPa
   if (res.status === 404) return "gone";
   if (!res.ok) throw new Error(`GET audit answered ${String(res.status)}`);
   return AuditPage.parse(await res.json());
+}
+
+// --- Members and shares (E10.8, F24, F25) ----------------------------------------------------------------
+/**
+ * One page of the org's members with their roles, oldest first, parsed with the contract (names and emails are what people
+ * typed). Every member may read it; "gone": not found or not a member (404). "forbidden" cannot happen today, and is kept
+ * so the page says so honestly if the route ever narrows.
+ */
+export async function readMembers(orgId: string, cursor?: string): Promise<MemberPage | "forbidden" | "gone"> {
+  const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}/members${query}`, { headers: devHeaders });
+  if (res.status === 403) return "forbidden";
+  if (res.status === 404) return "gone";
+  if (!res.ok) throw new Error(`GET members answered ${String(res.status)}`);
+  return MemberPage.parse(await res.json());
+}
+/** Adds the user with this email to the org, or changes their role (owners only). The member as the api now holds them, or the api's refusal by name. */
+export async function setMemberRole(orgId: string, email: string, role: Role): Promise<Member | MemberRefusal> {
+  try {
+    return await send("PUT", `/orgs/${encodeURIComponent(orgId)}/members`, Member, { email, role });
+  } catch (problem) {
+    if (problem instanceof Refused && problem.status === 404) return "no_user"; // the org itself was found by the page already: a 404 here is the email's
+    if (problem instanceof Refused && problem.status === 409) return "last_owner";
+    if (problem instanceof Refused && problem.status === 403) return "forbidden";
+    throw problem;
+  }
+}
+/** Who the document is shared with, one page, oldest first. Owners only: "forbidden" for any other role (403); "gone": not found or no access (404). */
+export async function readShares(documentId: string, cursor?: string): Promise<MemberPage | "forbidden" | "gone"> {
+  const query = cursor === undefined ? "" : `?cursor=${encodeURIComponent(cursor)}`;
+  const res = await fetch(`/api/documents/${encodeURIComponent(documentId)}/shares${query}`, { headers: devHeaders });
+  if (res.status === 403) return "forbidden";
+  if (res.status === 404) return "gone";
+  if (!res.ok) throw new Error(`GET shares answered ${String(res.status)}`);
+  return MemberPage.parse(await res.json());
+}
+/** Shares the document with the user with this email at viewer or editor, or changes their share. The share as the api holds it, or its refusal by name. */
+export async function shareWith(documentId: string, email: string, role: "viewer" | "editor"): Promise<Member | ShareRefusal> {
+  try {
+    return await send("PUT", `/documents/${encodeURIComponent(documentId)}/shares`, Member, { email, role });
+  } catch (problem) {
+    if (problem instanceof Refused && problem.status === 404) return "no_user"; // the document was open in this very page: a 404 here is the email's
+    if (problem instanceof Refused && problem.status === 403) return "forbidden";
+    throw problem;
+  }
+}
+/** Revokes a share: their open session closes (E8.3). "revoked" also when there was nothing left to revoke (404): either way it is gone. */
+export async function revokeShare(documentId: string, userId: string): Promise<"revoked" | "forbidden"> {
+  const res = await fetch(`/api/documents/${encodeURIComponent(documentId)}/shares/${encodeURIComponent(userId)}`, { method: "DELETE", headers: devHeaders });
+  if (res.status === 403) return "forbidden";
+  if (res.status === 204 || res.status === 404) return "revoked";
+  throw new Error(`DELETE share answered ${String(res.status)}`);
 }
 
 // --- Usage (F31) -----------------------------------------------------------------------------------

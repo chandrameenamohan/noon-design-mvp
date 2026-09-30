@@ -257,3 +257,33 @@ kbd { display: inline-block; padding: 0 var(--space-1); border: 1px solid var(--
 .usage { margin-block-end: var(--space-6); }
 .usage th[scope="row"] { font-weight: normal; }
 .usage .number { text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: normal; }
+
+/* --- the org pages (E10.8): home's org cards, the bar's org nav, members, and the Share dialog ---------- */
+.org-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); max-width: 40rem; }
+.org-list li { padding: var(--space-3) var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.org-list h3 { font-size: var(--text-md); margin-block-end: var(--space-1); }
+.org-list nav { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-sm); }
+/* The three pages of an org as tabs in the bar; the current one wears the accent's soft fill, not colour alone. */
+.org-nav { display: flex; gap: var(--space-1); }
+.org-nav a { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); color: var(--fg-muted); text-decoration: none; }
+.org-nav a:hover { background: var(--surface-2); color: var(--fg); }
+.org-nav a[aria-current="page"] { color: var(--fg); background: var(--accent-soft); font-weight: 600; }
+.members th[scope="row"], .shares th[scope="row"] { font-weight: normal; }
+.members select, .shares select { min-width: 6.5rem; }
+/* A refusal sits under the control it was about, in the control's cell. */
+.row-refusal { margin: var(--space-1) 0 0; padding: 0; border: 0; background: none; font-size: var(--text-xs); color: var(--danger-fg); }
+.add-member, .share-form { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-2); margin-block: var(--space-3); }
+.add-member label, .share-form label { display: grid; gap: var(--space-1); font-size: var(--text-sm); }
+.add-member .refusal { flex-basis: 100%; }
+.roles-legend { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: var(--space-4) 0 0; max-width: 40rem; font-size: var(--text-sm); color: var(--fg-muted); }
+.roles-legend > div { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; }
+.roles-legend dt { font-weight: 600; color: var(--fg); font-family: var(--font-mono); }
+.roles-legend dd { margin: 0; }
+.share-dialog { width: min(44rem, calc(100vw - 2 * var(--space-6))); }
+.share-dialog .hint { margin: 0 0 var(--space-3); }
+.share-dialog .refusal { margin-block: var(--space-2); }
+.share-dialog .shares { margin-block-start: var(--space-3); }
+.confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+/* The one destructive control: the danger pair, not the accent, and only after the person pressed Revoke once already. */
+button.danger { border-color: var(--danger-border); color: var(--danger-fg); }
+button.danger:hover:not(:disabled) { background: var(--danger-bg); }

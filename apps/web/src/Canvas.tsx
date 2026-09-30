@@ -13,6 +13,7 @@ import { addOpAt, type Slot } from "./library-adds.ts";
 import { LibraryPanel, type Carry } from "./LibraryPanel.tsx";
 import { PreviewSplit } from "./Preview.tsx";
 import { sentenceFor } from "./reasons.ts";
+import { ShareDialog } from "./ShareDialog.tsx";
 import { Page, Panel, Shell, TopBar } from "./Shell.tsx";
 import { ShipPanel } from "./ShipPanel.tsx";
 import { ShortcutSheet } from "./ShortcutSheet.tsx";
@@ -49,7 +50,7 @@ export function Canvas({ documentId }: { documentId: string }) {
   // The AI's cursor (E10.6): per AI actor, the node its last op touched, from the ops the room orders. The
   // same map comes back for anyone else's op, so React sees no change and renders nothing for it.
   const [anchors, setAnchors] = useState<ReadonlyMap<string, string>>(new Map());
-  const { peer, refusals, refuse, dismiss } = usePeer(documentId, (message: SequencedOp) => { setAnchors((current) => aiAnchors(current, message)); });
+  const { peer, role, refusals, refuse, dismiss } = usePeer(documentId, (message: SequencedOp) => { setAnchors((current) => aiAnchors(current, message)); });
   const [wanted, setSelected] = useState(ROOT_ID);
   // An avatar was pressed: the canvas brings that person's selection to the middle (a new nonce each press).
   const [reveal, setReveal] = useState<Reveal | null>(null);
@@ -72,11 +73,13 @@ export function Canvas({ documentId }: { documentId: string }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   // The `?` sheet of shortcuts (E10.7).
   const [sheetOpen, setSheetOpen] = useState(false);
+  // The Share dialog (E10.8), an owner's: who this document is shared with, and with whom to share it.
+  const [shareOpen, setShareOpen] = useState(false);
   // The global shortcuts (shortcuts.ts, scope "global"): anywhere in the editor, unless the person is typing
-  // or the sheet is up. A widget's own handler runs first and, finding no action of its own, lets the key bubble here.
+  // or a modal is up. A widget's own handler runs first and, finding no action of its own, lets the key bubble here.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (sheetOpen || (event.target instanceof HTMLElement && typingIn(event.target))) return;
+      if (sheetOpen || shareOpen || (event.target instanceof HTMLElement && typingIn(event.target))) return;
       const action = actionFor("global", event);
       if (action === "help") setSheetOpen(true);
       else if (action === "preview") setPreviewOpen((open) => !open);
@@ -85,7 +88,7 @@ export function Canvas({ documentId }: { documentId: string }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => { window.removeEventListener("keydown", onKeyDown); };
-  }, [sheetOpen]);
+  }, [sheetOpen, shareOpen]);
   // A gap or padding control is hovered or focused in the inspector: the canvas shades that space (E10.4).
   const [hint, setHint] = useState<Hint | null>(null);
   // A component is carried from the library over the tree or the canvas (E10.5): whichever it is over shows where it would land.
@@ -150,9 +153,9 @@ export function Canvas({ documentId }: { documentId: string }) {
     setReveal((last) => ({ nodeId: p.selection ?? ROOT_ID, nonce: (last?.nonce ?? 0) + 1 }));
   };
 
-  // The shell (E10.1): the top bar says how the document is doing and who is here, and holds Ship and AI;
-  // layers left with the library under them (E10.3, E10.5), the canvas in the centre, the inspector right
-  // with the AI panel under it. Share arrives with E10.8.
+  // The shell (E10.1): the top bar says how the document is doing and who is here, and holds Ship, AI and, for an
+  // owner, Share (E10.8: shown by the role the session came with; the api decides regardless); layers left with the
+  // library under them (E10.3, E10.5), the canvas in the centre, the inspector right with the AI panel under it.
   return (
     <Shell
       topBar={
@@ -183,6 +186,7 @@ export function Canvas({ documentId }: { documentId: string }) {
             <ShipPanel documentId={documentId} />
             <button type="button" aria-pressed={previewOpen} aria-keyshortcuts="p" onClick={() => { setPreviewOpen((open) => !open); }}>Preview</button>
             <button type="button" aria-pressed={aiOpen} aria-controls="ai-panel" onClick={() => { setAiOpen((open) => !open); }}>AI</button>
+            {role === "owner" && <button type="button" className="primary" aria-haspopup="dialog" onClick={() => { setShareOpen(true); }}>Share</button>}
             <button type="button" aria-label="Keyboard shortcuts (?)" aria-haspopup="dialog" aria-keyshortcuts="?" onClick={() => { setSheetOpen(true); }}>?</button>
           </div>
         </TopBar>
@@ -220,6 +224,7 @@ export function Canvas({ documentId }: { documentId: string }) {
             <Surface doc={doc} labels={labels} selected={node.id} selectedBy={selectedBy} hint={hint?.nodeId === node.id ? hint : null} isContainer={isContainer} insertion={carry?.kind === "canvas" ? carry.slot : null} onSelect={setSelected} onPoint={point} cursors={marks} reveal={reveal} />
           </PreviewSplit>
           <ShortcutSheet open={sheetOpen} onClose={() => { setSheetOpen(false); }} />
+          {role === "owner" && <ShareDialog documentId={documentId} open={shareOpen} onClose={() => { setShareOpen(false); }} />}
         </>
       }
       right={
