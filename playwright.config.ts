@@ -23,7 +23,9 @@ export default defineConfig({
     // Hosted as through a tunnel (noon-l96): the preview rides the canvas's own origin, as /preview/.
     // The loopback address the canvas frames otherwise is what the sandbox and worker suites load.
     { command: fromEnv(`PORT=${String(PORTS.api)} SYNC_PUBLIC_URL=ws://localhost:${String(PORTS.sync)} PREVIEW_PUBLIC_URL=http://localhost:${String(PORTS.web)} node apps/api/src/main.ts`), url: `http://localhost:${String(PORTS.api)}/ready`, reuseExistingServer: false },
-    { command: fromEnv(`PORT=${String(PORTS.sync)} SYNC_NODE_ID=e2e node apps/sync/src/main.ts`), url: `http://localhost:${String(PORTS.sync)}/health`, reuseExistingServer: false },
+    // Snapshots (E6.2) go to the dev stack's MinIO and its bucket: the documents' snapshot_seq lives in the shared
+    // Postgres, so a bucket of its own would miss the objects the compose sync wrote. Only the password is a secret.
+    { command: fromEnv(`PORT=${String(PORTS.sync)} SYNC_NODE_ID=e2e MINIO_URL=http://localhost:\${MINIO_PORT:-9005} MINIO_USER=noon node apps/sync/src/main.ts`), url: `http://localhost:${String(PORTS.sync)}/health`, reuseExistingServer: false },
     // The scripted worker has no port of its own; it answers on one only to tell Playwright it is up.
     { command: fromEnv(`SYNC_URL=ws://localhost:${String(PORTS.sync)} READY_PORT=${String(PORTS.worker)} node e2e/stub-worker.ts`), url: `http://localhost:${String(PORTS.worker)}`, reuseExistingServer: false },
     // The REAL sandbox worker, from source, in a pool of its own: its reaper never touches the dev
