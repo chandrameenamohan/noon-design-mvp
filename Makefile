@@ -18,7 +18,7 @@ sim: ; node apps/sync/src/sim-cli.ts
 
 # Outside `make check`: proves every lesson's exercises and drills behave as their chapter says.
 .PHONY: drills
-drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh && sh drills/lesson-2/check.sh && sh drills/lesson-3/check.sh && sh drills/lesson-4/check.sh && sh drills/lesson-5/check.sh && sh drills/lesson-6/check.sh && sh drills/lesson-7/check.sh && sh drills/lesson-8/check.sh
+drills: ; sh drills/lesson-0/check.sh && sh drills/lesson-1/check.sh && sh drills/lesson-2/check.sh && sh drills/lesson-3/check.sh && sh drills/lesson-4/check.sh && sh drills/lesson-5/check.sh && sh drills/lesson-6/check.sh && sh drills/lesson-7/check.sh && sh drills/lesson-8/check.sh && sh drills/lesson-9/check.sh
 
 # Outside `make check`: the chaos checks (SPEC §4a) break the REAL compose stack (./init.sh first) and prove
 # the system's guarantees hold. Each prints one JSON line and exits non-zero on FAIL.
