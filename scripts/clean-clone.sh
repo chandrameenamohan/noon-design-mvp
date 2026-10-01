@@ -14,6 +14,12 @@ command -v docker >/dev/null 2>&1 || PATH="/Applications/Docker.app/Contents/Res
 
 cleanup() {
   (cd "$tmp" && docker compose down -v --rmi local >/dev/null 2>&1)
+  # What the clone's sandbox worker started through Docker itself, which compose does not know of: its sandboxes,
+  # its proxy, and then their networks (each holds one of the daemon's few address pools).
+  for label in "noon.sandbox=$COMPOSE_PROJECT_NAME" "noon.proxy-pool=$COMPOSE_PROJECT_NAME"; do
+    docker ps --all --quiet --filter "label=$label" | xargs docker rm --force >/dev/null 2>&1
+  done
+  docker network ls --quiet --filter "label=noon.sandbox=$COMPOSE_PROJECT_NAME" | xargs docker network rm >/dev/null 2>&1
   rm -rf "$tmp"
 }
 trap cleanup EXIT
