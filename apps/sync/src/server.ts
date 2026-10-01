@@ -126,6 +126,10 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES, handleProtocols: (offered) => (offered.has(PROTOCOL) ? PROTOCOL : false) });
 
   http.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // The http server let go of the socket's errors when it handed it to us. FIRST, before anything can refuse it:
+    // a peer answered 401 that then resets the connection had no listener, and one such reset was an uncaught
+    // exception, the end of the process and of every room on the node, with no token needed (noon-cs6.3).
+    socket.on("error", () => undefined);
     const documentId = DOCUMENT_PATH.exec(new URL(req.url ?? "/", "http://sync").pathname)?.[1]?.toLowerCase();
     // The token is the second entry of Sec-WebSocket-Protocol: the one header a browser lets a page
     // set on a WebSocket. A query string would put the token in proxy logs and Referer headers.
@@ -139,8 +143,6 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       refuse();
       return;
     }
-    // The http server let go of the socket's errors when it handed it to us; a reset while we ask must not crash the process.
-    socket.on("error", () => undefined);
     void admits(verified.claims, documentId).then((yes) => {
       if (closing) socket.destroy(); // shutting down while we asked: the peer reconnects elsewhere
       else if (!yes) refuse();
