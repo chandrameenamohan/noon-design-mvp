@@ -1,0 +1,20 @@
+# The driver image (SPEC §4a A1): the app image plus the Antithesis SDK, the workload and the test template.
+# Built from the REPO ROOT (run.sh does): docker build -f deploy/antithesis/Dockerfile.driver --build-arg BASE=<app image> .
+# The same image runs the scripted AI worker (driver/stub-worker.ts): the real worker loop, no model, no token.
+ARG BASE
+FROM ${BASE}
+USER root
+WORKDIR /repo
+# The driver is a workspace package: its manifest, then the frozen install again, which now adds its dependencies
+# (antithesis-sdk, pg, ioredis) and links the @noon packages it drives. Build time only: at run time there is no network.
+COPY deploy/antithesis/driver/package.json deploy/antithesis/driver/
+RUN pnpm install --frozen-lockfile --prod
+# The op-ledger checks every chaos script already uses (pure, no imports): called, not rewritten.
+COPY scripts/chaos/no-loss.ts scripts/chaos/rebuild.ts scripts/chaos/
+COPY deploy/antithesis/driver deploy/antithesis/driver
+# The catalog the report is keyed by: the driver refuses to start when its property list drifts from it.
+COPY antithesis/scratchbook/properties antithesis/scratchbook/properties
+# The test template, where Antithesis looks for it.
+COPY deploy/antithesis/test /opt/antithesis/test
+RUN chmod +x /opt/antithesis/test/v1/noon/* && mkdir -p /var/antithesis && chown node:node /var/antithesis
+USER node

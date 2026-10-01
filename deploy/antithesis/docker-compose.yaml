@@ -1,0 +1,267 @@
+# Z.2b (SPEC §4a A1): a hermetic slice of Noon for Antithesis-style testing. The app services run the UNCHANGED
+# image the repo's Dockerfile builds; every store they dial is behind toxiproxy, where the faults go.
+#
+# Hermetic: the one network is `internal` (no route out, so no model call and no registry is reachable) and no
+# port is published, so this project cannot collide with, or be reached from, the dev stack. Everything is driven
+# from inside, through `docker compose exec driver ...` (run.sh).
+#
+# Secrets: fixed and worthless, on purpose. Nothing here is reachable from outside the internal network, and a
+# harness that Antithesis can replay must not depend on values generated at run time. The one exception is the
+# Gitea token, which Gitea itself issues: run.sh makes it and passes it as GITEA_TOKEN.
+#
+# Timing is CONFIGURATION, never code (owner, 2026-10-01): the lease ttl and the stub AI worker's staleMs are
+# shortened below so that a fault lands inside one run. `journalTimeoutMs` has no variable: it stays at 5 s.
+name: noon-antithesis
+
+x-app-image: &app-image noon-antithesis-app:${APP_TAG:-local}
+x-driver-image: &driver-image noon-antithesis-driver:${DRIVER_TAG:-local}
+x-secrets:
+  pg: &pg-password harness-postgres-owner-password
+  session: &session-secret harness-session-token-secret-0123456789abcdef
+  webhook: &webhook-secret harness-gitea-webhook-secret-0123456789abcdef
+x-worker-env: &worker-env
+  # Through toxiproxy: the api's and the workers' Postgres and Redis listeners (toxiproxy/toxiproxy.json).
+  DATABASE_URL: postgres://noon_app:harness-app-role-password@toxiproxy:5432/noon
+  REDIS_URL: redis://:harness-redis-password@toxiproxy:6381
+  SESSION_TOKEN_SECRET: *session-secret
+  SYNC_URL: sync=ws://sync:3001,sync-2=ws://sync-2:3001
+  SEED_REPO: http://toxiproxy:3000/noon/sample-app.git
+  GITEA_TOKEN: ${GITEA_TOKEN:-}
+x-worker-health: &worker-health
+  test: ["CMD", "node", "-e", "process.exit(Date.now() - require('fs').statSync('/tmp/worker-alive').mtimeMs < 15000 ? 0 : 1)"]
+  interval: 2s
+  timeout: 2s
+  retries: 30
+
+networks:
+  hermetic:
+    internal: true
+
+volumes:
+  giteadata: {}
+  gitpeer: {}
+
+services:
+  postgres:
+    image: postgres:17
+    # Every write the app makes is logged with its parameters: the only place a fenced append (F22) can be seen
+    # from outside, since the refusal leaves no row (driver/pglog.ts reads it).
+    command: ["postgres", "-c", "log_statement=mod", "-c", "log_line_prefix=%m [%p] "]
+    environment:
+      POSTGRES_USER: noon
+      POSTGRES_PASSWORD: *pg-password
+      POSTGRES_DB: noon
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U noon -d noon"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [hermetic]
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "harness-redis-password", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    environment:
+      REDISCLI_AUTH: harness-redis-password
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [hermetic]
+
+  minio:
+    # No registry serves this tag any more: it is on this machine already (init.sh loads the saved tarball).
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    pull_policy: never
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: noon
+      MINIO_ROOT_PASSWORD: harness-minio-password
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [hermetic]
+
+  gitea:
+    image: gitea/gitea:1.24
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__ROOT_URL: "http://gitea:3000/"
+      GITEA__server__DISABLE_SSH: "true"
+      GITEA__server__OFFLINE_MODE: "true" # no gravatar, no CDN: nothing here may wait for the internet
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__REQUIRE_SIGNIN_VIEW: "true"
+      # Deliveries go to the api through toxiproxy's `webhook` listener, so one can be dropped (Z.3).
+      GITEA__webhook__ALLOWED_HOST_LIST: toxiproxy
+    volumes: ["giteadata:/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+    networks: [hermetic]
+
+  # The trust boundaries (SPEC §4a): one listener per consumer, so a fault can be aimed at ONE sync node.
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    command: ["-host=0.0.0.0", "-config=/toxiproxy.json"]
+    volumes: ["./toxiproxy/toxiproxy.json:/toxiproxy.json:ro"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      gitea: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [hermetic]
+
+  # Setup, not the system under test: straight to Postgres, as the owner.
+  migrate:
+    image: *app-image
+    command: ["node", "packages/db/src/migrate-cli.ts"]
+    environment:
+      MIGRATE_DATABASE_URL: postgres://noon:harness-postgres-owner-password@postgres:5432/noon
+      APP_DB_ROLE: noon_app
+      APP_DB_PASSWORD: harness-app-role-password
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [hermetic]
+
+  api:
+    image: *app-image
+    command: ["node", "apps/api/src/main.ts"]
+    environment:
+      PORT: "3000"
+      NODE_ENV: development # the x-dev-user header: the driver's users are created on first sight
+      SESSION_TOKEN_SECRET: *session-secret
+      # What the DRIVER dials: it is inside this network, so the nodes' own names.
+      SYNC_PUBLIC_URL: sync=ws://sync:3001,sync-2=ws://sync-2:3001
+      DATABASE_URL: postgres://noon_app:harness-app-role-password@toxiproxy:5432/noon
+      REDIS_URL: redis://:harness-redis-password@toxiproxy:6381
+      GITEA_WEBHOOK_SECRET: *webhook-secret
+      AI_RUNS_PER_HOUR: "100000" # the org's run limit (F31) is not what this harness attacks
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      toxiproxy: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/ready').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [hermetic]
+
+  sync: &sync
+    image: *app-image
+    command: ["node", "apps/sync/src/main.ts"]
+    environment: &sync-env
+      PORT: "3001"
+      SYNC_NODE_ID: sync
+      REDIS_URL: redis://:harness-redis-password@toxiproxy:6379
+      DATABASE_URL: postgres://noon_app:harness-app-role-password@toxiproxy:5433/noon
+      LEASE_TTL_MS: "${LEASE_TTL_MS:-4000}"
+      SESSION_TOKEN_SECRET: *session-secret
+      MINIO_URL: http://toxiproxy:9000
+      MINIO_USER: noon
+      MINIO_PASSWORD: harness-minio-password
+      # Small, so a run of a few dozen ops also snapshots, and a room that reopens loads snapshot + journal.
+      SNAPSHOT_EVERY_OPS: "${SNAPSHOT_EVERY_OPS:-25}"
+      SNAPSHOT_EVERY_SECONDS: "${SNAPSHOT_EVERY_SECONDS:-5}"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      toxiproxy: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks: [hermetic]
+
+  sync-2:
+    <<: *sync
+    environment:
+      <<: *sync-env
+      SYNC_NODE_ID: sync-2
+      REDIS_URL: redis://:harness-redis-password@toxiproxy:6380
+      DATABASE_URL: postgres://noon_app:harness-app-role-password@toxiproxy:5434/noon
+
+  # The AI peer: the REAL worker loop, AI handler, tools and peer-client from the app image, with a scripted agent
+  # in place of the model (driver/stub-worker.ts). No model call, and no token in any image.
+  worker: &stub-worker
+    image: *driver-image
+    command: ["node", "deploy/antithesis/driver/stub-worker.ts"]
+    environment: &stub-env
+      <<: *worker-env
+      STUB_STEP_MS: "${STUB_STEP_MS:-300}"
+      # worker.ts's default is 15 s; shortened here, where the harness owns the call, so a kill and its retry fit a run.
+      STALE_MS: "${STALE_MS:-6000}"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      toxiproxy: { condition: service_healthy }
+      sync: { condition: service_healthy }
+      sync-2: { condition: service_healthy }
+    healthcheck: *worker-health
+    networks: [hermetic]
+
+  # The replacement: started only by the scenarios that kill or freeze `worker` (profile `standby`).
+  worker-2:
+    <<: *stub-worker
+    profiles: [standby]
+
+  worker-git:
+    image: *app-image
+    command: ["node", "apps/worker/src/main.ts"]
+    environment:
+      <<: *worker-env
+      WORKER_QUEUE: git
+      GIT_PEER_DIR: /var/lib/noon-git
+    volumes: ["gitpeer:/var/lib/noon-git"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      toxiproxy: { condition: service_healthy }
+    healthcheck: *worker-health
+    networks: [hermetic]
+
+  worker-ship:
+    image: *app-image
+    command: ["node", "apps/worker/src/main.ts"]
+    environment:
+      <<: *worker-env
+      WORKER_QUEUE: ship
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      toxiproxy: { condition: service_healthy }
+      sync: { condition: service_healthy }
+      sync-2: { condition: service_healthy }
+    healthcheck: *worker-health
+    networks: [hermetic]
+
+  # The workload and the checks (test/v1/noon). It talks to the stores DIRECTLY, never through toxiproxy: a fault
+  # must not blind the judge. ./.run is the run's state: SDK output (one file per process), the op ledger, cues.
+  driver:
+    image: *driver-image
+    command: ["sleep", "infinity"]
+    environment:
+      API_URL: http://api:3000
+      HARNESS_DATABASE_URL: postgres://noon:harness-postgres-owner-password@postgres:5432/noon
+      HARNESS_REDIS_URL: redis://:harness-redis-password@redis:6379
+      GITEA_URL: http://gitea:3000
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      GITEA_WEBHOOK_URL: http://toxiproxy:3100/webhooks/gitea
+      GITEA_WEBHOOK_SECRET: *webhook-secret
+      LEASE_TTL_MS: "${LEASE_TTL_MS:-4000}"
+      STALE_MS: "${STALE_MS:-6000}"
+      STUB_STEP_MS: "${STUB_STEP_MS:-300}"
+      HARNESS_STATE: /var/antithesis
+    volumes: ["./.run:/var/antithesis"]
+    depends_on:
+      toxiproxy: { condition: service_healthy }
+    networks: [hermetic]

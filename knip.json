@@ -24,6 +24,14 @@
       "entry": [
         "index.html"
       ]
+    },
+    "deploy/antithesis/driver": {
+      "entry": [
+        "main.ts",
+        "report.ts",
+        "stub-worker.ts",
+        "*.test.ts"
+      ]
     }
   },
   "ignoreDependencies": [

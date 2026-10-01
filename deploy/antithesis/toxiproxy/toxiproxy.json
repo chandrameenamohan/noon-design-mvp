@@ -1,0 +1,11 @@
+[
+  { "name": "pg", "listen": "0.0.0.0:5432", "upstream": "postgres:5432", "enabled": true },
+  { "name": "pg-sync", "listen": "0.0.0.0:5433", "upstream": "postgres:5432", "enabled": true },
+  { "name": "pg-sync-2", "listen": "0.0.0.0:5434", "upstream": "postgres:5432", "enabled": true },
+  { "name": "redis-sync", "listen": "0.0.0.0:6379", "upstream": "redis:6379", "enabled": true },
+  { "name": "redis-sync-2", "listen": "0.0.0.0:6380", "upstream": "redis:6379", "enabled": true },
+  { "name": "redis", "listen": "0.0.0.0:6381", "upstream": "redis:6379", "enabled": true },
+  { "name": "minio", "listen": "0.0.0.0:9000", "upstream": "minio:9000", "enabled": true },
+  { "name": "gitea", "listen": "0.0.0.0:3000", "upstream": "gitea:3000", "enabled": true },
+  { "name": "webhook", "listen": "0.0.0.0:3100", "upstream": "api:3000", "enabled": true }
+]

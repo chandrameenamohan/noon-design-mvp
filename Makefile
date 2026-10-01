@@ -48,3 +48,13 @@ manifest: ; pnpm --filter @noon/design-system generate
 # site, evidence and, for an always, its sometimes vacuity guard. Also runs inside `make check` as a unit test.
 .PHONY: catalog-check
 catalog-check: ; node scripts/catalog-check.ts
+
+# Z.2b (SPEC §4a A1): the local Antithesis-style harness, deploy/antithesis/. Outside `make check` (it builds two
+# images and breaks a running slice for minutes). Its own compose project, no published port: the dev stack is not touched.
+#   harness-baseline-all-pass   `run.sh up` then `baseline`: every property of the catalog PASS
+#   harness-vacuity-guards-hit  the same baseline's report: every vacuity guard fired (runs a baseline if there is none)
+#   harness-no-internet         no route out of any container, no published port, no model credential
+.PHONY: harness-baseline-all-pass harness-vacuity-guards-hit harness-no-internet
+harness-baseline-all-pass: ; deploy/antithesis/run.sh up && deploy/antithesis/run.sh baseline && deploy/antithesis/run.sh report --require pass
+harness-vacuity-guards-hit: ; deploy/antithesis/run.sh report --require guards || { deploy/antithesis/run.sh up && deploy/antithesis/run.sh baseline; deploy/antithesis/run.sh report --require guards; }
+harness-no-internet: ; deploy/antithesis/run.sh up && deploy/antithesis/run.sh no-internet

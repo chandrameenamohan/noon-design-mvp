@@ -1,0 +1,19 @@
+{
+  "name": "@noon/antithesis-driver",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@noon/codegen": "workspace:^",
+    "@noon/contracts": "workspace:^",
+    "@noon/db": "workspace:^",
+    "@noon/design-system": "workspace:^",
+    "@noon/doc-model": "workspace:^",
+    "@noon/peer-client": "workspace:^",
+    "antithesis-sdk": "0.2.0",
+    "ioredis": "^5.11.1",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec node /repo/deploy/antithesis/driver/main.ts finally_sut_logs
