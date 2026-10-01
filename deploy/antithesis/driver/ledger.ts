@@ -98,11 +98,12 @@ export function replay(journal: readonly JournalRow[]): { hashes: Map<number, st
 /**
  * What no-loss.ts finds wrong with one document, over every process's ledger of it. Its two "vacuous" lines are
  * left out: here they are guards (`inFlightAtFault`), not failures. Rows an AI run journaled are placed as their
- * run's (finally_jobs counts them against its steps); every other row must be an op some driver peer submitted.
+ * run's (finally_jobs counts them against its steps) and the git peer's as their push's (eventually_push_on_canvas
+ * counts them against the commit); every other row must be an op some driver peer submitted.
  */
 export function lossViolations(files: readonly LedgerFile[], journal: readonly JournalRow[]): string[] {
   const entries = files.flatMap((file) => file.entries);
-  const agents = journal.filter((row) => row.actorKind === "agent").map((row): LedgerEntry => ({ peer: `run ${row.runId ?? "?"}`, opId: row.opId, atFault: { ok: true, seq: row.seq }, outcome: { ok: true, seq: row.seq } }));
+  const agents = journal.filter((row) => row.actorKind !== "user").map((row): LedgerEntry => ({ peer: `${row.actorKind === "git" ? "push" : "run"} ${row.runId ?? "?"}`, opId: row.opId, atFault: { ok: true, seq: row.seq }, outcome: { ok: true, seq: row.seq } }));
   const rows: LossRow[] = journal.map(({ seq, opId }) => ({ seq, opId }));
   return noLossViolations({ ledger: [...entries, ...agents], journal: rows, docs: [] }).filter((violation) => !violation.startsWith("vacuous:"));
 }

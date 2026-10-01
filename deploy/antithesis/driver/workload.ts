@@ -2,7 +2,9 @@
 // documents of its own, knows nothing of faults (inside Antithesis the platform injects them), and leaves what it
 // did in the run's state: an op ledger per document, a line per job, a line per revoke. The checks read those.
 import { randomUUID } from "node:crypto";
-import type { Op } from "@noon/contracts";
+import { generate } from "@noon/codegen";
+import type { Doc, Op } from "@noon/contracts";
+import { manifest } from "@noon/design-system";
 import { openLedger, type LedgerFile } from "./ledger.ts";
 import { claim, guard, ready } from "./sdk.ts";
 import { call, config, live, must, newDocument, ok, peerOf, redis, say, sleep, sql, state, until, world, type DriverPeer, type World } from "./world.ts";
@@ -69,10 +71,13 @@ export async function setup(): Promise<void> {
   say("[first_setup] ok");
 }
 
+/** Gitea's own API, as the harness's user (read DIRECTLY, never through toxiproxy: the judge and the "engineer" are not the SUT). */
+const giteaApi = (method: string, path: string, body?: unknown): Promise<Response> =>
+  fetch(`${process.env["GITEA_URL"] ?? "http://gitea:3000"}/api/v1${path}`, { method, headers: { authorization: `token ${process.env["GITEA_TOKEN"] ?? ""}`, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+
 /** Gitea's repo noon/sample-app with a `main` to branch from, and the push webhook to the api (through toxiproxy). */
 async function gitea(): Promise<void> {
-  const [url, token] = [process.env["GITEA_URL"] ?? "http://gitea:3000", process.env["GITEA_TOKEN"] ?? ""];
-  const api = async (method: string, path: string, body?: unknown): Promise<Response> => fetch(`${url}/api/v1${path}`, { method, headers: { authorization: `token ${token}`, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const api = giteaApi;
   // auto_init: one commit on main, which is all Ship needs (it adds the document's page on a branch of its own).
   const made = await api("POST", "/user/repos", { name: "sample-app", private: true, default_branch: "main", auto_init: true });
   if (!made.ok && made.status !== 409) throw new Error(`Gitea POST /user/repos -> ${String(made.status)}: ${await made.text()}`);
@@ -287,5 +292,69 @@ export async function shareRevoke(): Promise<void> {
   } finally {
     ann.close();
     guest?.close();
+  }
+}
+
+// --- parallel_driver_engineer_push --------------------------------------------------------------------------------
+/** A push an engineer made to a shipped document's branch, and what the canvas must come to show for it. */
+export type PushNote = {
+  document: string; commit: string; label: string;
+  /** Made while run.sh had cut the webhook's listener: Gitea's delivery was refused, and Gitea never retries. */
+  dropped: boolean;
+};
+const BUTTON = "b1";
+export const labelOn = (peer: DriverPeer): unknown => peer.confirmed.nodes[BUTTON]?.props["label"];
+
+/** A document holding one Button, shipped: its generated page is on its own branch, where an engineer can push to it. */
+export async function shippedButton(as: string, document: string, ann: DriverPeer, ledger: ReturnType<typeof openLedger>): Promise<void> {
+  await live([ann], "the person live");
+  ledger.submit("ann", ann, { type: "add_node", nodeId: BUTTON, parentId: "root", index: 0, component: "Button", props: { label: "Pay" } });
+  await ledger.settle(15_000);
+  const id = (await ok(as, "POST", `/documents/${document}/ship`, undefined, { "idempotency-key": randomUUID() })).id;
+  noteJob({ id, kind: "ship", document, expect: "succeeded" });
+  await must(() => ended(id), `ship ${id} ends`, 120_000);
+  const status = (await jobRow(id))?.status;
+  if (status !== "succeeded") throw new Error(`ship ${id} ended ${status ?? "gone"}: there is no page to push to`);
+}
+
+/**
+ * F16a: the engineer edits the generated page (the Button's label, so the page stays in shape) and pushes it to the
+ * document's branch. Through Gitea's contents API: a commit on the branch like any `git push`, with its webhook.
+ */
+export async function pushLabel(document: string, now: Doc, label: string, dropped: boolean): Promise<PushNote> {
+  const target = structuredClone(now);
+  const button = target.nodes[BUTTON];
+  if (!button) throw new Error(`${document} has no ${BUTTON} to relabel`);
+  button.props["label"] = label;
+  const generated = generate(target, manifest);
+  if (!generated.ok) throw new Error(`codegen refused the engineer's page: ${generated.reason}`);
+  const [file, branch] = [`/repos/noon/sample-app/contents/src/pages/noon-${document}.tsx`, `noon/${document}`];
+  const current = await giteaApi("GET", `${file}?ref=${encodeURIComponent(branch)}`);
+  if (!current.ok) throw new Error(`Gitea GET ${file} -> ${String(current.status)}`);
+  const pushed = await giteaApi("PUT", file, { branch, sha: ((await current.json()) as { sha: string }).sha, message: `label: ${label}`, content: Buffer.from(generated.tsx).toString("base64") });
+  if (!pushed.ok) throw new Error(`Gitea PUT ${file} -> ${String(pushed.status)}: ${await pushed.text()}`);
+  const note: PushNote = { document, commit: ((await pushed.json()) as { commit: { sha: string } }).commit.sha, label, dropped };
+  state.append("pushes.jsonl", note);
+  return note;
+}
+
+/** How long a push may take to reach the canvas when nobody told the git peer: its reconcile timer (main.ts: 30 s), and slack. */
+export const PUSH_BUDGET_MS = 60_000;
+
+/** F16a: an engineer pushes an in-shape change to a shipped page while its document is open. */
+export async function engineerPush(): Promise<void> {
+  const { owner } = world();
+  const document = await newDocument(owner, `push ${randomUUID().slice(0, 8)}`);
+  const ledger = openLedger(document, "engineer-push");
+  const ann = peerOf(owner, document);
+  try {
+    await shippedButton(owner, document, ann, ledger);
+    const push = await pushLabel(document, ann.confirmed, "Pay now", false);
+    const shown = await until(() => labelOn(ann) === push.label, PUSH_BUDGET_MS);
+    await sameSeq([ann]);
+    keep(ledger.file());
+    say(`[engineer_push] ${document}: commit ${push.commit} on the canvas ${String(shown)}`);
+  } finally {
+    ann.close();
   }
 }

@@ -3,12 +3,13 @@
 // scene says when (a `@@ cue` line: faults are triggered off lines, never sleeps) and waits for run.sh's answer.
 // A scene asserts only what nobody but it can see (what its own peers were told, a job row at the instant of a
 // kill); everything else it leaves in the ledger and the job notes for the checks.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { connect } from "node:net";
 import { sawWindow } from "./checks.ts";
 import { openLedger } from "./ledger.ts";
 import { claim, guard } from "./sdk.ts";
 import { config, cue, holderOf, live, must, newDocument, peerOf, redis, say, sleep, sql, until, world, type DriverPeer, type Holder } from "./world.ts";
-import { agentRows, ended, gap, jobRow, keep, noteJob, sameSeq, stack, startRun, type JobNote } from "./workload.ts";
+import { agentRows, ended, gap, jobRow, keep, labelOn, noteJob, PUSH_BUDGET_MS, pushLabel, sameSeq, shippedButton, stack, startRun, type JobNote } from "./workload.ts";
 
 const FAULT_WAIT_MS = 120_000;
 const fenceOf = async (document: string): Promise<number> => Number((await sql<{ fence_token: string }>("select fence_token from documents where id = $1", [document]))[0]?.fence_token ?? 0);
@@ -163,6 +164,46 @@ export async function storeUnavailable(): Promise<void> {
   }
 }
 
+// --- upgrade-reset: a connection the node refuses is reset by its client ---------------------------------------------------
+/**
+ * Found by Z.3's baseline under load: a sync node died of an unhandled ECONNRESET. The fault is a client's, so the
+ * scene makes it itself, at the sync node's own door: an upgrade with no valid token, which the node answers 401,
+ * and then a TCP reset instead of a goodbye (a killed process, a scanner). Aimed at the owner of an open room that
+ * is being edited. The node must not notice: run.sh looks for a dead container before anything is started again.
+ */
+export async function upgradeReset(): Promise<void> {
+  const { document, ledger, all, edit, close } = await room("upgrade-reset");
+  const knock = (host: string, afterMs: number): Promise<void> => new Promise((resolve) => {
+    // 3001: the port compose gives both sync nodes (SYNC_PUBLIC_URL).
+    const socket = connect(3001, host, () => {
+      socket.write(["GET /documents/" + document + " HTTP/1.1", "Host: " + host, "Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Key: " + randomBytes(16).toString("base64"), "Sec-WebSocket-Version: 13", "Sec-WebSocket-Protocol: noon.v1, no-such-token", "", ""].join("\r\n"), () => {
+        setTimeout(() => { socket.resetAndDestroy(); resolve(); }, afterMs);
+      });
+    });
+    socket.on("error", () => { resolve(); });
+  });
+  try {
+    const before = await ownerOf(document);
+    cue.say("armed", { owner: before.node });
+    await cue.wait("fault", FAULT_WAIT_MS);
+    ledger.fault("upgrade-reset");
+    edit(3); // on the wire while the node is knocked at
+    for (let i = 0; i < 20; i++) await knock(before.node, i % 2 === 0 ? 0 : 5); // both orders: reset before the 401 is written, and after
+    const stayed = !(await until(() => all.some((peer) => peer.status !== "live"), 2000)); // a dead owner's peers are told at once (TCP)
+    cue.say("knocked", { stayed });
+    await cue.wait("checked", FAULT_WAIT_MS);
+    await must(() => all.every((peer) => peer.status === "live"), "both peers live", config.leaseTtlMs * 2 + 45_000);
+    edit(3);
+    await ledger.settle(30_000);
+    await sameSeq(all, 30_000);
+    const after = await holderOf(document);
+    keep(ledger.file());
+    say(`[upgrade-reset] ${document}: 20 refused upgrades reset at ${before.node}; its peers stayed connected ${String(stayed)}; the room ${JSON.stringify(before)} -> ${JSON.stringify(after ?? null)}`);
+  } finally {
+    close();
+  }
+}
+
 // --- worker-killed: dies mid-run ----------------------------------------------------------------------------------------
 /** F28: an AI run's worker is killed part way; another worker must finish the run as its second attempt, each step once. */
 export async function workerKilled(): Promise<void> {
@@ -265,3 +306,132 @@ export async function redisWiped(): Promise<void> {
   }
 }
 
+
+// --- webhook-dropped: Gitea's delivery never arrives -------------------------------------------------------------------
+/**
+ * SPEC §2a: Gitea never retries a failed delivery, so the git peer's reconcile must find the push by itself. A
+ * shipped document stays OPEN (nobody reopens it: a new session would ask for a reconcile, and the timer is the
+ * harder path). First a control push with the listener up, which must come through the webhook's door; then
+ * run.sh cuts the listener and the engineer pushes again. `eventually_push_on_canvas` judges both from the journal.
+ */
+export async function webhookDropped(): Promise<void> {
+  const { owner } = world();
+  const document = await newDocument(owner, `webhook-dropped ${randomUUID().slice(0, 8)}`);
+  const ledger = openLedger(document, "webhook-dropped");
+  const ann = peerOf(owner, document);
+  const deliveryOf = async (commit: string): Promise<string | null | undefined> => (await sql<{ delivery_id: string | null }>("select delivery_id from git_events where after_sha = $1", [commit]))[0]?.delivery_id;
+  try {
+    await shippedButton(owner, document, ann, ledger);
+    const control = await pushLabel(document, ann.confirmed, "Pay now", false);
+    await must(() => labelOn(ann) === control.label, "the control push (webhook up) reaches the canvas", PUSH_BUDGET_MS);
+    const controlDelivery = await deliveryOf(control.commit);
+    cue.say("armed", { document }); // the fault first, then the push
+    await cue.wait("fault", FAULT_WAIT_MS);
+    const since = Date.now();
+    const push = await pushLabel(document, ann.confirmed, "Pay later", true);
+    const shown = await until(() => labelOn(ann) === push.label, PUSH_BUDGET_MS);
+    const shownMs = Date.now() - since;
+    const delivery = await deliveryOf(push.commit);
+    claim("dropped-webhook-push-reaches-canvas", shown, { document, commit: push.commit, shownMs, budgetMs: PUSH_BUDGET_MS, what: "the open canvas showed the push within the reconcile period and slack" });
+    cue.say("applied", { shown });
+    await cue.wait("healed", FAULT_WAIT_MS);
+    await sameSeq([ann]);
+    keep(ledger.file({ facts: { controlDelivery: controlDelivery ?? null, delivery: delivery ?? null, shownMs } }));
+    say(`[webhook-dropped] ${document}: control ${control.commit.slice(0, 8)} came by ${controlDelivery == null ? "the RECONCILE (the control proved nothing)" : "the webhook"}; ${push.commit.slice(0, 8)} pushed with the listener cut, recorded by ${delivery === null ? "the reconcile" : delivery === undefined ? "NOTHING" : "the webhook (the delivery was not dropped)"}, on the canvas ${String(shown)} after ${String(shownMs)} ms`);
+  } finally {
+    ann.close();
+  }
+}
+
+// --- worker-store-unavailable: Postgres cut from the api and the workers, past staleMs, and nobody dies ----------------
+/**
+ * The job store goes away under a run for longer than `staleMs` (run.sh: the `pg` listener, which the api and every
+ * worker dial; the sync nodes have their own, so the run's ops keep landing). Every beat fails meanwhile. No worker
+ * died, but to the product a stale heartbeat IS a dead worker (worker.ts: "if it is, the attempt fence makes the
+ * slow worker stop instead of finishing twice"). So when Postgres is back it is a race, and both ends are within
+ * the promise: the worker's beat lands first and the run goes on as attempt 1, or a sweep lands first, the run is
+ * given away, attempt 1 stops itself and attempt 2 does the work. Never more: succeeded, each step journaled once.
+ */
+export async function workerStoreUnavailable(): Promise<void> {
+  const { owner } = world();
+  const document = await newDocument(owner, `worker-store-unavailable ${randomUUID().slice(0, 8)}`);
+  const steps = 80; // longer than the outage: the run is still going when Postgres returns
+  const run = await startRun(owner, document, steps);
+  await must(async () => (await agentRows(document)) >= 4, "the run is part way (4 steps journaled)", 60_000);
+  cue.say("mid-run", { run }); // the fault lands mid-run: the workload is slow by construction (a step every stepMs)
+  await cue.wait("fault", FAULT_WAIT_MS);
+  // "Longer than staleMs" is read off the job's own row (directly, as the judge reads), never slept for.
+  const silentMs = async (): Promise<number> => Number((await sql<{ silent: string }>("select (extract(epoch from now() - heartbeat_at) * 1000)::bigint as silent from jobs where id = $1", [run]))[0]?.silent ?? 0);
+  await must(async () => (await silentMs()) > config.staleMs + 1000, "the job's heartbeat is older than staleMs", config.staleMs + 60_000);
+  const [atHeal, journaled, silent] = [await jobRow(run), await agentRows(document), await silentMs()];
+  cue.say("stale", { run, silent });
+  await cue.wait("healed", FAULT_WAIT_MS);
+  const finished = await until(() => ended(run), config.staleMs + 240_000);
+  const after = await jobRow(run);
+  // One claim, or the one more a stale heartbeat is owed: a third would be a claim nothing explains (finally_jobs fails it).
+  noteJob({ id: run, kind: "run", document, expect: "succeeded", steps, attempts: Math.min(Math.max(after?.attempts ?? 1, 1), 2) });
+  if (!finished) throw new Error(`run ${run} did not end: ${after?.status ?? "gone"} as attempt ${String(after?.attempts ?? 0)}`);
+  say(`[worker-store-unavailable] ${run}: Postgres away from the workers until the heartbeat was ${String(silent)} ms old (staleMs ${String(config.staleMs)}), the job ${atHeal?.status ?? "gone"} as attempt ${String(atHeal?.attempts ?? 0)} at ${String(journaled)}/${String(steps)} steps; it ended ${after?.status ?? "gone"} as attempt ${String(after?.attempts ?? 0)}${after?.error == null ? "" : ` (${after.error})`}`);
+}
+
+// --- minio-unavailable, minio-stalled: the snapshot store ---------------------------------------------------------------
+/**
+ * SPEC §4 "Postgres or MinIO down". A document that has a snapshot is closed, and reopened while MinIO is away
+ * (run.sh: the listener cut, or left open and silent, which is "slow" taken to its end). With `open`, the fault
+ * comes first while the room is still open: edits go on (the journal is the truth), the snapshot writes fail or
+ * hang, then the last peer leaves and the document is reopened. Either way: nothing may be acknowledged that the
+ * journal does not hold, an edit made meanwhile is refused in sight ("not loaded") or lands, and once MinIO
+ * answers again the document must open and take edits.
+ */
+async function snapshotStore(scene: string, whileOpen: boolean): Promise<void> {
+  const first = await room(scene);
+  const { document, ledger, edit } = first;
+  const { owner, editor } = world();
+  let again: DriverPeer[] = [];
+  const snapshotSeq = async (): Promise<number> => Number((await sql<{ snapshot_seq: string }>("select snapshot_seq from documents where id = $1", [document]))[0]?.snapshot_seq ?? 0);
+  try {
+    edit(10); // 26 ops with the room's own six: past SNAPSHOT_EVERY_OPS
+    await ledger.settle(30_000);
+    await must(async () => (await snapshotSeq()) > 0, "the document has a snapshot in MinIO", 30_000);
+    const leave = async (): Promise<void> => {
+      first.close();
+      await until(async () => (await holderOf(document)) === undefined, config.leaseTtlMs + 10_000); // the last-leave snapshot, then the release (or neither: a hung write)
+    };
+    if (!whileOpen) await leave();
+    cue.say("armed", { document }); // the fault first, then the workload
+    await cue.wait("fault", FAULT_WAIT_MS);
+    ledger.fault(scene);
+    if (whileOpen) {
+      edit(15); // 30 more: the room tries to snapshot, and cannot
+      await ledger.settle(30_000).catch(() => undefined); // held to account by finally_ledger, whatever became of them
+      await leave();
+    }
+    const seqAtFault = await snapshotSeq();
+    again = [peerOf(owner, document), peerOf(editor, document)];
+    const openedWhileDown = await until(() => again.every((peer) => peer.status === "live"), 8000);
+    const [ann, bob] = again as [DriverPeer, DriverPeer];
+    // An edit made while MinIO is away. A document that has not loaded takes none and says so there and then
+    // ("not_ready": the client holds an edit only once it has had a welcome); a room that still held the document
+    // takes it, and then owes it like any other.
+    const during = [ledger.submit("ann", ann, stack(`during-a-${randomUUID().slice(0, 8)}`)), ledger.submit("bob", bob, stack(`during-b-${randomUUID().slice(0, 8)}`))];
+    const refused = during.map((each) => (each.ok ? null : each.reason));
+    cue.say("probed", { openedWhileDown });
+    await cue.wait("healed", FAULT_WAIT_MS);
+    const recovered = await until(() => again.every((peer) => peer.status === "live" && !peer.readOnly && peer.pendingCount === 0), 60_000);
+    const fate = (ops: readonly ReturnType<DriverPeer["submit"]>[]) => Promise.all(ops.map(async (each) => (each.ok ? Promise.race([each.settled, sleep(5000).then(() => undefined)]) : undefined)));
+    const taken = await fate(during);
+    const after = await fate(recovered ? [ledger.submit("ann", ann, stack(`after-a-${randomUUID().slice(0, 8)}`)), ledger.submit("bob", bob, stack(`after-b-${randomUUID().slice(0, 8)}`))] : []);
+    // Visible, never silent: each edit made meanwhile was either refused as "not loaded" or landed; and once MinIO
+    // answers again the document opens and takes edits.
+    const visible = during.every((each, i) => (each.ok ? taken[i]?.ok === true : each.reason === "not_ready"));
+    const writable = recovered && after.every((outcome) => outcome?.ok === true);
+    claim("storage-outage-visible-read-only", visible && writable, { document, store: "minio", scene, openedWhileDown, refused, taken: taken.map((outcome) => outcome ?? null), recovered, after: after.map((outcome) => outcome ?? null), what: "an edit made while MinIO was away was refused as not loaded or landed; once MinIO answers again the document opens and takes edits" });
+    keep(ledger.file({ facts: { openedWhileDown, recovered, snapshotSeqAtFault: seqAtFault, snapshotSeq: await snapshotSeq() } }));
+    say(`[${scene}] ${document}: snapshot at ${String(seqAtFault)}; opened while MinIO was away ${String(openedWhileDown)}; edits made meanwhile: refused ${JSON.stringify(refused)}, taken ${JSON.stringify(taken)}; after it came back: live and writable ${String(recovered)}, new edits ${JSON.stringify(after)}`);
+  } finally {
+    first.close();
+    for (const peer of again) peer.close();
+  }
+}
+export const minioClosed = (): Promise<void> => snapshotStore("minio-reopen", false);
+export const minioOpen = (): Promise<void> => snapshotStore("minio-open", true);

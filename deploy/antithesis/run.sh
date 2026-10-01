@@ -8,12 +8,19 @@
 #   ./run.sh quiet              the test template's drivers and checks, no fault
 #   ./run.sh <scenario>         one named scenario, then the checks:
 #        store-unavailable      Postgres cut from the sync nodes (toxiproxy toggle)        -> read-only, held op lands once
-#        store-slow [ms]        latency on every Postgres answer to the sync nodes          -> slower, nothing else
+#        store-slow [ms]        latency on every Postgres answer to the sync nodes          -> slower, nothing else (600; from about 1500
+#                               an open outlasts the drivers' 20 s wait and the run cannot finish: reports/, finding P2)
 #        sync-killed            `docker kill -9` of a room's owner under a burst            -> no loss, resends answered once
 #        sync-paused            `docker pause` of the owner past its lease, an append in transit -> the zombie's append is fenced
 #        worker-killed          `docker kill -9` of the AI worker mid-run                   -> the run resumes as attempt 2
 #        worker-paused          `docker pause` of the AI worker past staleMs, then resumed  -> the stale attempt writes nothing
 #        redis-wiped            FLUSHALL with jobs waiting and running, a room open         -> jobs rebuilt, one owner again
+#        webhook-dropped        Gitea's delivery refused (toxiproxy toggle) at a push       -> the reconcile brings it to the canvas, once
+#        worker-store-unavailable  Postgres cut from the api and the workers past staleMs   -> the run succeeds, each step once, as attempt 1 or (given away as stale) 2
+#        upgrade-reset          refused upgrades reset by their client at a room's owner     -> the node does not notice
+#        minio-unavailable [open]  MinIO cut, a snapshotted document reopened               -> edits refused as not loaded, or landed; opens once MinIO is back
+#        minio-stalled [open]      MinIO accepts and never answers (timeout toxic), the same -> the same
+#                                  (`open`: the fault comes while the room is still open, then its last peer leaves)
 #   ./run.sh chaos [N]          N rounds: a random scenario each, checked and judged per round (default 6)
 #   ./run.sh report [--require pass|guards|round]   PASS/FAIL per property, from the SDK's local output
 #   ./run.sh no-internet        harness:no-internet: no route out of any container, no published port, no model credential
@@ -49,7 +56,20 @@ sdk_file() { printf '/var/antithesis/sdk/%s.%s.%s.jsonl' "${1//:/-}" "$(date +%s
 # One command of the test template, as Antithesis would run it: the file under /opt/antithesis/test/v1/noon.
 drv() {
   dc exec -T -e ANTITHESIS_SDK_LOCAL_OUTPUT="$(sdk_file "$1")" driver "/opt/antithesis/test/v1/noon/$1" 2>&1 | quiet_sdk
-  return "${PIPESTATUS[0]}"
+  local code=${PIPESTATUS[0]}
+  [ "$code" = 0 ] || unfinished "$1" "exit $code"
+  return "$code"
+}
+# A command or a scene that could not do its work asserted nothing: that is never a PASS (the report cannot see it).
+unfinished() { printf '%s %s (%s)\n' "$(date -u +%FT%TZ)" "$1" "$2" >> "$RUN/unfinished.log"; }
+could_not_finish() {
+  [ -s "$RUN/unfinished.log" ] || return 1
+  say "could not finish (no verdict from these: the run is NOT a pass):"; sed 's/^/  /' "$RUN/unfinished.log"
+}
+# An app container found dead that no fault killed is a FAIL of the run, whatever the properties say.
+found_dead() {
+  [ -s "$RUN/crashes.log" ] || return 1
+  say "containers found not running, beyond a fault's own victim (the run is NOT a pass):"; sed 's/^/  /' "$RUN/crashes.log"
 }
 
 # --- scenes: a workload that waits for this script's fault -----------------------------------------------------------
@@ -79,7 +99,7 @@ field() { printf '%s' "$2" | sed -n "s/.*\"$1\":\"\\([^\"]*\\)\".*/\\1/p"; }
 scene_end() {
   wait "$SCENE_PID"
   grep -v "^@@ \|Failed to load libvoidstar" "$SCENE_LOG"
-  grep -q "^@@ exit 0" "$SCENE_LOG" || say "    (the scene could not finish: see $SCENE_LOG)"
+  grep -q "^@@ exit 0" "$SCENE_LOG" || { say "    (the scene could not finish: see $SCENE_LOG)"; unfinished "scene ${SCENE_LOG##*/scene-}" "$(grep -m1 "COULD NOT RUN" "$SCENE_LOG" | cut -c1-200)"; }
 }
 # The checks that may run at any moment, beside a scene, while its fault is open.
 anytime() { for c in anytime_stranger_probe anytime_journal_contiguous anytime_lease_matches_fence; do drv "$c"; done; }
@@ -181,6 +201,7 @@ worker_paused() {
   if await_cue mid-run >/dev/null; then
     dc pause worker >/dev/null 2>&1; give_cue fault; say "    FAULT: docker pause worker (mid-run)"
     dc up -d worker-2 >/dev/null 2>&1
+    anytime
     await_cue retaken 240 >/dev/null && say "    attempt 2 is running on worker-2; the stalled worker is woken" || say "    the job was never taken over"
     dc unpause worker >/dev/null 2>&1; give_cue resumed
   else say "    the scene never got a run under way"; fi
@@ -199,14 +220,76 @@ redis_wiped() {
   scene_end
   crashes
 }
-SCENARIOS="store-unavailable store-slow sync-killed sync-paused worker-killed worker-paused redis-wiped"
+webhook_dropped() {
+  say "--- webhook-dropped: the api's webhook listener is cut, then an engineer pushes to an open document's branch"
+  scene_start webhook-dropped
+  if await_cue armed 300 >/dev/null; then
+    tox toggle webhook; give_cue fault; say "    FAULT: webhook disabled (Gitea's delivery is refused, and Gitea never retries)"
+    # Not the stranger's probe: it opens a session, and an opened document asks for a reconcile. The timer is what is tested.
+    drv anytime_journal_contiguous; drv anytime_lease_matches_fence
+    await_cue applied 120 >/dev/null || say "    the push never reached the canvas"
+    crashes
+    tox_reset; give_cue healed; say "    the webhook listener is back"
+    anytime
+  else say "    the scene never had a shipped page to push to"; fi
+  scene_end
+}
+worker_store_unavailable() {
+  say "--- worker-store-unavailable: Postgres is cut from the api and the workers mid-run, until the job's heartbeat is older than staleMs; nobody dies"
+  scene_start worker-store-unavailable
+  if await_cue mid-run >/dev/null; then
+    tox toggle pg; give_cue fault; say "    FAULT: pg disabled (the api's and the workers' Postgres; the sync nodes keep theirs)"
+    drv anytime_journal_contiguous; drv anytime_lease_matches_fence
+    await_cue stale 120 >/dev/null || say "    the job's heartbeat never went stale"
+    crashes
+    tox_reset; give_cue healed; say "    Postgres back"
+  else say "    the scene never got a run under way"; fi
+  scene_end
+  crashes
+}
+# $1 = how MinIO is away (unavailable | stalled), $2 = "open" when the fault comes while the room is still open.
+minio_away() {
+  local how=$1 scene=minio-reopen
+  [ "${2:-}" = open ] && scene=minio-open
+  say "--- minio-$how ($scene): a snapshotted document is reopened while MinIO is away"
+  scene_start "$scene"
+  if await_cue armed >/dev/null; then
+    if [ "$how" = stalled ]; then
+      # Accepts the connection and never answers, in both directions: "slow" taken to its end.
+      tox toxic add -t timeout -a timeout=0 -n stall minio; tox toxic add -t timeout -a timeout=0 -n stall-up -u minio
+      say "    FAULT: minio stalled (connections accepted, nothing answered)"
+    else tox toggle minio; say "    FAULT: minio disabled"; fi
+    give_cue fault
+    await_cue probed 120 >/dev/null || say "    the scene never probed the document"
+    anytime
+    crashes
+    tox_reset; give_cue healed; say "    MinIO back"
+  else say "    the scene never had a snapshotted document"; fi
+  scene_end
+  crashes
+}
+upgrade_reset() {
+  say "--- upgrade-reset: connections the room's owner refuses (no token) are reset by their client, under edits"
+  scene_start upgrade-reset
+  if await_cue armed >/dev/null; then
+    give_cue fault; say "    FAULT: 20 refused upgrades, each reset by its client (made by the scene: the fault is a client's)"
+    await_cue knocked 60 >/dev/null || say "    the scene never knocked"
+    anytime
+    crashes
+    give_cue checked
+  else say "    the scene never had a room"; fi
+  scene_end
+}
+minio_unavailable() { minio_away unavailable "$@"; }
+minio_stalled() { minio_away stalled "$@"; }
+SCENARIOS="store-unavailable store-slow sync-killed sync-paused worker-killed worker-paused redis-wiped webhook-dropped worker-store-unavailable upgrade-reset minio-unavailable minio-stalled"
 scenario() { local name=$1; shift; "${name//-/_}" "$@"; heal; }
 
 # --- the runs ----------------------------------------------------------------------------------------------------------
 quiet() {
   say "--- quiet: the test template's drivers, no fault"
   local c
-  for c in parallel_driver_edit parallel_driver_viewer_edit parallel_driver_start_twice parallel_driver_ai_and_person parallel_driver_end_run_early parallel_driver_stale_message parallel_driver_ship parallel_driver_share_revoke; do drv "$c"; done
+  for c in parallel_driver_edit parallel_driver_viewer_edit parallel_driver_start_twice parallel_driver_ai_and_person parallel_driver_end_run_early parallel_driver_stale_message parallel_driver_ship parallel_driver_share_revoke parallel_driver_engineer_push; do drv "$c"; done
   anytime
 }
 # The SUT's own output since the last reset, where the driver can read it (finally_sut_logs).
@@ -214,13 +297,13 @@ collect_logs() {
   local svc since
   since=$(cat "$RUN/since" 2>/dev/null || date -u +%FT%TZ)
   mkdir -p "$RUN/logs"
-  for svc in postgres worker worker-2 sync sync-2; do dc logs --no-color --no-log-prefix --since "$since" "$svc" > "$RUN/logs/$svc.log" 2>/dev/null; done
+  for svc in postgres worker worker-2 sync sync-2 worker-git worker-ship api; do dc logs --no-color --no-log-prefix --since "$since" "$svc" > "$RUN/logs/$svc.log" 2>/dev/null; done
 }
 judge() {
   say "--- the faults are over: eventually_ and finally_"
   local c
   collect_logs
-  for c in eventually_room_writable eventually_jobs_settle eventually_revoked_share_closed finally_ledger finally_peers_converge finally_jobs finally_ship finally_sut_logs finally_windows_reached; do drv "$c"; done
+  for c in eventually_room_writable eventually_jobs_settle eventually_revoked_share_closed eventually_push_on_canvas finally_ledger finally_peers_converge finally_jobs finally_ship finally_sut_logs finally_windows_reached; do drv "$c"; done
   anytime
 }
 report() {
@@ -229,7 +312,7 @@ report() {
 }
 reset() {
   heal
-  rm -rf "$RUN/sdk" "$RUN/ledger" "$RUN/cues" "$RUN/logs" "$RUN/jobs.jsonl" "$RUN/revokes.jsonl" "$RUN/facts.jsonl" "$RUN/tokens.json" "$RUN/crashes.log"
+  rm -rf "$RUN/sdk" "$RUN/ledger" "$RUN/cues" "$RUN/logs" "$RUN/jobs.jsonl" "$RUN/revokes.jsonl" "$RUN/pushes.jsonl" "$RUN/facts.jsonl" "$RUN/tokens.json" "$RUN/crashes.log" "$RUN/unfinished.log"
   mkdir -p "$RUN/sdk" "$RUN/ledger" "$RUN/cues" "$RUN/logs"
   date -u +%FT%TZ > "$RUN/since"
 }
@@ -303,13 +386,14 @@ case "${1:-}" in
     say "=== baseline, part 1: the quiet workload"
     quiet
     say "=== baseline, part 2: one of each fault window, so that every vacuity guard can fire"
-    for s in store-unavailable sync-killed sync-paused worker-killed worker-paused redis-wiped; do scenario "$s"; done
+    for s in store-unavailable sync-killed sync-paused worker-killed worker-paused redis-wiped webhook-dropped; do scenario "$s"; done
     judge
     say "=== report"
     report --require pass; pass=$?
     report --require guards >/dev/null; guards=$?
     [ "$guards" = 0 ] && say 'harness check "guards": PASS' || report --require guards | sed -n '/^harness check/,$p'
-    [ -s "$RUN/crashes.log" ] && { say "containers found not running during the run:"; cat "$RUN/crashes.log"; }
+    found_dead && pass=1
+    could_not_finish && pass=1
     exit $(( pass | guards )) ;;
   chaos)
     rounds=${2:-6}; results="$RUN/chaos-results.txt"; mkdir -p "$RUN/rounds"; : > "$results"
@@ -323,9 +407,11 @@ case "${1:-}" in
       LATENCY=$LATENCY scenario "$pick"
       judge
       report --require round > "$RUN/rounds/round-$i.txt" 2>&1 && verdict=PASS || verdict=FAIL
-      crash=$(tr '\n' ' ' < "$RUN/crashes.log" 2>/dev/null)
+      could_not_finish >> "$RUN/rounds/round-$i.txt" && verdict=FAIL
+      crash=$(cat "$RUN/crashes.log" 2>/dev/null | tr '\n' ' ')
+      [ -z "$crash" ] || verdict=FAIL # a container found dead that the fault did not kill
       say "round $i  $verdict  scenario=$pick  crash=[${crash:- none}]" | tee -a "$results"
-      [ "$verdict" = PASS ] || grep -E "FAIL|NOT RUN" "$RUN/rounds/round-$i.txt"
+      [ "$verdict" = PASS ] || grep -E "FAIL|NOT RUN|could not finish|^  " "$RUN/rounds/round-$i.txt"
     done
     say "=== chaos summary"; cat "$results"
     ! grep -q " FAIL " "$results" ;;
@@ -335,7 +421,7 @@ case "${1:-}" in
   down) dc down -v --remove-orphans ;;
   *)
     case " $SCENARIOS " in
-      *" ${1:-} "*) name=$1; shift; reset; scenario "$name" "$@"; judge; report --require round ;;
-      *) sed -n '2,24p' "$0" ;;
+      *" ${1:-} "*) name=$1; shift; reset; scenario "$name" "$@"; judge; report --require round; verdict=$?; could_not_finish && verdict=1; found_dead && verdict=1; exit "$verdict" ;;
+      *) sed -n '2,28p' "$HERE/${0##*/}" ;;
     esac ;;
 esac

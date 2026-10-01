@@ -17,11 +17,12 @@ external_references:
 
 ## Summary
 
-Twenty-two properties: thirteen `Always`, three `Unreachable`, four eventually-liveness checks, one `Sometimes`, one
+Twenty-three properties: thirteen `Always`, three `Unreachable`, five eventually-liveness checks, one `Sometimes`, one
 `Reachable`. The first nine are the seven A0 invariants of SPEC §4a. Invariant 7, "no duplicate job or PR", is
 three properties because it has three observables: an idempotency key, a job claim and a pull request. Twelve more
 come from SPEC §4's failure modes and the guarantees the P0s rely on. One is the reachability table for the fault
-windows.
+windows. One, dropped-webhook-push-reaches-canvas, was added by Z.3 (noon-cs6.3) for its "webhook dropped" scenario: the
+Z.2a catalog had no property about a push.
 
 Every `Always`, `Unreachable` and eventually check has a named vacuity guard: a `Sometimes` that proves its path ran,
 and where it is observed. `make catalog-check` and its unit test (`scripts/catalog-check.test.ts`, so `make check`)
@@ -70,6 +71,7 @@ SPEC §4a assertion kind: `always`, `sometimes`, `unreachable`, `reachability`, 
 | - | no-edit-without-edit-role | unreachable | P1 | `apps/sync/src/room.ts:246` |
 | - | revoked-share-loses-access | eventually | P1 | `harness:eventually_revoked_share_closed` |
 | - | shipped-page-equals-codegen | always | P1 | `apps/worker/src/ship.ts:105` |
+| - | dropped-webhook-push-reaches-canvas | eventually | P1 | `harness:eventually_push_on_canvas` |
 | - | dangerous-windows-reached | reachability | P1 | `harness:finally_windows_reached` |
 | - | failed-ai-run-leaves-document-valid | always | P2 | `apps/worker/src/ai.ts:86` |
 | - | ai-and-person-edit-together | sometimes | P2 | `apps/sync/src/room.ts:226` |
@@ -82,7 +84,8 @@ SPEC §4a assertion kind: `always`, `sometimes`, `unreachable`, `reachability`, 
 2. **Ownership and fencing**: one sync node owns a room at a time. A frozen owner cannot write, and a dead owner's
    room comes back elsewhere. Every property in category 1 assumes this holds.
 3. **Jobs, idempotency and ship**: AI runs, previews and ships run once per request and once per attempt, survive a
-   worker death or a Redis wipe, and ship exactly one pull request.
+   worker death or a Redis wipe, and ship exactly one pull request; a push to that pull request's branch comes back
+   to the canvas even when its webhook is lost.
 4. **Tenancy and access**: nobody reads another org's data; roles and revokes take effect.
 5. **Reachability**: the run entered the fault windows and interleavings the other properties are about.
 
@@ -361,6 +364,22 @@ SPEC §4a assertion kind: `always`, `sometimes`, `unreachable`, `reachability`, 
 | **Why It Matters** | SPEC §4 "AI token missing or rate-limited"; F10. |
 | **Priority** | P2 |
 | **Guard** | `Sometimes("an AI run ended early with ops already applied")`, observed today at apps/worker/src/ai.int.test.ts:192 |
+
+**Open Questions:**
+
+- None
+
+### dropped-webhook-push-reaches-canvas — A push whose webhook was dropped still reaches the canvas
+
+| | |
+|---|---|
+| **Type** | Liveness |
+| **Property** | An in-shape push to a document's branch becomes the git peer's ops in that document's journal exactly once, within one reconcile period, even when Gitea's delivery for it never arrived. |
+| **Invariant** | Harness `eventually_push_on_canvas`: per push the driver's engineer made, one journal row stamped with the commit, carrying the pushed change. |
+| **Antithesis Angle** | A partition between Gitea and the api at the moment of the push (Gitea never retries); the git peer killed between the reconcile's record and the apply. |
+| **Why It Matters** | F16a; SPEC §2a. A lost delivery would otherwise leave the canvas and the pull request disagreeing until someone pushed again. |
+| **Priority** | P1 |
+| **Guard** | `Sometimes("a push whose webhook delivery was dropped was recorded by the reconcile")` in `eventually_push_on_canvas` |
 
 **Open Questions:**
 

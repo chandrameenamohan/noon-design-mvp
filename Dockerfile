@@ -9,8 +9,11 @@ COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /repo
 
-# Manifests first (one line per workspace package: add yours here, or the frozen install fails),
-# so the dependency layer is cached until a package.json or the lockfile changes.
+# Manifests first (one line per workspace package this image runs: add yours here, or its dependencies are
+# not installed and nothing can link to it), so the dependency layer is cached until a package.json or the
+# lockfile changes. deploy/antithesis/driver is a workspace package too and is NOT here on purpose: nothing in
+# this image depends on it, the frozen install passes without its manifest, and its dependencies (the Antithesis
+# SDK) stay out of the app image. deploy/antithesis/Dockerfile.driver copies it and installs again.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/sync/package.json apps/sync/

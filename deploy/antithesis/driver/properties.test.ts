@@ -20,7 +20,7 @@ const allGreen = (): AssertRecord[] => [
 const rowOf = (records: AssertRecord[], slug: string) => judge(records).find((row) => row.slug === slug);
 
 describe("the harness's property list", () => {
-  it("is the catalog: the same 22 slugs, each with the catalog's type, priority and guard", () => {
+  it("is the catalog: the same 23 slugs, each with the catalog's type, priority and guard", () => {
     const files = readdirSync(CATALOG).filter((name) => name.endsWith(".md"));
     expect(PROPERTIES.map((p) => p.slug).sort()).toEqual(files.map((name) => name.replace(/\.md$/, "")).sort());
     for (const property of PROPERTIES) {
@@ -41,7 +41,7 @@ describe("judge", () => {
     const rows = judge(allGreen());
     expect(notPassing(rows)).toEqual([]);
     expect(guardsMissed(rows)).toEqual([]);
-    expect(table(rows)).toContain("22/22 properties PASS, 20/20 vacuity guards hit");
+    expect(table(rows)).toContain("23/23 properties PASS, 21/21 vacuity guards hit");
   });
 
   it("does not pass an always that was never evaluated", () => {

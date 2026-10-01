@@ -44,6 +44,11 @@ describe("lossViolations", () => {
     expect(lossViolations([file([acked("ann", "o1", 1)])], journal)).toEqual([expect.stringContaining("holds op ghost, which no tracked peer submitted")]);
   });
 
+  it("places the git peer's rows as their push's (Z.3: an engineer's push is nobody's ledger entry)", () => {
+    const journal = [row(1, "o1", add("a")), row(2, "git", gap("a", 8), { actorKind: "git", runId: "c0ffee" })];
+    expect(lossViolations([file([acked("ann", "o1", 1)])], journal)).toEqual([]);
+  });
+
   it("joins the ledgers several processes kept of one document", () => {
     expect(lossViolations([file([acked("ann", "o1", 1)]), file([acked("probe", "o2", 2)], { scene: "probe" })], [row(1, "o1", add("a")), row(2, "o2", add("p"))])).toEqual([]);
   });

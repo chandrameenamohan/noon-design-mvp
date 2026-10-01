@@ -13,7 +13,7 @@ import { landed, staleAppends, statements } from "./pglog.ts";
 import type { Window } from "./properties.ts";
 import { claim, guard, happened, reached } from "./sdk.ts";
 import { call, config, holderOf, peerOf, redis, say, sleep, sql, state, until, world } from "./world.ts";
-import { jobRow, keep, stack, type JobNote, type Revoke } from "./workload.ts";
+import { jobRow, keep, PUSH_BUDGET_MS, stack, type JobNote, type PushNote, type Revoke } from "./workload.ts";
 
 const journalOf = async (document: string): Promise<JournalRow[]> =>
   (await sql<{ seq: string; op_id: string; actor_kind: string; actor_id: string; run_id: string | null; op: Op; at: string }>(
@@ -155,6 +155,29 @@ export async function revokedShareClosed(): Promise<void> {
     claim("revoked-share-loses-access", answers.every((answer) => answer.status === 404) && !back, { document: revoke.document, statuses: answers.map((answer) => answer.status), back, what: "the outsider cannot come back" });
     say(`[revoked_share_closed] ${revoke.document}: ${answers.map((answer) => String(answer.status)).join(",")} back=${String(back)}`);
   }
+}
+
+// --- eventually_push_on_canvas (dropped-webhook-push-reaches-canvas) -------------------------------------------------
+/**
+ * After the faults: every push an engineer made is in its document's journal, once, as the git peer's op stamped
+ * with the commit. Whichever door recorded it: the webhook's delivery, or (when that was lost) the reconcile.
+ */
+export async function pushOnCanvas(): Promise<void> {
+  const pushes = state.lines<PushNote>("pushes.jsonl");
+  let reconciled = 0;
+  for (const push of pushes) {
+    const applied = (): Promise<{ op: Op }[]> => sql<{ op: Op }>("select op from op_journal where document_id = $1 and actor_kind = 'git' and run_id = $2", [push.document, push.commit]);
+    await until(async () => (await applied()).length > 0, PUSH_BUDGET_MS, 500);
+    const ops = await applied();
+    const [event] = await sql<{ delivery_id: string | null; status: string }>("select delivery_id, status from git_events where after_sha = $1", [push.commit]);
+    const [op] = ops;
+    const once = ops.length === 1 && op?.op.type === "set_prop" && op.op.key === "label" && op.op.value === push.label;
+    claim("dropped-webhook-push-reaches-canvas", once, { document: push.document, commit: push.commit, dropped: push.dropped, ops: ops.map((each) => each.op), event: event ?? null });
+    // Lost for good: the listener was cut when Gitea dialled, and the event that reached the canvas carries no delivery.
+    if (once && push.dropped && event?.delivery_id === null) reconciled++;
+  }
+  guard("dropped-webhook-push-reaches-canvas", reconciled > 0, { pushes: pushes.length, reconciled });
+  say(`[push_on_canvas] ${String(pushes.length)} pushes, ${String(reconciled)} of them recorded by the reconcile after their delivery was dropped`);
 }
 
 // --- finally_ledger -------------------------------------------------------------------------------------------------

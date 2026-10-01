@@ -1,4 +1,4 @@
-// The 22 properties of antithesis/scratchbook/property-catalog.md as the harness asserts them, and the report's
+// The 23 properties of antithesis/scratchbook/property-catalog.md as the harness asserts them, and the report's
 // judgement over what the SDK wrote. Pure: no SDK, no I/O (sdk.ts emits, report.ts reads files).
 //
 // The catalog puts thirteen assertion sites inside the SUT (`apps/sync/src/room.ts:226` and so on). Z.2b runs the
@@ -43,6 +43,7 @@ export const PROPERTIES: readonly Property[] = [
   { slug: "no-edit-without-edit-role", kind: "unreachable", priority: "P1", claim: "an op was journaled for a peer that may not edit", guard: "an op from a peer without edit rights reached the room and was refused" },
   { slug: "revoked-share-loses-access", kind: "eventually", priority: "P1", claim: "a revoked share's session is closed and its holder cannot come back", guard: "a share was revoked while its holder had the document open" },
   { slug: "shipped-page-equals-codegen", kind: "always", priority: "P1", claim: "the file on the document's branch is the codegen of the document at a seq it had", guard: "a ship pushed a commit to the document's branch" },
+  { slug: "dropped-webhook-push-reaches-canvas", kind: "eventually", priority: "P1", claim: "every engineer's push is in its document's journal once, and shows on the open canvas within the reconcile period", guard: "a push whose webhook delivery was dropped was recorded by the reconcile" },
   { slug: "dangerous-windows-reached", kind: "reachability", priority: "P1", claim: "the run entered every fault window R1..R7" },
   { slug: "failed-ai-run-leaves-document-valid", kind: "always", priority: "P2", claim: "a run that did not succeed has a reason, journals nothing after its end, and its applied ops stay", guard: "an AI run ended cancelled, failed or timed out with ops already applied" },
   { slug: "ai-and-person-edit-together", kind: "sometimes", priority: "P2", claim: "an agent op and a user op were accepted back to back" },

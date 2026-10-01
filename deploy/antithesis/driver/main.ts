@@ -16,12 +16,14 @@ const COMMANDS: Record<string, () => Promise<void> | void> = {
   parallel_driver_stale_message: workload.staleMessage,
   parallel_driver_ship: workload.ship,
   parallel_driver_share_revoke: workload.shareRevoke,
+  parallel_driver_engineer_push: workload.engineerPush,
   anytime_stranger_probe: checks.strangerProbe,
   anytime_journal_contiguous: checks.journalContiguous,
   anytime_lease_matches_fence: checks.leaseMatchesFence,
   eventually_room_writable: checks.roomWritable,
   eventually_jobs_settle: checks.jobsSettle,
   eventually_revoked_share_closed: checks.revokedShareClosed,
+  eventually_push_on_canvas: checks.pushOnCanvas,
   finally_ledger: checks.finallyLedger,
   finally_peers_converge: checks.finallyPeersConverge,
   finally_jobs: checks.finallyJobs,
@@ -34,6 +36,11 @@ const COMMANDS: Record<string, () => Promise<void> | void> = {
   "scene:worker-killed": scenes.workerKilled,
   "scene:worker-paused": scenes.workerPaused,
   "scene:redis-wiped": scenes.redisWiped,
+  "scene:webhook-dropped": scenes.webhookDropped,
+  "scene:upgrade-reset": scenes.upgradeReset,
+  "scene:worker-store-unavailable": scenes.workerStoreUnavailable,
+  "scene:minio-reopen": scenes.minioClosed,
+  "scene:minio-open": scenes.minioOpen,
 };
 
 const name = process.argv[2] ?? "";

@@ -44,6 +44,12 @@ Properties: one-open-pr-per-document, shipped-page-equals-codegen, one-job-per-i
 Notes: Same job (apps/worker/src/ship.ts). One-queued-ship-per-document (migration 0011) is shared with the key
 property.
 
+## Push in
+Properties: dropped-webhook-push-reaches-canvas, shipped-page-equals-codegen, op-applied-at-most-once
+Notes: The push lands on the branch Ship made, so after it the file on the branch must still be the codegen of the
+document at some seq (shipped-page-equals-codegen keeps holding). "Once" leans on op-applied-at-most-once: the git
+peer's op ids are derived from the commit (apps/worker/src/push.ts), so a push applied again is answered, not repeated.
+
 ## Access
 Properties: no-cross-org-read, no-edit-without-edit-role, revoked-share-loses-access
 Notes: The stranger probe (no-cross-org-read) also covers "cannot come back" after a revoke; the revoke

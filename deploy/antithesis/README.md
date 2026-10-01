@@ -6,8 +6,8 @@ trust boundaries. The method is the owner's from `~/repos/ai-engine/deploy/antit
 but a local harness built so it can be handed to Antithesis unchanged. The rule: **write properties, then attack the
 system while they are checked; change configuration, never code.**
 
-The properties are the 22 of `antithesis/scratchbook/property-catalog.md`. `driver/properties.ts` lists them, and a
-unit test fails when that list and the catalog drift apart.
+The properties are the 23 of `antithesis/scratchbook/property-catalog.md` (22 from Z.2a, one added by Z.3 for a
+push). `driver/properties.ts` lists them, and a unit test fails when that list and the catalog drift apart.
 
 ```
 driver ──REST──▶ api ──▶ toxiproxy:5432/6381 ──▶ Postgres, Redis
@@ -42,7 +42,7 @@ worker's `STALE_MS=6000` (default 15 s). `journalTimeoutMs` has no variable in t
 deploy/antithesis/run.sh up            # build both images, start the slice, first_setup (about a minute, cached)
 deploy/antithesis/run.sh baseline      # quiet workload, then one of each fault window -> all PASS, all guards hit
 deploy/antithesis/run.sh report
-deploy/antithesis/run.sh sync-killed   # one named scenario, then the checks (see run.sh for the seven names)
+deploy/antithesis/run.sh sync-killed   # one named scenario, then the checks (see run.sh for the twelve names)
 deploy/antithesis/run.sh chaos 6       # six rounds, a random scenario each
 deploy/antithesis/run.sh no-internet
 deploy/antithesis/run.sh down
@@ -54,6 +54,10 @@ The harness is its own compose project (`noon-antithesis`), its one network is `
 port: it neither touches nor can be reached from the dev stack. State of a run lives in `.run/` (git-ignored): the
 SDK's output (`sdk/`, one file per process), the op ledger (`ledger/`), the jobs the drivers started, the cues.
 
+A run is a PASS only when every property that was evaluated holds, every command and scene finished (one that
+could not do its work asserted nothing), and no app container was found dead beyond the fault's own victim. run.sh
+exits non-zero otherwise, for a named scenario, `baseline` and each `chaos` round alike.
+
 ## What `baseline` is
 
 Half the catalog's vacuity guards are fault events ("a worker was killed while its job was running"). A run with no
@@ -63,7 +67,8 @@ fault cannot hit them, so `baseline` has two parts, and says so as it runs:
 2. **one of each fault window**, each the mildest form that reaches it: Postgres cut from the sync nodes, a room's
    owner killed under a burst (Postgres's answers slowed first, so the kill finds an append committed and not yet
    announced), the owner frozen past its lease with an append still on its way to Postgres, the AI worker killed
-   mid-run, the AI worker frozen past `staleMs`, Redis flushed with jobs waiting and running.
+   mid-run, the AI worker frozen past `staleMs`, Redis flushed with jobs waiting and running, Gitea's webhook
+   delivery refused at a push.
 
 It is the harness proving its own assertions can fail and can fire (SPEC §4a: "verify the harness's own properties
 first"). Attacking in depth (repeats, random timing, new faults) is Z.3's, with `chaos N` and the named scenarios.
@@ -83,8 +88,9 @@ Gitea's repo. Then, each a process of its own that knows nothing about faults:
 | `parallel_driver_stale_message` | a run cancelled while its message waits in Redis |
 | `parallel_driver_ship` | Ship, an edit, Ship again (and a retry of the second press) |
 | `parallel_driver_share_revoke` | an outsider works in a shared document; the share is revoked |
-| `anytime_stranger_probe`, `anytime_journal_contiguous`, `anytime_lease_matches_fence` | run beside every fault |
-| `eventually_room_writable`, `eventually_jobs_settle`, `eventually_revoked_share_closed` | after the faults stop |
+| `parallel_driver_engineer_push` | an engineer pushes an in-shape change to a shipped page while its document is open |
+| `anytime_stranger_probe`, `anytime_journal_contiguous`, `anytime_lease_matches_fence` | run beside every fault. Two faults leave the stranger's probe until they are over: `webhook-dropped` (the probe opens a session, which asks for the reconcile the scenario is timing) and `worker-store-unavailable` (the api's Postgres is the thing cut) |
+| `eventually_room_writable`, `eventually_jobs_settle`, `eventually_revoked_share_closed`, `eventually_push_on_canvas` | after the faults stop |
 | `finally_ledger`, `finally_peers_converge`, `finally_jobs`, `finally_ship`, `finally_sut_logs`, `finally_windows_reached` | the judgement |
 
 **The op ledger.** Every op a driver peer submits is kept (`driver/ledger.ts`, on `scripts/chaos/no-loss.ts`'s
@@ -119,6 +125,7 @@ is asserted from what the SUT shows outside itself. `P` is the property's assert
 | no-edit-without-edit-role | a journal row whose actor is the viewer is the failure | the viewer's ops settled `forbidden` |
 | revoked-share-loses-access | the outsider's open session closes; later `/session` and `/run` are 404 and a new peer never goes live | the outsider was live at the revoke |
 | shipped-page-equals-codegen | the file on the branch = `generate()` of the journal replayed to SOME seq (a ship records none) | a ship's output names a commit |
+| dropped-webhook-push-reaches-canvas | per push the driver's engineer made: one journal row of the git peer, stamped with the commit, carrying the pushed label; in `webhook-dropped`, on the open canvas within 60 s | a push made with the webhook's listener cut is a `git_events` row with no delivery id, and reached the journal |
 | dangerous-windows-reached | R1..R7, one `reachable` each | - |
 | failed-ai-run-leaves-document-valid | ended as expected, with a reason; no journal row of the run after `finished_at`; ops = opIds = nodes | a run that ended `cancelled` or `failed` with rows in the journal |
 | ai-and-person-edit-together | adjacent seqs, one `agent`, one `user` | - |
@@ -134,6 +141,7 @@ Antithesis there are none there and it asserts nothing: the platform has the con
 | `no-internet` | PASS: the network is internal, nothing is published, no model credential; from `driver`, `api`, `sync`, `worker`, `worker-ship` an address, a name and the model's host are all unreachable while a neighbour answers |
 | `quiet` | 18/22 PASS, 10/20 guards: what a fault-free run can reach, and no more |
 | `baseline` | **22/22 properties PASS, 20/20 vacuity guards hit, R1..R7 reached**; no app container found dead beyond each fault's own victim |
+| Z.3: `baseline`, each named scenario at least three times, `chaos 20` | `reports/2026-10-01-z3-scenarios.md`: the runs, the machine's load during each, and every finding. With Z.3's property the baseline is 23/23 and 21/21 |
 
 **The checks can fail.** With one row deleted from a quiet document's journal (as the database owner, then put
 back), `finally_ledger`, `finally_peers_converge` and `anytime_journal_contiguous` reported
@@ -160,6 +168,10 @@ No property failed. Two things the SUT does that the next bead (Z.3) must know t
    dead worker's message as active under that job id and drops the offer. The run starts again only when BullMQ's
    own stalled-job check re-delivers it: measured 62 s after the dead worker's last heartbeat. Shortening `staleMs`
    does not shorten the retry. Within the property (the job resumes, and not before it is stale).
+
+Z.3's findings (a sync node killed by a reset on a refused upgrade, fixed; what a slow Postgres does to opening a
+document; what a job-store outage longer than `staleMs` does to a healthy run) are in
+`reports/2026-10-01-z3-scenarios.md`.
 
 ## What Antithesis adds over this
 
