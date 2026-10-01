@@ -194,7 +194,14 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // Both limits refuse by Content-Length before a byte is read, and count the bytes of a body sent without one.
   const smallBodies = bodyLimit({ maxSize: MAX_BODY_BYTES, onError: (c) => fail(c, 413, "payload_too_large") });
   const webhookBodies = bodyLimit({ maxSize: MAX_WEBHOOK_BYTES, onError: (c) => fail(c, 413, "payload_too_large") });
-  app.use((c, next) => (c.req.path === WEBHOOK_PATH ? webhookBodies : smallBodies)(c, next));
+  app.use(async (c, next) => {
+    const webhook = c.req.path === WEBHOOK_PATH;
+    // A declared length over the cap is refused here, without touching the body: bodyLimit opens it as a stream
+    // first, which stalls @hono/node-server's drain of the unread bytes, and the server then cuts a socket the
+    // client has already pooled for its next request (ECONNRESET).
+    if (Number(c.req.header("content-length")) > (webhook ? MAX_WEBHOOK_BYTES : MAX_BODY_BYTES)) return fail(c, 413, "payload_too_large");
+    return (webhook ? webhookBodies : smallBodies)(c, next);
+  });
 
   // Liveness: "this process is up". It must not depend on the database, or a database outage
   // would make the orchestrator kill a process that is otherwise able to report the outage.

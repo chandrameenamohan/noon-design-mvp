@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from "node:crypto";
+import { Agent, request } from "node:http";
 import { beforeEach, expect, test } from "vitest";
 import { Document, Org, Workspace } from "@noon/contracts";
 import { buildApp } from "./app.ts";
@@ -92,6 +93,39 @@ test("a body over 1 MiB is refused by its length before it is read; a big but re
   const res = await deliver(huge);
   expect(res.status).toBe(413);
   expect(await events()).toHaveLength(1);
+});
+
+/** A request on `agent`; resolves with its status and the socket that carried it. */
+function send(agent: Agent, path: string, init: { method: string; body?: string; headers?: Record<string, string> }): Promise<{ status: number; socket: unknown }> {
+  return new Promise((resolve, reject) => {
+    const req = request(`${ctx.server.url}${path}`, { agent, method: init.method, headers: { "x-dev-user": "tester@example.com", ...init.headers } }, (res) => {
+      const socket = res.socket;
+      res.resume().on("end", () => { resolve({ status: res.statusCode ?? 0, socket }); }).on("error", reject);
+    });
+    req.on("error", reject).end(init.body);
+  });
+}
+
+// The gate's ECONNRESET: the limit opened the body as a stream before refusing it, so the server could not drain what
+// it had not read and cut the socket 500 ms later (@hono/node-server's drain timeout), after the client had pooled it.
+test("a body refused by its length leaves its connection usable: the next request on it is answered", async () => {
+  const huge = pushBody({ padding: "x".repeat(1024 * 1024) });
+  const refusals = [
+    { path: "/webhooks/gitea", headers: { "content-type": "application/json", "x-gitea-event": "push", "x-gitea-delivery": randomUUID(), "x-gitea-signature": sign(huge) }, body: huge },
+    { path: "/orgs", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x".repeat(70 * 1024) }) },
+  ];
+  for (const { path, headers, body } of refusals) {
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+      const refused = await send(agent, path, { method: "POST", headers, body });
+      expect(refused.status, path).toBe(413);
+      const next = await send(agent, "/orgs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "After" }) });
+      expect(next.status, path).toBe(201);
+      expect(next.socket === refused.socket, `${path}: the same connection`).toBe(true);
+    } finally {
+      agent.destroy();
+    }
+  }
 });
 
 test("every other route keeps its 64 KB limit", async () => {
