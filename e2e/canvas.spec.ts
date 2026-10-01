@@ -84,6 +84,7 @@ test("a node added in one browser appears in the other; p95 under 200 ms over 25
   test.info().annotations.push({ type: "latency", description: summary }, { type: "latencies", description: latencies.join(", ") });
   await test.info().attach("edits", { body: breakdown.join("\n"), contentType: "text/plain" });
   await test.info().attach("console", { body: consoleLines.join("\n"), contentType: "text/plain" });
+  process.stdout.write(`${summary}\n`); // in the gate's log on a green run too: how far under the limit it was
   // The message carries every edit, so a failure says which edits stalled and in which leg (the sync server
   // logs a journal call slower than 250 ms on stderr, which Playwright prints as [WebServer]).
   expect(p95, `${summary}\n${breakdown.join("\n")}`).toBeLessThan(200);

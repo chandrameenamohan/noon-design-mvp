@@ -12,6 +12,20 @@ const DOCKER_BIN = "/Applications/Docker.app/Contents/Resources/bin";
 const fromEnv = (command: string): string =>
   `sh -c 'set -a; . ./.env; set +a; export NODE_ENV=development DATABASE_URL="postgres://noon_app:$APP_DB_PASSWORD@localhost:\${PG_PORT:-5432}/noon" REDIS_URL="redis://:$REDIS_PASSWORD@localhost:\${REDIS_PORT:-6380}"; ${command}'`;
 
+const chrome = { ...devices["Desktop Chrome"] };
+/**
+ * The specs that assert a DURATION: canvas.spec's 200 ms p95 from an edit to the other browser's DOM, and
+ * progress.spec's run of one step every 400 ms, reloaded while it is still running. They run in a project of their
+ * own that depends on the main one, so it starts when that has ended, and on one worker: nothing else of this suite
+ * is running while they measure. noon-ibo: beside four other workers' browsers, AI runs and sandbox containers (host
+ * load 28-40) the same edits measured p95 226-328 ms, and most of each was the page waiting for a CPU before the op
+ * had even left it (median 57-76 ms, up to 383), which is the test's neighbours, not the product. The limits are
+ * unchanged. A project-level testIgnore replaces the config's, hence the scenario named again below.
+ * One file at a time: `pnpm exec playwright test e2e/canvas.spec.ts --no-deps` (without it the main project runs
+ * first, whole). ponytail: if the main project fails, Playwright skips this one; the gate is red either way.
+ */
+const TIMED = ["**/canvas.spec.ts", "**/progress.spec.ts"];
+
 /**
  * The e2e layer on one sync node, or on two (`e2e` and `e2e-2`, routed by their leases in Redis as compose's `sync` and
  * `sync-2` are). The SPEC §8 scenario runs on two and `kill -9`s one of them, so it has a run of its own
@@ -31,7 +45,10 @@ export function e2eConfig({ twoSyncNodes }: { twoSyncNodes: boolean }) {
     globalSetup: "./e2e/setup.ts",
     globalTeardown: "./e2e/teardown.ts",
     use: { baseURL: `http://localhost:${String(PORTS.web)}` },
-    projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+    projects: twoSyncNodes ? [{ name: "chromium", use: chrome }] : [
+      { name: "chromium", use: chrome, testIgnore: ["spec-scenario.spec.ts", ...TIMED] },
+      { name: "timed", use: chrome, testMatch: TIMED, dependencies: ["chromium"], workers: 1 },
+    ],
     webServer: [
       // Hosted as through a tunnel (noon-l96): the preview rides the canvas's own origin, as /preview/.
       // The loopback address the canvas frames otherwise is what the sandbox and worker suites load.
