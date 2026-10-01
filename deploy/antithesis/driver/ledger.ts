@@ -103,7 +103,7 @@ export function replay(journal: readonly JournalRow[]): { hashes: Map<number, st
  */
 export function lossViolations(files: readonly LedgerFile[], journal: readonly JournalRow[]): string[] {
   const entries = files.flatMap((file) => file.entries);
-  const agents = journal.filter((row) => row.actorKind !== "user").map((row): LedgerEntry => ({ peer: `${row.actorKind === "git" ? "push" : "run"} ${row.runId ?? "?"}`, opId: row.opId, atFault: { ok: true, seq: row.seq }, outcome: { ok: true, seq: row.seq } }));
+  const agents = journal.filter((row) => row.actorKind === "agent" || row.actorKind === "git").map((row): LedgerEntry => ({ peer: `${row.actorKind === "git" ? "push" : "run"} ${row.runId ?? "?"}`, opId: row.opId, atFault: { ok: true, seq: row.seq }, outcome: { ok: true, seq: row.seq } }));
   const rows: LossRow[] = journal.map(({ seq, opId }) => ({ seq, opId }));
   return noLossViolations({ ledger: [...entries, ...agents], journal: rows, docs: [] }).filter((violation) => !violation.startsWith("vacuous:"));
 }

@@ -49,6 +49,11 @@ describe("lossViolations", () => {
     expect(lossViolations([file([acked("ann", "o1", 1)])], journal)).toEqual([]);
   });
 
+  it("excuses only the actors that submit through no driver peer: a row of an unknown actor kind is still unexplained", () => {
+    const journal = [row(1, "o1", add("a")), row(2, "who", add("w"), { actorKind: "robot", runId: "r1" })];
+    expect(lossViolations([file([acked("ann", "o1", 1)])], journal)).toEqual([expect.stringContaining("holds op who, which no tracked peer submitted")]);
+  });
+
   it("joins the ledgers several processes kept of one document", () => {
     expect(lossViolations([file([acked("ann", "o1", 1)]), file([acked("probe", "o2", 2)], { scene: "probe" })], [row(1, "o1", add("a")), row(2, "o2", add("p"))])).toEqual([]);
   });

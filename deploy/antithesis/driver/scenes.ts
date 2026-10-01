@@ -369,6 +369,9 @@ export async function workerStoreUnavailable(): Promise<void> {
   const finished = await until(() => ended(run), config.staleMs + 240_000);
   const after = await jobRow(run);
   // One claim, or the one more a stale heartbeat is owed: a third would be a claim nothing explains (finally_jobs fails it).
+  // ponytail: the expectation is derived from what happened, so finally_jobs catches only a THIRD attempt; ceiling: a
+  // second attempt the stale heartbeat did not cause would pass too; upgrade (noon-cs6.3.3): read the sweep's requeue
+  // of this job from the workers' log and owe attempt 2 only when it is there.
   noteJob({ id: run, kind: "run", document, expect: "succeeded", steps, attempts: Math.min(Math.max(after?.attempts ?? 1, 1), 2) });
   if (!finished) throw new Error(`run ${run} did not end: ${after?.status ?? "gone"} as attempt ${String(after?.attempts ?? 0)}`);
   say(`[worker-store-unavailable] ${run}: Postgres away from the workers until the heartbeat was ${String(silent)} ms old (staleMs ${String(config.staleMs)}), the job ${atHeal?.status ?? "gone"} as attempt ${String(atHeal?.attempts ?? 0)} at ${String(journaled)}/${String(steps)} steps; it ended ${after?.status ?? "gone"} as attempt ${String(after?.attempts ?? 0)}${after?.error == null ? "" : ` (${after.error})`}`);
