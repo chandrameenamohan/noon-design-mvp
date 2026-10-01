@@ -10,6 +10,8 @@ docker info >/dev/null 2>&1 || { echo "FAIL: Docker is not running"; exit 1; }
 command -v pnpm >/dev/null 2>&1 || { echo "FAIL: pnpm not found (run: corepack enable pnpm)"; exit 1; }
 
 pnpm install --frozen-lockfile
+# The sample app is outside the workspace, with a lockfile of its own; the gate type-checks it (and codegen against it).
+pnpm --dir seed/sample-app install --frozen-lockfile --ignore-workspace
 pnpm exec playwright install chromium
 # bd points core.hooksPath at .beads/hooks and appends its own section to our hook,
 # so install into whichever path git really uses, and never clobber bd's section.
