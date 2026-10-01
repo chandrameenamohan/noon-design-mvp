@@ -27,6 +27,16 @@ for name in POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWOR
 done
 . ./.env
 
+# The pinned MinIO image can no longer be pulled from any registry; a machine without it loads a saved copy.
+# ponytail: works only on machines holding the tarball (made once with `docker save`, kept outside git).
+# Upgrade: mirror the image to a registry the owner controls and pin that name in docker-compose.yml.
+minio_image=$(sed -n 's/^ *image: \(.*minio\/minio:.*\)$/\1/p' docker-compose.yml)
+minio_tar="$HOME/.config/noon/minio-${minio_image##*:}.tar"
+docker image inspect "$minio_image" >/dev/null 2>&1 || {
+  [ -f "$minio_tar" ] && docker load -i "$minio_tar" >/dev/null ||
+    { echo "FAIL: $minio_image cannot be pulled any more; expected a saved copy at $minio_tar (docker save -o)"; exit 1; }
+}
+
 docker compose up -d --wait postgres redis gitea minio
 # POSTGRES_PASSWORD only applies when the data volume is first created. Setting it here as well keeps an
 # existing volume (and one created with an older password) in step with .env. Local socket, no password needed.
