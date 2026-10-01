@@ -34,22 +34,37 @@ export type SnapshotStore = {
   get(orgId: string, documentId: string, seq: number): Promise<Uint8Array | undefined>;
 };
 
-type S3Options = { endpoint: string; accessKeyId: string; secretAccessKey: string; bucket: string };
+type S3Options = {
+  endpoint: string; accessKeyId: string; secretAccessKey: string; bucket: string;
+  /**
+   * How long MinIO may take over ONE call, body included (noon-mo3.3.1). The SDK sets no timeout of its own, so a
+   * MinIO that accepts the connection and never answers held a room's load for ever, and with it the document.
+   * ponytail: one bound for every size; ceiling: a snapshot MinIO cannot take or give in 10 s is never stored or
+   * read (the journal replay still opens the document, and a failed read is "try again"); upgrade: scale it with the body.
+   */
+  timeoutMs?: number;
+};
 
 /** MinIO through the AWS SDK, configured as learning-tests/minio found enough. */
-export function s3Snapshots({ endpoint, accessKeyId, secretAccessKey, bucket }: S3Options): SnapshotStore & { ensureBucket(): Promise<void> } {
+export function s3Snapshots({ endpoint, accessKeyId, secretAccessKey, bucket, timeoutMs = 10_000 }: S3Options): SnapshotStore & { ensureBucket(): Promise<void> } {
   // ponytail: the MinIO root credentials. Ceiling: whoever reads sync's environment owns every bucket.
   // Upgrade: a MinIO user whose policy allows get/put on this one bucket, made by init.sh.
   const s3 = new S3Client({ endpoint, region: "us-east-1", forcePathStyle: true, credentials: { accessKeyId, secretAccessKey } });
   const named = (err: unknown, ...names: string[]): boolean => err instanceof Error && names.includes(err.name);
+  /** One call, answered within `timeoutMs` or rejected. The signal frees the socket; the race is what ends the wait (a body that stalls after its headers, too). */
+  const answered = <T>(call: (abortSignal: AbortSignal) => Promise<T>): Promise<T> => {
+    const abortSignal = AbortSignal.timeout(timeoutMs);
+    const late = new Promise<never>((_, reject) => { abortSignal.addEventListener("abort", () => { reject(new Error(`MinIO did not answer within ${String(timeoutMs)} ms`)); }, { once: true }); });
+    return Promise.race([call(abortSignal), late]);
+  };
   return {
     async ensureBucket() {
       try {
-        await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+        await answered((abortSignal) => s3.send(new HeadBucketCommand({ Bucket: bucket }), { abortSignal }));
       } catch (err) {
         if (!named(err, "NotFound", "NoSuchBucket")) throw err;
         try {
-          await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+          await answered((abortSignal) => s3.send(new CreateBucketCommand({ Bucket: bucket }), { abortSignal }));
         } catch (raced) {
           if (!named(raced, "BucketAlreadyOwnedByYou", "BucketAlreadyExists")) throw raced;
         }
@@ -57,7 +72,7 @@ export function s3Snapshots({ endpoint, accessKeyId, secretAccessKey, bucket }: 
     },
     async put(orgId, documentId, seq, body) {
       try {
-        await s3.send(new PutObjectCommand({ Bucket: bucket, Key: snapshotKey(orgId, documentId, seq), Body: body, ContentType: "application/json", ContentEncoding: "gzip", IfNoneMatch: "*" }));
+        await answered((abortSignal) => s3.send(new PutObjectCommand({ Bucket: bucket, Key: snapshotKey(orgId, documentId, seq), Body: body, ContentType: "application/json", ContentEncoding: "gzip", IfNoneMatch: "*" }), { abortSignal }));
       } catch (err) {
         // 412: this seq of this document is stored already. The same journal prefix gives the same document,
         // so the object there is this one; overwriting it would only open a window where it is half-written.
@@ -66,8 +81,10 @@ export function s3Snapshots({ endpoint, accessKeyId, secretAccessKey, bucket }: 
     },
     async get(orgId, documentId, seq) {
       try {
-        const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: snapshotKey(orgId, documentId, seq) }));
-        return res.Body ? await res.Body.transformToByteArray() : undefined;
+        return await answered(async (abortSignal) => {
+          const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: snapshotKey(orgId, documentId, seq) }), { abortSignal });
+          return res.Body ? await res.Body.transformToByteArray() : undefined;
+        });
       } catch (err) {
         if (named(err, "NoSuchKey")) return undefined;
         throw err;

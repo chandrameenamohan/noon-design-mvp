@@ -1,7 +1,8 @@
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import { gzipSync } from "node:zlib";
 import { afterEach, expect, test, vi } from "vitest";
 import { applyOp, emptyDoc, ROOT_ID } from "@noon/doc-model";
-import { decodeSnapshot, encodeSnapshot, snapshotKey, snapshotter } from "./snapshots.ts";
+import { decodeSnapshot, encodeSnapshot, s3Snapshots, snapshotKey, snapshotter } from "./snapshots.ts";
 
 // E6.2: the key and cadence rules, without MinIO. snapshot.int.test.ts runs them against the real thing.
 afterEach(() => { vi.useRealTimers(); });
@@ -114,3 +115,23 @@ test("one write at a time: triggers during a write are dropped, and take waits f
   expect(room.seq).toBe(3);
   snap.stop();
 });
+
+// noon-cs6.3 (minio-stalled, noon-mo3.3.1): the SDK sets no timeout of its own, so a MinIO that accepts the
+// connection and never answers held `load()` for ever, and with it every later peer of that document on the node.
+test("a MinIO that accepts the connection and never answers is a rejection within the bound, never a wait for ever", async () => {
+  const sockets = new Set<Socket>();
+  const silent = createServer((socket) => { sockets.add(socket); socket.on("error", () => undefined); });
+  await new Promise<void>((resolve) => { silent.listen(0, "127.0.0.1", resolve); });
+  const store = s3Snapshots({ endpoint: `http://127.0.0.1:${String((silent.address() as AddressInfo).port)}`, accessKeyId: "key", secretAccessKey: "secret", bucket: "snapshots", timeoutMs: 150 });
+  try {
+    const started = Date.now();
+    await expect(store.get(ORG, DOC, 1)).rejects.toThrow("MinIO did not answer within 150 ms");
+    await expect(store.put(ORG, DOC, 1, encodeSnapshot(emptyDoc()))).rejects.toThrow("MinIO did not answer");
+    await expect(store.ensureBucket()).rejects.toThrow("MinIO did not answer");
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(sockets.size).toBeGreaterThan(0); // the calls really reached the silent server
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => silent.close(resolve));
+  }
+}, 4000);
