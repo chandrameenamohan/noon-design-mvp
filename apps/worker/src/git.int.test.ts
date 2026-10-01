@@ -154,7 +154,9 @@ test("running, the peer reconciles when a document is opened, and on its timer",
   } finally {
     await again.stop();
   }
-});
+// Two peers started and stopped, two commits, two reconciles, all real git: 20 s (the layer's budget) ran out in a
+// clean clone's `make check`, and the peer it left running took the next two tests' events.
+}, 60_000);
 
 test("while Gitea is away an event waits instead of being lost, and is worked on once it is back", async () => {
   const { seen, apply } = collect();

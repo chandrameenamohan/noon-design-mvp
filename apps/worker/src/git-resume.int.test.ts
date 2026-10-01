@@ -17,7 +17,9 @@ import { pagePath } from "./sandbox.ts";
 // server and peer-client. The "kill" is a peer whose heartbeats write nothing and whose socket stops sending ops:
 // to Postgres and to the room, exactly what a kill -9 leaves behind.
 
-const STALE_MS = 1000;
+// Long enough that the dead peer's three ops and the canvas edit fit inside it on a loaded machine: at 1 s the
+// survivor found the event stale already (a clean clone's `make check`), and "not before it is stale" could not be seen.
+const STALE_MS = 5000;
 let t: TestDb;
 let local: LocalOrigin;
 let document: { id: string; orgId: string };
@@ -108,6 +110,7 @@ test("git-event-resume-after-kill: a push left half-applied by a dead git peer i
 
   // The peer that dies: three of the four ops reach the room, then nothing more, from its socket or to Postgres.
   const dead = gitPeer("dead", 3);
+  const claimedAfter = Date.now();
   const dying = dead.peer.processNext();
   await vi.waitFor(() => { expect(gitOps()).toHaveLength(3); }, { timeout: 10_000, interval: 50 });
   expect(await eventRow(sha)).toMatchObject({ status: "running", attempts: 1, resumes: 0 });
@@ -115,10 +118,9 @@ test("git-event-resume-after-kill: a push left half-applied by a dead git peer i
   await onCanvas(setLabel("b1", "Renamed on the canvas"));
 
   // Not before the dead peer's heartbeat is stale: a live peer's event is never taken.
-  const startedAt = Date.now();
   expect(await survivor.peer.processNext()).toBe(false);
-  await vi.waitFor(async () => { expect(await survivor.peer.processNext()).toBe(true); }, { timeout: 10_000, interval: 50 }); // resumed
-  expect(Date.now() - startedAt).toBeGreaterThanOrEqual(STALE_MS - 200);
+  await vi.waitFor(async () => { expect(await survivor.peer.processNext()).toBe(true); }, { timeout: 15_000, interval: 50 }); // resumed
+  expect(Date.now() - claimedAfter).toBeGreaterThanOrEqual(STALE_MS); // counted from before the dead peer's claim, its only heartbeat
   expect(await eventRow(sha)).toEqual({ status: "done", attempts: 2, resumes: 1 });
   expect(survivor.outcomes.at(-1)).toMatchObject({ kind: "applied" });
 
