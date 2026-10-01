@@ -65,7 +65,8 @@ GITEA_URL="$gitea_url" GITEA_TOKEN="$GITEA_TOKEN" GITEA_WEBHOOK_SECRET="$GITEA_W
 # The per-document preview sandbox (epic 4), BEFORE the worker that starts it. Minutes on a first run:
 # it installs the sample app's dependencies. Its source is NOT in the image: the worker fetches it from Gitea.
 docker build --quiet --tag noon-sandbox:dev --file apps/worker/sandbox/Dockerfile seed/sample-app >/dev/null
-docker compose up -d --build --wait api sync worker worker-sandbox
+# Every worker: without worker-git a push never reaches a canvas, and without worker-ship a ship stays queued for ever.
+docker compose up -d --build --wait api sync worker worker-sandbox worker-git worker-ship
 
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")

@@ -12,10 +12,20 @@ export default function teardown(): void {
   // The e2e sandbox worker's containers (pool noon-e2e, playwright.config.ts): their documents are gone now.
   // Its proxy too, and then their networks (noon-9gz): each holds one of the daemon's few address pools,
   // and one with the proxy still on it cannot be removed.
+  const docker = (...args: string[]): void => { execFileSync("docker", args, { env: { ...process.env, PATH: path }, stdio: "ignore" }); };
   const list = (...args: string[]): string[] => execFileSync("docker", args, { env: { ...process.env, PATH: path }, encoding: "utf8" }).split("\n").filter(Boolean);
-  const leftovers = [...list("ps", "--all", "--quiet", "--filter", "label=noon.sandbox=noon-e2e"), ...list("ps", "--all", "--quiet", "--filter", "label=noon.proxy-pool=noon-e2e")];
-  if (leftovers.length > 0) execFileSync("docker", ["rm", "--force", ...leftovers], { env: { ...process.env, PATH: path }, stdio: "ignore" });
-  const networks = list("network", "ls", "--quiet", "--filter", "label=noon.sandbox=noon-e2e");
-  if (networks.length > 0) execFileSync("docker", ["network", "rm", ...networks], { env: { ...process.env, PATH: path }, stdio: "ignore" });
-  execFileSync("docker", ["compose", "start", "worker", "worker-sandbox", "worker-git", "worker-ship"], { env: { ...process.env, PATH: path }, stdio: "ignore" }); // setup.ts stopped them
+  const networks = (): string[] => list("network", "ls", "--quiet", "--filter", "label=noon.sandbox=noon-e2e");
+  try {
+    // The e2e sandbox worker is still up here (Playwright stops its servers after this) and may be starting or reaping
+    // a sandbox: a network it has just put a container on cannot be removed, so look again, a few times. It failed
+    // the run once with all 44 specs green, and left the compose workers stopped.
+    for (let pass = 0; pass < 5 && (pass === 0 || networks().length > 0); pass++) {
+      const leftovers = [...list("ps", "--all", "--quiet", "--filter", "label=noon.sandbox=noon-e2e"), ...list("ps", "--all", "--quiet", "--filter", "label=noon.proxy-pool=noon-e2e")];
+      if (leftovers.length > 0) docker("rm", "--force", ...leftovers);
+      for (const network of networks()) try { docker("network", "rm", network); } catch { /* still in use: the next pass */ }
+    }
+    if (networks().length > 0) throw new Error(`e2e sandbox networks could not be removed: ${networks().join(" ")}`);
+  } finally {
+    docker("compose", "start", "worker", "worker-sandbox", "worker-git", "worker-ship"); // setup.ts stopped them
+  }
 }
