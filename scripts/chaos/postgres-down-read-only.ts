@@ -21,7 +21,6 @@ import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "../../packages/session-token/src/index.ts";
 
 const api = process.env["API_URL"] ?? "http://localhost:3000";
-const syncUrl = process.env["SYNC_URL"] ?? "ws://localhost:3001";
 // Only the one key the AI and git peers sign with is read from .env; nothing else leaves that file.
 const secret = process.env["SESSION_TOKEN_SECRET"] ?? (existsSync(".env") ? parseEnv(readFileSync(".env", "utf8"))["SESSION_TOKEN_SECRET"] : undefined);
 if (secret === undefined) throw new Error("SESSION_TOKEN_SECRET is not set and .env has none: run ./init.sh");
@@ -54,10 +53,12 @@ const org = idOf(await post("/orgs", { name: "chaos read-only" }));
 const me = idOf(((await (await fetch(`${api}/auth/me`, { headers })).json()) as { user: unknown }).user);
 const workspace = idOf(await post(`/orgs/${org}/workspaces`, { name: "chaos" }));
 const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: "chaos read-only" }));
-const wsUrl = `${syncUrl}/documents/${doc}`;
-const signed = (actor: { kind: "agent" | "git"; runId: string }) => () => Promise.resolve({ wsUrl, token: signSessionToken({ userId: me, orgId: org, documentId: doc, secret, ttlSeconds: 600, actor }) });
+const session = async () => SessionResponse.parse(await post(`/documents/${doc}/session`));
+// /session's address with the worker's kind of token, as the workers dial: with two sync nodes (E7.1) the room is on
+// whichever took its lease, and a peer dialling `sync` by name waited for ever when that was `sync-2`.
+const signed = (actor: { kind: "agent" | "git"; runId: string }) => async () => ({ wsUrl: (await session()).wsUrl, token: signSessionToken({ userId: me, orgId: org, documentId: doc, secret, ttlSeconds: 600, actor }) });
 const peers = {
-  person: connectPeer({ manifest, session: async () => SessionResponse.parse(await post(`/documents/${doc}/session`)) }),
+  person: connectPeer({ manifest, session }),
   ai: connectPeer({ manifest, session: signed({ kind: "agent", runId: randomUUID() }) }),
   git: connectPeer({ manifest, session: signed({ kind: "git", runId: "c".repeat(40) }) }),
 };

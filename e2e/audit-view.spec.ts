@@ -24,6 +24,8 @@ test("an owner reads who signed in, changed roles and shares, ran the AI and shi
   await expect(page.getByRole("status")).toHaveText("live");
   const documentId = new URL(page.url()).searchParams.get("doc") ?? "";
   await page.goto("/");
+  // Home asks for the orgs once it knows who this is: signing out under that request makes it a 401 the browser logs.
+  await expect(page.getByRole("heading", { name: "Your organisations", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await form.getByLabel("Email").fill(owner);
   await form.getByLabel("Password").fill(password);

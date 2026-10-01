@@ -13,7 +13,7 @@ make -s sim || fail "3 (make sim)"
 # under the room, Ship twice, the revoke and the audit trail.
 make -s e2e-scenario || fail "2-7, 9, 10 (e2e:spec-scenario)"
 # 7 and 8 against the compose stack: a node killed, one paused past its lease, one cut off Redis; the worker killed mid-run.
-API_URL="http://localhost:${API_PORT:-3000}" SYNC_URL="ws://localhost:${SYNC_PORT:-3001}" make -s chaos || fail "7, 8 (make chaos)"
+API_URL="http://localhost:${API_PORT:-3000}" make -s chaos || fail "7, 8 (make chaos)"
 
 # 11: a sample-app prop changed without regenerating the manifest fails the gate's unit layer, naming the component.
 button=seed/sample-app/src/design-system/Button.tsx

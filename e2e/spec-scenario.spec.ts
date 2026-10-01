@@ -60,7 +60,10 @@ test("SPEC §8: sign-up to audit trail on two sync nodes, with the AI, git, a no
   const documentId = Document.parse(await created.json()).id;
   expect(JSON.stringify(await (await api.get(`/api/orgs/${org.id}/workspaces/${workspace.id}/documents`)).json())).toContain(documentId);
   expect((await request.get(`/api/orgs/${org.id}`)).status()).toBe(401); // nobody signed in
-  // Out and in again: the sign-in the org's audit trail hears of (at sign-up there was no org yet).
+  // Out and in again: the sign-in the org's audit trail hears of (at sign-up there was no org yet). Home's own
+  // request for the orgs first: signing out under it makes it a 401 the browser logs.
+  await page.reload();
+  await expect(page.getByRole("link", { name: `Audit trail of ${org.name}`, exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await form.getByLabel("Email").fill(owner);
   await form.getByLabel("Password").fill(password);
