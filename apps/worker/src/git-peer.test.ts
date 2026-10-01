@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { GitEvent } from "@noon/db";
 import { createGitPeer, type ChangedPage, type PeerStore } from "./git.ts";
 import { git, localOrigin, type LocalOrigin } from "./git-testing.ts";
@@ -7,6 +7,9 @@ import { pagePath } from "./sandbox.ts";
 
 // noon-wv8.3.1: which commit a push is diffed from. Real git (a local bare repo stands in for Gitea, as in
 // git.int.test.ts), an in-memory store in place of Postgres: no Docker, no database.
+// Each test spawns real git dozens of times (clone, commits, pushes, a mirror): a second alone, past vitest's 5 s
+// under a loaded `make check` (it timed out in a clean clone). The assertions are untouched; only the clock is honest.
+vi.setConfig({ testTimeout: 30_000 });
 
 const DOC = "0f9c7a0e-1b2c-4d3e-8f00-000000000001";
 const OTHER = "0f9c7a0e-1b2c-4d3e-8f00-000000000002";
