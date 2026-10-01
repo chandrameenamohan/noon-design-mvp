@@ -138,7 +138,13 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       documentId !== undefined && protocol === PROTOCOL && token !== undefined
         ? verifySessionToken({ token, secrets, documentId, leewaySeconds: TOKEN_LEEWAY_SECONDS })
         : undefined;
-    const refuse = (): void => void socket.end("HTTP/1.1 401 Unauthorized\r\nconnection: close\r\ncontent-length: 0\r\n\r\n");
+    // The socket came half-open (allowHalfOpen): end() closes only our side, and a client that never ends its own
+    // held the descriptor for ever (noon-cs6.3.4). Once the 401 is flushed, the connection is closed, as ws's own
+    // abortHandshake does.
+    const refuse = (): void => {
+      socket.once("finish", () => { socket.destroy(); });
+      socket.end("HTTP/1.1 401 Unauthorized\r\nconnection: close\r\ncontent-length: 0\r\n\r\n");
+    };
     if (documentId === undefined || !verified?.ok) {
       refuse();
       return;
