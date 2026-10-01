@@ -95,7 +95,7 @@ test("a body over 1 MiB is refused by its length before it is read; a big but re
 });
 
 test("every other route keeps its 64 KB limit", async () => {
-  const res = await ctx.fetch("/orgs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "x".repeat(70 * 1024) }) });
+  const res = await ctx.fetch("/orgs", { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body: JSON.stringify({ name: "x".repeat(70 * 1024) }) }); // refused unread, so the server closes that socket: kept in fetch's pool, it gave the next request ECONNRESET
   expect(res.status).toBe(413);
 });
 
