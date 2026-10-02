@@ -379,7 +379,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     }
     const asked = ++entry.asked;
     // Bounded like a journal call: a read on a silently hung connection would hold the sweep, which never overlaps
-    // itself, until TCP gave up (noon-dtf.2.2). Timed out, it fails, and recheck asks again.
+    // itself, until TCP gave up (noon-dtf.2.2). Timed out, it fails: an announced change asks again, the sweep at its next.
     const role = await bounded(roles(peer.session.orgId, documentId, peer.session.userId), "role read");
     if (asked < entry.applied) return ws.readyState === ws.OPEN; // a newer read already decided
     entry.applied = asked;
@@ -403,6 +403,12 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
           await applyRole(entry);
           return;
         } catch (err) {
+          // The sweep asks once: the next is sweepMs away, and a timed-out query still holds its pool slot, so a retry
+          // per session every recoverMs would pile load on a slow Postgres (noon-dtf.2.2).
+          if (change === "all") {
+            log(entry.documentId, `role not read again, the next sweep asks: ${err instanceof Error ? err.message : "unknown"}`);
+            return;
+          }
           log(entry.documentId, `role not read again, retrying: ${err instanceof Error ? err.message : "unknown"}`);
           await new Promise((resolve) => setTimeout(resolve, recoverMs).unref());
         }

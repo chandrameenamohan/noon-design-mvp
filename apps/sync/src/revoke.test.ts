@@ -69,9 +69,32 @@ test("a role read that never answers counts as failed and is asked again, so a s
   const outsider = join(server.url, documentId);
   await outsider.welcomed;
   revoked = true;
-  await server.recheck("all");
+  await server.recheck({ orgId: ORG, userId: outsider.userId }); // announced: asked again until it is answered
   expect(await outsider.closed).toBe(4404);
   expect(reads).toBe(2);
+});
+
+// noon-dtf.2.2: the sweep retried a timed-out read every recoverMs for each of a node's sessions at once, while the
+// timed-out query still held its pool slot: on a slow Postgres, ~1000 sessions' worth of extra load against the
+// journal's appends. The next sweep is sweepMs away; a sweep asks once.
+test("a sweep asks a role read that never answers once, and ends", async () => {
+  const documentId = randomUUID();
+  let reads = 0;
+  let hung = false;
+  server = await startSyncServer({
+    port: 0, secrets: [SECRET], journalTimeoutMs: 50, recoverMs: 10, sweepMs: 60_000,
+    roles: () => {
+      if (!hung) return Promise.resolve("editor");
+      reads += 1;
+      return new Promise<never>(() => undefined);
+    },
+  });
+  const peer = join(server.url, documentId);
+  await peer.welcomed;
+  hung = true;
+  await server.recheck("all");
+  await settle(100);
+  expect(reads).toBe(1);
 });
 
 // noon-dtf.2.3: the api announces a change once, best effort. With its Redis away (the sync nodes' up), only the sweep
