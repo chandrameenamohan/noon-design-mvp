@@ -467,6 +467,8 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     const { email, role } = await body(c, ShareBody);
     const member = await db.forOrg(c.var.doc.orgId).share({ documentId: c.var.doc.id, email, role, by: c.var.user.id });
     if (!member) return notFound(c); // nobody has that email (the api has no email to invite with)
+    // A member of the org at a higher role keeps it (the higher role is in effect): refused, not a 200 naming a role they would not have.
+    if (member === "below_org_role") return fail(c, 409, "share_below_org_role");
     await announce(c, { orgId: c.var.doc.orgId, userId: member.userId });
     return c.json(member);
   });

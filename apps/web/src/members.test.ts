@@ -10,7 +10,7 @@ test("every refusal the api can answer has a sentence, and last_owner says the o
   for (const refusal of memberRefusals) expect(memberRefusalWords(refusal)).toMatch(/^[A-Z].*\.$/);
   expect(memberRefusalWords("last_owner")).toContain("at least one owner");
   expect(memberRefusalWords("last_owner")).not.toContain("last_owner");
-  const shareRefusals: ShareRefusal[] = ["no_user", "forbidden", "gone"];
+  const shareRefusals: ShareRefusal[] = ["no_user", "below_org_role", "forbidden", "gone"];
   for (const refusal of shareRefusals) expect(shareRefusalWords(refusal)).toMatch(/^[A-Z].*\.$/);
   expect(shareRefusalWords("forbidden")).toContain("owner");
 });

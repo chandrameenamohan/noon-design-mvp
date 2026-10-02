@@ -101,3 +101,14 @@ test("a share changed shows at its new role, and a share revoked is gone from th
   expect(emailsOf((await call("owner", "GET", `/documents/${doc.id}/shares`)).json)).toEqual([who.viewer]);
   expect((await call("owner", "GET", `/documents/${doc.id}/shares?cursor=not-a-cursor`)).status).toBe(400);
 });
+
+test("noon-dtf.3.3: a share below the member's org role is 409 share_below_org_role and stores nothing; at or above it, 200", async () => {
+  const { doc } = await world();
+  const refused = await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.editor, role: "viewer" });
+  expect(refused.status).toBe(409);
+  expect(ErrorBody.parse(refused.json).error).toBe("share_below_org_role");
+  expect((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.owner, role: "editor" })).status).toBe(409);
+  expect(emailsOf((await call("owner", "GET", `/documents/${doc.id}/shares`)).json)).toEqual([who.outsider]); // nothing stored
+  expect(Member.parse((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.editor, role: "editor" })).json).role).toBe("editor");
+  expect(Member.parse((await call("owner", "PUT", `/documents/${doc.id}/shares`, { email: who.viewer, role: "viewer" })).json).role).toBe("viewer");
+});

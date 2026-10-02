@@ -241,6 +241,7 @@ export async function shareWith(documentId: string, email: string, role: "viewer
     return await send("PUT", `/documents/${encodeURIComponent(documentId)}/shares`, Member, { email, role });
   } catch (problem) {
     if (problem instanceof Refused && problem.status === 404) return "no_user"; // the document was open in this very page: a 404 here is the email's
+    if (problem instanceof Refused && problem.status === 409) return "below_org_role";
     if (problem instanceof Refused && problem.status === 403) return "forbidden";
     throw problem;
   }

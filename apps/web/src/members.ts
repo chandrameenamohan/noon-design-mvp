@@ -18,9 +18,11 @@ const MEMBER_REFUSALS: Record<MemberRefusal, string> = {
 export const memberRefusalWords = (refusal: MemberRefusal): string => MEMBER_REFUSALS[refusal];
 
 /** Why a share or a revoke was refused. A share is never `last_owner`: it is never owner (F25). */
-export type ShareRefusal = "no_user" | "forbidden" | "gone";
+export type ShareRefusal = "no_user" | "below_org_role" | "forbidden" | "gone";
 const SHARE_REFUSALS: Record<ShareRefusal, string> = {
   no_user: "Nobody has signed up with that email yet. Ask them to sign up first, then share with them.",
+  // The 409 share_below_org_role (noon-dtf.3.3): their org role is higher, and it is the one in effect.
+  below_org_role: "They are already a member of this organisation at a higher role, which is the role they have here. Change their role on the members page instead.",
   forbidden: "Only an owner of this document's organisation can share it or change who it is shared with.",
   gone: "This document cannot be found, or you can no longer open it.",
 };

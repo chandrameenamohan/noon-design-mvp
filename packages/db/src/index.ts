@@ -213,8 +213,12 @@ type OrgScope = {
   listMembers(page?: PageInput): Promise<Page<Member> | undefined>;
   /** E10.8: one page of the shares of this org's document, oldest first. Undefined = a bad cursor; a document not this org's has none. */
   listShares(documentId: string, page?: PageInput): Promise<Page<Member> | undefined>;
-  /** E8.3 (F25): shares this org's document with the user with this email, or changes their share. Undefined: no such user (or document). */
-  share(input: { documentId: string; email: string; role: ShareRole; by: string | undefined }): Promise<Member | undefined>;
+  /**
+   * E8.3 (F25): shares this org's document with the user with this email, or changes their share. Undefined: no such user
+   * (or document). "below_org_role": they are a member of the org at a higher role than `role`, which would be the role
+   * in effect (accessOf takes the higher), so the share is refused rather than answered with a role they would not have.
+   */
+  share(input: { documentId: string; email: string; role: ShareRole; by: string | undefined }): Promise<Member | "below_org_role" | undefined>;
   /** E8.3: the share goes. False: there was none. */
   unshare(documentId: string, userId: string, by: string | undefined): Promise<boolean>;
   createWorkspace(input: { name: string }): Promise<Workspace>;
@@ -988,15 +992,22 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         share: async ({ documentId, email, role, by }) => {
           const input = ShareBody.parse({ email, role });
           if (!orgExists || !isId(documentId) || (by !== undefined && !isId(by))) return undefined;
-          return one(
-            MemberRow,
-            // insert ... select: a row only when the document is this org's and the user exists; audited in the same statement.
-            "with s as (insert into document_shares (org_id, document_id, user_id, role) select d.org_id, d.id, u.id, $4 from documents d, users u " +
-              "where d.org_id = $1 and d.id = $2 and u.email = lower($3) on conflict (document_id, user_id) do update set role = excluded.role returning user_id, role), " +
+          const row = await one(
+            z.object({ id: z.string(), email: z.string(), name: z.string(), role: z.string().nullable() }),
+            // insert ... select: a row only when the document is this org's and the user exists, and is not a member of the
+            // org at a higher role than the share's (noon-dtf.3.3); audited in the same statement. `t` is found either way,
+            // so no row is "no such user" and a null role is "refused".
+            "with t as (select d.org_id, d.id as document_id, u.id as user_id, u.email, u.name from documents d, users u where d.org_id = $1 and d.id = $2 and u.email = lower($3)), " +
+              "s as (insert into document_shares (org_id, document_id, user_id, role) select t.org_id, t.document_id, t.user_id, $4 from t " +
+              "where not exists (select 1 from memberships m where m.org_id = t.org_id and m.user_id = t.user_id and " +
+              "array_position(array['viewer', 'editor', 'owner'], m.role) > array_position(array['viewer', 'editor', 'owner'], $4::text)) " +
+              "on conflict (document_id, user_id) do update set role = excluded.role returning user_id, role), " +
               `a as (insert into audit_log ${AUDIT_COLUMNS} select $1, ${actorOf("$5")}, 'share_granted', $2, jsonb_build_object('email', u.email, 'role', s.role) from s join users u on u.id = s.user_id) ` +
-              "select u.id, u.email, u.name, s.role from s join users u on u.id = s.user_id",
+              "select t.user_id as id, t.email, t.name, s.role from t left join s on s.user_id = t.user_id",
             [orgId, documentId, input.email, input.role, by ?? null],
           );
+          if (!row) return undefined;
+          return row.role === null ? "below_org_role" : MemberRow.parse(row);
         },
         unshare: async (documentId, userId, by) =>
           orgExists && isId(documentId) && isId(userId) && (by === undefined || isId(by)) &&

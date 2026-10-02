@@ -260,7 +260,7 @@ export type AuditPage = z.infer<typeof AuditPage>;
 
 /** Every non-2xx response has this shape. `issues` names the failing fields of a rejected body. */
 export const ErrorBody = z.object({
-  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "run_in_progress", "idempotency_key_reused", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "rate_limited", "internal"]),
+  error: z.enum(["invalid_json", "invalid_body", "invalid_query", "unsupported_media_type", "payload_too_large", "unauthenticated", "not_found", "forbidden", "last_owner", "share_below_org_role", "run_in_progress", "idempotency_key_reused", "preview_limit", "not_ready", "sync_unavailable", "email_taken", "invalid_credentials", "too_many_attempts", "rate_limited", "internal"]),
   issues: z.array(z.object({ field: z.string().min(1), message: z.string() })).optional(),
   /** With 429 rate_limited and too_many_attempts (F31): the same number as the Retry-After header, for a client that reads only the body. */
   retryAfterSeconds: z.number().int().min(1).optional(),
