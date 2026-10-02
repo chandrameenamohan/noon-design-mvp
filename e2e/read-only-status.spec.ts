@@ -29,7 +29,8 @@ test("the room's read-only status shows in the bar and as an alert, and the libr
   await expect(status).toHaveAttribute("data-read-only", "true");
   await expect(banner).toBeVisible();
   await expect(tile(page, "Card")).toHaveAttribute("aria-disabled", "true");
-  await tile(page, "Card").click();
+  // force: Playwright waits for an aria-disabled element to be enabled before clicking it; a person's click does not.
+  await tile(page, "Card").click({ force: true });
   await tile(page, "Card").press("Enter");
   await expect(nodes).toHaveCount(1); // nothing was added, by pointer or by keyboard
 
