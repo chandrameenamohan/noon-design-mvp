@@ -29,6 +29,6 @@ const scripted: RunAgent = async ({ instruction, tools, signal }) => {
 };
 
 const never = new AbortController().signal; // no polite shutdown: this process only ever dies by kill -9, or is removed
-const ai = createAiHandler({ sessions: sync.sessions, manifest, oauthToken: "stub", runAgent: scripted, ready: Promise.resolve(), stopping: never, stillMember: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId)) !== undefined, report: (job, progress) => db.jobStore().report({ queue: "ai", jobId: job.id, orgId: job.orgId, attempt: job.attempt }, progress) });
+const ai = createAiHandler({ sessions: sync.sessions, manifest, oauthToken: "stub", runAgent: scripted, ready: Promise.resolve(), stopping: never, roleOf: async (documentId, userId) => (await db.getDocumentForMember(documentId, userId))?.role, report: (job, progress) => db.jobStore().report({ queue: "ai", jobId: job.id, orgId: job.orgId, attempt: job.attempt }, progress) });
 await startWorker({ db, redisUrl: config.redisUrl, handlers: { ai }, sweepMs: 1000 });
 process.stdout.write("stub worker draining queues: ai\n");

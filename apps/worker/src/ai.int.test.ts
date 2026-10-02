@@ -12,7 +12,7 @@ const ctx = useSyncServer();
 const job = (instruction = "add a card"): Job => ({ id: randomUUID(), orgId: TEST_ORG, documentId: randomUUID(), queue: "ai", input: { instruction }, createdBy: randomUUID() });
 const usage = { model: "stub", inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
 const never = new AbortController().signal;
-const base = () => ({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), stillMember: () => Promise.resolve(true), stopping: new AbortController().signal, report: () => Promise.resolve() });
+const base = () => ({ sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, oauthToken: "stub", ready: Promise.resolve(), roleOf: () => Promise.resolve("editor" as const), stopping: new AbortController().signal, report: () => Promise.resolve() });
 const handlerWith = (runAgent: RunAgent) => createAiHandler({ ...base(), runAgent });
 /** A model that never finishes by itself: it ends only when the run's signal says so, as the real SDK does. */
 const forever: RunAgent = ({ signal }) => new Promise((_, reject) => { signal.addEventListener("abort", () => { reject(new Error("aborted")); }); });
@@ -93,12 +93,30 @@ test("an op the ROOM refuses (the document is full) is a tool error too, not a s
   }
 });
 
+test("a run whose creator is made a viewer DURING it stops at the room's first `forbidden`, instead of spending on refused ops (noon-dtf.2.4)", async () => {
+  // A room that reads everyone as a viewer: what a run sees once an owner demotes its creator mid-run.
+  const { startSyncServer } = await import("../../sync/src/server.ts");
+  const viewersOnly = await startSyncServer({ port: 0, secrets: [TEST_SECRET], roles: () => Promise.resolve("viewer") });
+  try {
+    let calls = 0;
+    const running = createAiHandler({ ...base(), sessions: { secret: TEST_SECRET, syncUrl: viewersOnly.url }, runAgent: async ({ tools, signal }) => {
+      while (!signal.aborted) { calls += 1; await call(tools, "add_node", { parentId: "root", component: "Card", props: {} }); }
+      throw new Error("aborted");
+    } })(job(), never);
+    await expect(running).rejects.toMatchObject({ reason: "forbidden" });
+    expect(calls).toBeLessThanOrEqual(2); // the first refusal ends it; the model is not left to try again and again
+  } finally {
+    await viewersOnly.close();
+  }
+});
+
 test.each([
   ["no token", () => ({ oauthToken: undefined }), "token_missing"],
   ["the startup probe failed", () => ({ ready: Promise.reject(new Error("tools_missing")) }), "tools_missing"],
   ["the sync server cannot be reached", () => ({ sessions: { secret: TEST_SECRET, syncUrl: "ws://127.0.0.1:1" } }), "sync_unreachable"],
   ["the user who started it no longer exists", () => ({}), "owner_missing"],
-  ["the user who started it has since been removed from the org", () => ({ stillMember: () => Promise.resolve(false) }), "owner_missing"],
+  ["the user who started it has since been removed from the org", () => ({ roleOf: () => Promise.resolve(undefined) }), "owner_missing"],
+  ["the user who started it has since been made a viewer", () => ({ roleOf: () => Promise.resolve("viewer" as const) }), "forbidden"],
 ] as const)("the run fails fast with a NAME when %s: the model is never called and the document is never even opened", async (label, override, reason) => {
   let called = false;
   const handler = createAiHandler({ ...base(), connectTimeoutMs: 500, runAgent: () => { called = true; return Promise.resolve(usage); }, ...override() });

@@ -17,6 +17,7 @@ const FAILURES: Partial<Record<string, string>> = {
   sync_unreachable: "The AI lost its connection to the document. What it had already changed stays.",
   worker_stopped: "The server was restarted during the run. What the AI had already changed stays.",
   owner_missing: "You are no longer a member of this document's organisation.",
+  forbidden: "You can no longer edit this document: an owner made you a viewer. What the AI had already changed stays.",
 };
 const sentence = (run: Run): string =>
   run.status === "queued" ? "The AI is waiting to start."

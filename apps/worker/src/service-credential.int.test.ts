@@ -52,7 +52,7 @@ test("a signed-in person starts an AI run and the agent's op reaches the room; a
   const sessions = { secret: TEST_SECRET, syncUrl: sync.server.url };
   const ai = createAiHandler({
     sessions, manifest, oauthToken: "stub", ready: Promise.resolve(), stopping: new AbortController().signal, report: () => Promise.resolve(),
-    stillMember: async (documentId, userId) => (await t.db.getDocumentForMember(documentId, userId)) !== undefined,
+    roleOf: async (documentId, userId) => (await t.db.getDocumentForMember(documentId, userId))?.role,
     runAgent: async ({ tools }) => {
       const added = await tools.find((tool) => tool.name === "add_node")?.run({ parentId: "root", component: "Card", props: {} });
       expect(added?.ok).toBe(true);

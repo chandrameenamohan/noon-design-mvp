@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { Manifest, Op, RunProgress, UsageAmount } from "@noon/contracts";
+import { includes, type Manifest, type Op, type Role, type RunProgress, type UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { roomUrl, stableOpId, type SyncSessions } from "./live.ts";
 import { withProgress } from "./progress.ts";
 import type { RunAgent } from "./sdk.ts";
-import { buildTools } from "./tools.ts";
+import { buildTools, type AgentPeer } from "./tools.ts";
 import { JobFailure } from "./worker.ts";
 
 export type { RunAgent };
@@ -29,11 +29,27 @@ export function replayIds(jobId: string): { opId: (op: Op) => string; nodeId: ()
 }
 
 /**
+ * The same peer, except that the room's first `forbidden` calls `onForbidden`. It means the run's creator may no
+ * longer edit (an owner made them a viewer during the run, noon-dtf.2.4): every op after it would be refused too, so
+ * the run stops instead of spending more of the model on edits that cannot land. The tool still gets its answer.
+ */
+export function stopOnForbidden(peer: AgentPeer, onForbidden: () => void): AgentPeer {
+  return {
+    get doc() { return peer.doc; },
+    submit(op) {
+      const submitted = peer.submit(op);
+      if (submitted.ok) void submitted.settled.then((outcome) => { if (!outcome.ok && outcome.reason === "forbidden") onForbidden(); });
+      return submitted;
+    },
+  };
+}
+
+/**
  * One AI run: join the document as a peer, hand the model our tools, leave. The agent edits through
  * @noon/peer-client like a browser tab does (the single write path), so its ops get the same
  * validation, the same ordering, the same rate limit and the same rollback as a person's.
  */
-export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, stillMember, stopping, report, connectTimeoutMs = 10_000, runTimeoutMs = 5 * 60_000 }: {
+export function createAiHandler({ sessions, manifest, oauthToken, runAgent, ready, roleOf, stopping, report, connectTimeoutMs = 10_000, runTimeoutMs = 5 * 60_000 }: {
   /** How THIS process reaches the document's room (inside Docker: ws://sync:3001), not the browsers' address. */
   sessions: SyncSessions;
   manifest: Manifest;
@@ -41,8 +57,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
   runAgent: RunAgent;
   /** The startup probe of the SDK's tool list. Rejected = no run may start. */
   ready: Promise<void>;
-  /** Asked when the run STARTS, which may be long after it was created: is that user still a member of the document's org? */
-  stillMember: (documentId: string, userId: string) => Promise<boolean>;
+  /** Asked when the run STARTS, which may be long after it was created: that user's role on the document now, undefined if none. */
+  roleOf: (documentId: string, userId: string) => Promise<Role | undefined>;
   /** Aborted when the worker is told to stop (SIGTERM). */
   stopping: AbortSignal;
   /** F30: the run's steps so far, after every tool call. Given the job's `attempt`, so a stale attempt's steps land nowhere. */
@@ -61,8 +77,11 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     if (stopping.aborted) throw new JobFailure("worker_stopped");
     const userId = job.createdBy;
     // The session is signed for the person the run acts for. They were a member when they asked; a run can
-    // wait in the queue, and being removed from the org must take effect on what has not started yet.
-    if (userId === undefined || !(await stillMember(job.documentId, userId))) throw new JobFailure("owner_missing");
+    // wait in the queue, and being removed from the org must take effect on what has not started yet. So must being
+    // made a viewer: the room would refuse every op, and the model's tokens would buy nothing (noon-dtf.2.4).
+    const role = userId === undefined ? undefined : await roleOf(job.documentId, userId);
+    if (userId === undefined || role === undefined) throw new JobFailure("owner_missing");
+    if (!includes(role, "editor")) throw new JobFailure("forbidden");
 
     const ids = replayIds(job.id);
     const peer = connectPeer({
@@ -76,12 +95,13 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
       }),
     });
     // A run must END, whatever happens around it. Left `running`, its row blocks this document's next
-    // run for ever (one unfinished run per document) and holds one of the worker's few slots. So three
-    // things can end it from outside, each with a name the user can read; whichever comes first wins.
+    // run for ever (one unfinished run per document) and holds one of the worker's few slots. So these
+    // things can end it from outside (and the room's `forbidden`, below), each with a name the user can read; whichever comes first wins.
     const abort = new AbortController();
     let watchdog: NodeJS.Timeout | undefined;
+    let end: (reason: string) => void = () => undefined;
     const ended = new Promise<never>((_, reject) => {
-      const end = (reason: string): void => { reject(new JobFailure(reason)); };
+      end = (reason) => { reject(new JobFailure(reason)); };
       stopping.addEventListener("abort", () => { end("worker_stopped"); }, { once: true, signal: abort.signal });
       cancelled.addEventListener("abort", () => { end("cancelled"); }, { once: true, signal: abort.signal }); // F10: the ops already applied stay // SIGTERM: say so NOW, inside the shutdown deadline
       const deadline = Date.now() + runTimeoutMs;
@@ -97,7 +117,7 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     ended.catch(() => undefined); // when the agent finishes first, nobody is left to hear this one
     // One write at a time, in order: a later list never lands before an earlier one. A failed write is left: the next carries every step.
     let reporting = Promise.resolve();
-    const tools = withProgress(buildTools(peer, manifest, ids.nodeId), (steps) => { reporting = reporting.then(() => report(job, { steps })).catch(() => undefined); });
+    const tools = withProgress(buildTools(stopOnForbidden(peer, () => { end("forbidden"); }), manifest, ids.nodeId), (steps) => { reporting = reporting.then(() => report(job, { steps })).catch(() => undefined); });
     try {
       const live = (async () => {
         // `!abort.signal.aborted`: when the run ends first, this wait must end too (it ticked for ever: a closed peer is never "live").
