@@ -33,6 +33,7 @@ test("a snapshot round-trips, and anything that is not a well-formed tree decode
 function rig({ from = 0, everyOps = 3, everyMs = 1000 } = {}) {
   const room = { seq: from, doc: emptyDoc(), peerCount: 1 };
   const written: number[] = [];
+  const tried: number[] = [];
   const control = { fail: false, hold: undefined as Promise<void> | undefined };
   const snap = snapshotter({
     room,
@@ -40,13 +41,14 @@ function rig({ from = 0, everyOps = 3, everyMs = 1000 } = {}) {
     cadence: { everyOps, everyMs },
     write: async (seq, body) => {
       await control.hold;
+      tried.push(seq);
       if (control.fail) throw new Error("minio down");
       expect(decodeSnapshot(body)).toBeDefined();
       written.push(seq);
     },
   });
   const accept = (): void => { room.seq++; snap.accepted(room.seq); };
-  return { room, written, control, snap, accept };
+  return { room, written, tried, control, snap, accept };
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -96,6 +98,26 @@ test("a failed write loses nothing: take says so, nothing counts as saved, and t
   expect(written).toEqual([2]);
   expect(await snap.take()).toBe(true); // nothing new
   expect(written).toEqual([2]);
+  snap.stop();
+});
+
+// noon-mo3.3.3: `saved` does not move on a failure, so every op past the threshold started another gzip, PUT and log
+// line while MinIO was away. An op now triggers a write only `everyOps` past the last ATTEMPT; the timer still retries.
+test("while writes fail, an op retries only N ops past the last attempt, not on every op; the timer still retries", async () => {
+  vi.useFakeTimers();
+  const { tried, written, control, snap, accept } = rig({ everyOps: 3, everyMs: 1000 });
+  control.fail = true;
+  for (let i = 0; i < 3; i++) { accept(); await vi.advanceTimersByTimeAsync(0); }
+  expect(tried).toEqual([3]);
+  accept(); await vi.advanceTimersByTimeAsync(0);
+  accept(); await vi.advanceTimersByTimeAsync(0);
+  expect(tried).toEqual([3]); // was [3, 4, 5]: one more gzip, PUT and log line per op
+  accept(); await vi.advanceTimersByTimeAsync(0);
+  expect(tried).toEqual([3, 6]);
+  control.fail = false;
+  await vi.advanceTimersByTimeAsync(1000); // the timer does not wait for N more ops
+  expect(written).toEqual([6]);
+  expect(snap.saved).toBe(6);
   snap.stop();
 });
 

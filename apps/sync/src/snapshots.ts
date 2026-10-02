@@ -104,6 +104,9 @@ type Source = { readonly seq: number; readonly doc: Doc; readonly peerCount: num
  */
 export function snapshotter({ room, from, cadence, write }: { room: Source; from: number; cadence: SnapshotCadence; write: (seq: number, body: Uint8Array) => Promise<void> }) {
   let saved = from;
+  // The newest seq a write was ATTEMPTED at (never behind `saved`). While MinIO is away `saved` stays put, and an op-triggered retry on every
+  // op past the threshold was a gzip, a failing PUT and a log line per op (noon-mo3.3.3); the timer still retries.
+  let attempted = from;
   let writing: Promise<unknown> | undefined;
 
   /** Snapshots the room as it is now, if it moved since the last one. True: stored (or nothing to store). Never rejects. */
@@ -112,6 +115,7 @@ export function snapshotter({ room, from, cadence, write }: { room: Source; from
     const seq = room.seq;
     if (seq <= saved) return true;
     // Read in the same tick as `seq`: the room edits `doc` in place, and only here is it exactly the document at `seq`.
+    attempted = Math.max(attempted, seq);
     const work = write(seq, encodeSnapshot(room.doc)).then(() => { saved = Math.max(saved, seq); return true; }, () => false);
     writing = work.finally(() => { writing = undefined; });
     return work;
@@ -123,7 +127,7 @@ export function snapshotter({ room, from, cadence, write }: { room: Source; from
     get saved() { return saved; },
     /** The room accepted an op numbered `seq`. */
     accepted(seq: number): void {
-      if (!writing && seq - saved >= cadence.everyOps) void take();
+      if (!writing && seq - attempted >= cadence.everyOps) void take();
     },
     take,
     stop(): void { clearInterval(timer); },
