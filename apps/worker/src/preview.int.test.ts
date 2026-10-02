@@ -108,7 +108,9 @@ test("a sandbox that dies is started again and given the current page, and the n
   const ended = handle(run, stop.signal);
   try {
     human.send(add("t", "root", "Text", { value: "before the crash" }));
-    await eventually(async () => (await pageIn(run.documentId)).includes("before the crash"), 30_000);
+    // And the first address announced: the page can be seen before it is (the handler pushes, then announces),
+    // and an announce still on its way would read the page of the container this test is about to remove.
+    await eventually(async () => urls.length > 0 && (await pageIn(run.documentId)).includes("before the crash"), 30_000);
     const reported = urls.length;
 
     sampling = true;
