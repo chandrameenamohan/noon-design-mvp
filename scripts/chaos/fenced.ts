@@ -9,8 +9,11 @@
 // Either way: the peers must find the other node through /session, the lease must move to it with a larger token,
 // the old owner must close its sockets (the witness is dropped, and the old owner logs why) and never append again (every row
 // of the journal is one the peers made, once; seqs 1..n, no gap, no duplicate: scripts/chaos/no-loss.ts). Edits made
-// AFTER the old owner is back must land too. How many appends the fence itself refused is read from the old owner's
-// log and reported (a paused owner usually notices its lost lease first; the fence is for the ones that do not).
+// AFTER the old owner is back must land too. These rounds do NOT see the fence itself refuse an append: the woken
+// owner's keeper marks the room lost before any frame is read, and the refusal, when one comes, is never logged by
+// the node (the room is already dropped). That proof is the Z.3 harness's: `deploy/antithesis/run.sh sync-paused`
+// holds an append in transit past the lease and finds it refused in Postgres's statement log (zombie-owner-append-
+// fenced and its guard, driver/checks.ts finallySutLogs); the refusal itself is packages/db/src/fence.int.test.ts (noon-98h.3.1).
 // Pitfalls (SPEC §4a): the fault opens while the workload is on the wire; waits poll the observable; it repeats; the
 // fault is undone in `finally`. Prints one JSON line; exit 0 = PASS. The org is deleted at the end.
 import { execFileSync } from "node:child_process";
@@ -98,7 +101,7 @@ const org = idOf(await post("/orgs", { name: `chaos ${name}` }));
 const me = idOf(((await (await fetch(`${api}/auth/me`, { headers })).json()) as { user: unknown }).user);
 const workspace = idOf(await post(`/orgs/${org}/workspaces`, { name: "chaos" }));
 
-async function round(n: number): Promise<{ round: number; from: string; to: string; fencedAppends: number; ops: number; journaled: number; violations: string[] }> {
+async function round(n: number): Promise<{ round: number; from: string; to: string; ops: number; journaled: number; violations: string[] }> {
   const doc = idOf(await post(`/orgs/${org}/workspaces/${workspace}/documents`, { title: `chaos ${name} ${String(n)}` }));
   const session = async () => SessionResponse.parse(await post(`/documents/${doc}/session`));
   const peers = {
@@ -153,10 +156,9 @@ async function round(n: number): Promise<{ round: number; from: string; to: stri
     const docs = all.map(([, p]) => JSON.stringify(p.confirmed));
     const violations = noLossViolations({ ledger: ledger.entries, journal, docs });
     const logs = compose("logs", "--no-color", "--since", since, back);
-    const fencedAppends = logs.split("\n").filter((line) => line.includes(doc) && line.includes("fenced by a newer owner")).length;
     // Why the witness was closed: the room was given up (lease lost, or fenced), not a heartbeat or a crash.
     if (!logs.split("\n").some((line) => line.includes(doc) && /lease \d+ (lost|fenced)/.test(line))) violations.push(`the old owner ${back} never logged giving the room up`);
-    return { round: n, from: back, to: after.node, fencedAppends, ops: ledger.entries.length, journaled: journal.length, violations };
+    return { round: n, from: back, to: after.node, ops: ledger.entries.length, journaled: journal.length, violations };
   } finally {
     watcher?.close();
     for (const [, p] of all) p.close();

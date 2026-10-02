@@ -161,8 +161,8 @@ No property failed. Two things the SUT does that the next bead (Z.3) must know t
    owner's traffic to Postgres by `2 x ttl + 2 s` first. And when the fence does refuse that append, the node logs
    only "lease 1 lost" and "journal append took 12151 ms", never `server.ts`'s "fenced by a newer owner's claim":
    the room was already dropped when the refusal came back. The refusal is visible in Postgres's statement log
-   alone (`driver/pglog.ts`, `finally_sut_logs`). Nothing is written, so not a bug; but `scripts/chaos/fenced.ts`
-   counts `fencedAppends` from the sync log, and that count says nothing either way.
+   alone (`driver/pglog.ts`, `finally_sut_logs`). Nothing is written, so not a bug. `scripts/chaos/fenced.ts` used
+   to count `fencedAppends` from the sync log, a count that said nothing either way: it is gone (noon-98h.3.1).
 2. **A killed or frozen worker's job is retried after BullMQ's stall check, not after `staleMs`.** The sweep puts
    the row back to `queued` once the heartbeat is stale (6 s here) and offers it again, but BullMQ still holds the
    dead worker's message as active under that job id and drops the offer. The run starts again only when BullMQ's
