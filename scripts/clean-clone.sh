@@ -25,6 +25,12 @@ cleanup() {
       docker ps --all --quiet --filter "label=$label" | xargs docker rm --force >/dev/null 2>&1
     done
     docker network ls --quiet --filter "label=noon.sandbox=$pool" | xargs docker network rm >/dev/null 2>&1
+    # Said, not silent (noon-cs6.1.2): the next run's worker replaces a stale proxy without a word, so nothing else
+    # would notice one left behind. The proxy is looked for by its NAME (sandbox.ts proxyName), not by the label the
+    # removal above used, so a wrong label shows here; sandboxes and networks have only their label to go by.
+    left=$( (docker ps --all --quiet --filter "name=^noon-sandbox-proxy-$pool\$"; docker ps --all --quiet --filter "label=noon.sandbox=$pool"; \
+      docker network ls --quiet --filter "label=noon.sandbox=$pool") | wc -l | tr -d ' ')
+    [ "$left" = 0 ] && echo "cleanup: pool $pool left nothing behind" || echo "WARN: cleanup left $left container(s)/network(s) of pool $pool behind"
   done
   rm -rf "$tmp"
 }
