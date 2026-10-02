@@ -377,6 +377,9 @@ a finding).
 - A pixel-perfect UI. Until epic Z the frontend only drives the backend; E10
   then gives it a polished editor that feels like Figma, in Noon's own style,
   over the same component tree (owner decision, 2026-09-30).
+  Its component library is a panel under the layers tree, not a tab beside
+  it: a tile dragged onto a layer row needs both on screen (owner decision,
+  2026-10-02).
 - Offering this to other users on a Claude subscription token (not permitted
   by Anthropic; an API key is required before anyone else uses it).
 
