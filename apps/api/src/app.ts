@@ -475,7 +475,8 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     return c.json(member);
   });
   document.delete("/shares/:userId", need("owner"), async (c) => {
-    const userId = c.req.param("userId");
+    // Lowercase, as every token carries it: the sync nodes match the announced id as a string (noon-dtf.3.2).
+    const userId = c.req.param("userId").toLowerCase();
     if (!(await db.forOrg(c.var.doc.orgId).unshare(c.var.doc.id, userId, c.var.user.id))) return notFound(c);
     await announce(c, { orgId: c.var.doc.orgId, userId });
     return c.body(null, 204);

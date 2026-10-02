@@ -17,6 +17,27 @@ test("without one, or without a URL, the preview is what was stored", () => {
   expect(publicPreview({ status: "running", url: null }, "https://noon.example.com")).toEqual({ status: "running", url: null });
 });
 
+// noon-dtf.3.2: Postgres matches a uuid in either case, the sync nodes compare the announced user id as a string with
+// the token's (lowercase). A revoke named in uppercase deleted the share but closed no live session until the 30 s sweep.
+test("a share revoked under an uppercase user id is announced under the lowercase one every token carries", async () => {
+  const userId = "5f0c2a8e-1b3d-4c5e-8f6a-7b8c9d0e1f2a";
+  const announced: { orgId: string; userId: string }[] = [];
+  const unshared: string[] = [];
+  const db = {
+    take: () => Promise.resolve({ ok: true }),
+    getDocumentForMember: () => Promise.resolve({ document: { id: doc, orgId: "org-1" }, role: "owner" }),
+    forOrg: () => ({ unshare: (_documentId: string, who: string) => { unshared.push(who); return Promise.resolve(true); } }),
+  } as unknown as Db;
+  const app = buildApp({
+    db, identify: () => Promise.resolve({ id: "owner-1", email: "o@example.com", name: "Owner" }), enqueue: () => Promise.resolve(),
+    sessions: { secret: "unused-in-this-test-0123456789abcdef", sync: { kind: "one", url: "ws://sync.test" }, ttlSeconds: 60 },
+    accessChanged: (change) => { announced.push(change); return Promise.resolve(); },
+  });
+  expect((await app.request(`/documents/${doc}/shares/${userId.toUpperCase()}`, { method: "DELETE" })).status).toBe(204);
+  expect(unshared).toEqual([userId]);
+  expect(announced).toEqual([{ orgId: "org-1", userId }]);
+});
+
 // E8.2 (F24): default deny. Every route about one org or one document names the least role it needs, and this is
 // the table of them: a new route without a `need` fails here, and so does a role changed without anyone meaning to.
 // noon-dtf.2.1: the table is EVERY route the app answers, not only those under /orgs/:orgId and /documents/:id, and a
