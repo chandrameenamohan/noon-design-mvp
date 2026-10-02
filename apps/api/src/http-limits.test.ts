@@ -67,6 +67,15 @@ test("public routes and unrecognised callers are charged per client address: X-F
   expect((await call("/orgs", { peer: "203.0.113.10" })).status).toBe(401);
 });
 
+test("IPv6 clients are charged per /64, so rotating through one's own block buys no fresh count", async () => {
+  const { call, charged } = app();
+  await call("/auth/me", { peer: "2001:db8:0:1::a" });
+  await call("/auth/me", { peer: "2001:db8:0:1::b" });
+  expect((await call("/auth/me", { peer: "2001:db8:0:1:ffff::1" })).status).toBe(429);
+  expect((await call("/auth/me", { peer: "2001:db8:0:2::a" })).status).toBe(200);
+  expect(charged).toEqual(["address:2001:db8:0:1::/64", "address:2001:db8:0:1::/64", "address:2001:db8:0:1::/64", "address:2001:db8:0:2::/64"]);
+});
+
 test("private peers are proxies only when TRUST_PROXY says so (compose: loopback,private)", async () => {
   const { call, charged } = app({ trust: "loopback,private" });
   await call("/auth/me", { peer: "192.168.65.1", headers: { "x-forwarded-for": "198.51.100.1" } });

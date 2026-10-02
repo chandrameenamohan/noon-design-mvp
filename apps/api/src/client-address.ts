@@ -64,3 +64,21 @@ export function clientAddress(peer: string | undefined, forwardedFor: string | u
   }
   return client; // every hop a trusted proxy: the furthest one
 }
+
+/** "1:2::" is ["1", "2"]; an IPv4 tail ("::1.2.3.4") is two groups, past the /64 and so never read. */
+const groups = (part: string): string[] => (part === "" ? [] : part.split(":").flatMap((group) => (group.includes(".") ? ["0", "0"] : [group])));
+
+/**
+ * What a client is counted as: an IPv4 address is itself, an IPv6 one its /64, the smallest block a host is given
+ * (SLAAC, RFC 6177), so a host rotating through its 2^64 addresses is still one count. ponytail: a /64 per key;
+ * ceiling: a client given a /48 still has 2^16 keys; upgrade: a looser second count per /48.
+ */
+export function rateKey(address: string): string {
+  const plain = unmap(address);
+  if (isIP(plain) !== 6) return plain;
+  const [head = "", tail] = plain.toLowerCase().replace(/%.*$/, "").split("::");
+  const left = groups(head);
+  const right = tail === undefined ? [] : groups(tail);
+  const full = [...left, ...Array<string>(8 - left.length - right.length).fill("0"), ...right];
+  return `${full.slice(0, 4).map((group) => Number.parseInt(group, 16).toString(16)).join(":")}::/64`;
+}

@@ -34,7 +34,7 @@ import type { Db, Rule } from "@noon/db";
 import { syncRouter, type Holder } from "@noon/lease";
 import { describeError, type JobRef } from "@noon/queue";
 import { signSessionToken } from "@noon/session-token";
-import { clientAddress, trustedProxies, type Trusted } from "./client-address.ts";
+import { clientAddress, rateKey, trustedProxies, type Trusted } from "./client-address.ts";
 import { AI_RUN_LIMIT, HTTP_LIMITS, SIGN_IN_TTL_SECONDS, type HttpLimits, type SessionConfig } from "./config.ts";
 import { SESSION_COOKIE, type Identify } from "./identity.ts";
 import { dummyHash, hashPassword, hashToken, isSessionToken, newSessionToken, verifyPassword } from "./password.ts";
@@ -231,8 +231,8 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // take throws and the answer is 500, closed: every one of these routes needs the database anyway.
   const UNLIMITED = new Set(["/health", "/ready", WEBHOOK_PATH]);
   const PUBLIC_PATHS = new Set(["/health", "/ready", WEBHOOK_PATH, "/auth/signup", "/auth/signin", "/auth/signout", "/auth/me"]);
-  // ponytail: an IPv6 address is its own key; ceiling: a client with a /64 has 2^64 of them; upgrade: key IPv6 by /64.
-  const addressOf = (c: Context) => clientAddress(peerOf(c), c.req.header("x-forwarded-for"), trustProxy) ?? "unknown";
+  // An IPv6 client is counted by its /64 (rateKey), or one host could rotate through 2^64 fresh counts.
+  const addressOf = (c: Context) => rateKey(clientAddress(peerOf(c), c.req.header("x-forwarded-for"), trustProxy) ?? "unknown");
   const byAddress = (c: Context) => db.take(`address:${addressOf(c)}`, limits.address);
   const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
     if (UNLIMITED.has(c.req.path)) return next();
