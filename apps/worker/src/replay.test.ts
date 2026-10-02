@@ -82,3 +82,23 @@ test("a retry that does something else at a replayed step is refused there, and 
   expect((await tool(again, "add_node").run({ parentId: "root", component: "Button", props: { label: "Pay" } })).ok).toBe(true);
   expect(Object.values(doc.current.nodes).map((n) => n.component).sort()).toEqual(["Button", "Page", "Stack"].sort());
 });
+
+// noon-elo.2.2: the dead attempt may have MOVED its node after adding it. The retry's add_node at that step is still
+// that node (same id, same component): done, not refused, or the model's next add would put a second one in.
+test("a replayed add_node whose node the dead attempt then moved is done, and the retry adds nothing twice", async () => {
+  const job = randomUUID();
+  const doc = { current: emptyDoc() };
+  const died = buildTools(peerOver(doc), manifest, replayIds(job).nodeId);
+  const outer = await tool(died, "add_node").run({ parentId: "root", component: "Stack" });
+  const inner = await tool(died, "add_node").run({ parentId: "root", component: "Stack" });
+  const [outerId = "", innerId = ""] = [outer, inner].map((r) => (JSON.parse(r.text) as { nodeId: string }).nodeId);
+  expect((await tool(died, "move_node").run({ nodeId: innerId, newParentId: outerId, index: 0 })).ok).toBe(true);
+
+  const retry = peerOver(doc);
+  const again = buildTools(retry, manifest, replayIds(job).nodeId);
+  expect(await tool(again, "add_node").run({ parentId: "root", component: "Stack" })).toEqual(outer);
+  expect(await tool(again, "add_node").run({ parentId: "root", component: "Stack" })).toEqual(inner);
+  expect(retry.sent).toEqual([]); // nothing reached the room
+  expect(Object.keys(doc.current.nodes)).toHaveLength(3); // root + the two
+  expect(doc.current.nodes[innerId]?.parentId).toBe(outerId); // still where the dead attempt moved it
+});

@@ -90,8 +90,9 @@ export function buildTools(peer: AgentPeer, manifest: Manifest, mintNodeId: () =
       { parentId: nodeId, component: z.string(), props: z.object({}).catchall(value).default({}).describe("prop name -> value; may be omitted"), index: z.number().int().optional().describe("position among the parent's children; omit to append") },
       ({ parentId, component, props, index }) => {
         const id = mintNodeId(); // the tool mints ids: a model would reuse "card1" across runs
-        // Same component under the same parent: the dead attempt's node for this step (a model that changed its mind gets the refusal, and a new id next time).
-        const replayed = (): boolean => { const there = nodeOf(peer.doc, id); return there?.component === component && there.parentId === parentId; };
+        // Same component: the dead attempt's node for this step (a model that changed its mind gets the refusal, and a new
+        // id next time). Not the parent: the dead attempt may have moved it since, and refusing would add it twice (noon-elo.2.2).
+        const replayed = (): boolean => nodeOf(peer.doc, id)?.component === component;
         return apply({ type: "add_node", nodeId: id, parentId, component, props, index: index ?? nodeOf(peer.doc, parentId)?.children.length ?? 0 }, { nodeId: id }, replayed);
       },
     ),
