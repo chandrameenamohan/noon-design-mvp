@@ -63,6 +63,8 @@ describe("integration:audit-written-all-event-types", () => {
     // 8. push_rejected: the worker's git peer refused a push to the document's branch (apps/worker/src/push.ts keepConflict).
     const commit = "c".repeat(40);
     await ctx.db.db.gitStore().recordConflict(doc.id, { commit, file: `src/pages/noon-${doc.id}.tsx`, reason: "spread", detail: "line 3" });
+    // noon-dtf.4.1: the same commit refused again (its git event resumed: the peer died before finishing it). No second row.
+    await ctx.db.db.gitStore().recordConflict(doc.id, { commit, file: `src/pages/noon-${doc.id}.tsx`, reason: "spread", detail: "line 3" });
 
     const entries = await readAll(org.id); // newest first: reversed, they are the order things happened in
     const byUser = { kind: "user", id: owner.id, email: who.owner };

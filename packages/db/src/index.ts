@@ -830,10 +830,14 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         // The rejected push goes into the document's org's audit trail in the same statement (F26). ponytail: the actor
         // is "git" and the commit, not the person who pushed; ceiling: the trail cannot name them; upgrade: keep the
         // webhook's pusher on git_events and copy it here.
+        // noon-dtf.4.1: once per (document, commit). A resumed event (its peer died after this write, before finishing
+        // it) refuses the same commit again, and the trail must not list one rejected push twice. ponytail: the guard
+        // reads the org's rows through audit_log_org; upgrade: a partial index on (document_id, detail ->> 'commit').
         await pool.query(
           "with c as (insert into document_conflicts (document_id, commit_sha, file, reason, detail) select id, $2, $3, $4, $5 from documents where id = $1 " +
             "on conflict (document_id) do update set commit_sha = excluded.commit_sha, file = excluded.file, reason = excluded.reason, detail = excluded.detail, created_at = now() returning document_id) " +
-            `insert into audit_log ${AUDIT_COLUMNS} select d.org_id, 'git', null, null, 'push_rejected', d.id, jsonb_build_object('commit', $2::text, 'file', $3::text, 'reason', $4::text) from c join documents d on d.id = c.document_id`,
+            `insert into audit_log ${AUDIT_COLUMNS} select d.org_id, 'git', null, null, 'push_rejected', d.id, jsonb_build_object('commit', $2::text, 'file', $3::text, 'reason', $4::text) from c join documents d on d.id = c.document_id ` +
+            "where not exists (select 1 from audit_log a where a.org_id = d.org_id and a.document_id = d.id and a.action = 'push_rejected' and a.detail ->> 'commit' = $2)",
           [documentId, c.commit, c.file, c.reason, c.detail],
         );
       },
