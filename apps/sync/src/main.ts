@@ -7,9 +7,11 @@ import { s3Snapshots } from "./snapshots.ts";
 
 const config = loadConfig(process.env);
 // noon-cs6.3.2: an open is a few reads in a row, each bounded; on a slow Postgres a fresh connection's handshake alone
-// could run past the bound, so one connection stays open, opened now rather than by the first peer.
-// ponytail: one warm; ceiling: reads at the same instant (two opens, a sweep) still open more; upgrade: warm = that count.
-const db = createDb({ connectionString: config.databaseUrl, warm: 1 });
+// could run past the bound, so connections stay open: three, for an open's read landing on the role sweep's (two
+// sessions read at once). The first is opened now rather than by the first peer.
+// ponytail: three warm; ceiling: more than three reads at the same instant (many opens at once) still open more;
+// upgrade: size it from the sweep's fan-out, or batch the sweep's role reads into one query.
+const db = createDb({ connectionString: config.databaseUrl, warm: 3 });
 void db.ping().catch(() => undefined); // Postgres away: the first read connects instead
 const snapshots = s3Snapshots(config.minio);
 await snapshots.ensureBucket(); // fails the start, like a missing variable: a sync without MinIO cannot open a snapshotted document
