@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, test } from "vitest";
 import WebSocket from "ws";
+import { SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { signSessionToken } from "@noon/session-token";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
@@ -41,4 +42,16 @@ test("a load that never answers is 'try again' (4503) within the journal bound, 
 });
 test("a replay of the journal that never answers is 'try again' (4503) within the journal bound", async () => {
   expect(await closeCodeOf(fakeStore({ since: never }))).toBe(4503);
+});
+
+// noon-mo3.1.2: since() runs every row through the contract. A row that no longer passes it (corrupted, or written
+// before a schema change) made since() reject, and the open answered 4503 "try again" with nothing logged: every
+// later open did the same, for ever. It is damage, as a malformed snapshot is: 4500, logged. A failed query stays 4503.
+test("a journal row the contract refuses is a corrupt document (4500), logged", async () => {
+  const refused = SequencedOp.safeParse({ seq: 1, op: { type: "no_such_op" } });
+  if (refused.success) throw new Error("the row was meant to be refused");
+  expect(await closeCodeOf(fakeStore({ since: () => Promise.reject(refused.error) }))).toBe(4500);
+});
+test("a journal query that fails is still 'try again' (4503)", async () => {
+  expect(await closeCodeOf(fakeStore({ since: () => Promise.reject(new Error("connection terminated")) }))).toBe(4503);
 });

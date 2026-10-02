@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import { z } from "zod";
 import { ClientMessage, type Doc, type HealthResponse, type Role, type SequencedOp } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { keepLease, takeLease, type Holder, type Leases } from "@noon/lease";
@@ -306,12 +307,17 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     // must never open on top of a corrupt document: every later op would build on the damage.
     if (checkDoc(doc).length > 0) return { closeCode: CLOSE.documentCorrupt };
     try {
+      // applyOpInto never throws: a row that no longer applies changes nothing, as it did when the room first ordered it.
       for (const row of await bounded(store.since(orgId, documentId, seq))) {
         applyOpInto(doc, row.op);
         seq = row.seq;
       }
-    } catch {
-      return { closeCode: CLOSE.unavailable };
+    } catch (err) {
+      // A row the contract refuses (corrupted, or from before a schema change) fails every later open the same way:
+      // damage, like a malformed snapshot, not an outage to wait out (noon-mo3.1.2).
+      if (!(err instanceof z.ZodError)) return { closeCode: CLOSE.unavailable };
+      log(documentId, `a journal row after seq ${String(seq)} is not a well-formed op: ${err.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
+      return { closeCode: CLOSE.documentCorrupt };
     }
     // A timed-out append may still land later: the room treats it as failed, and recover() replays it if it did.
     // A fenced one never lands: the room is dropped, not healed (a newer owner is writing).
