@@ -75,6 +75,9 @@ export function Canvas({ documentId }: { documentId: string }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   // The Share dialog (E10.8), an owner's: who this document is shared with, and with whom to share it.
   const [shareOpen, setShareOpen] = useState(false);
+  // Only an owner has the dialog: if the session comes back as anything less (another owner demoted this person while it
+  // was open), it closes for good, or the closed-but-open dialog would go on swallowing every global shortcut below.
+  useEffect(() => { if (role !== "owner") setShareOpen(false); }, [role]);
   // The global shortcuts (shortcuts.ts, scope "global"): anywhere in the editor, unless the person is typing
   // or a modal is up. A widget's own handler runs first and, finding no action of its own, lets the key bubble here.
   useEffect(() => {

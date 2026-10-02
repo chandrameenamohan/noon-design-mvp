@@ -21,8 +21,8 @@ const axeClean = async (page: Page, theme: string): Promise<void> => {
   expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
 };
 /** A fresh document of the owner's (an org of their own comes with it), live, and its id. */
-async function newDocument(page: Page): Promise<string> {
-  await page.goto(`/?user=${owner}`);
+async function newDocument(page: Page, user = owner): Promise<string> {
+  await page.goto(`/?user=${user}`);
   await page.getByRole("button", { name: "New document", exact: true }).click();
   await expect(page.getByRole("status")).toHaveText("live");
   const id = new URL(page.url()).searchParams.get("doc");
@@ -130,4 +130,25 @@ test("the owner shares from the bar's dialog; the outsider edits live, is made a
   await expect(watcher.getByRole("button", { name: "Share", exact: true })).toHaveCount(0);
   expect((await request.get(`/api/documents/${documentId}/shares`, as(viewer))).status()).toBe(403);
   await watcher.close();
+});
+
+// noon-2h1.8.2: an owner with the dialog open is demoted by another owner. Their session comes back as an editor's, the
+// Share button and its dialog go, and the global shortcuts work again (the dialog's open state no longer outlives it).
+test("an owner demoted while the Share dialog is open loses the dialog, and the global shortcuts work again", async ({ page, request }) => {
+  const first = `e2e-${stamp}-share-demoted@example.com`;
+  const second = `e2e-${stamp}-share-coowner@example.com`;
+  expect((await request.get("/api/auth/me", as(second))).status()).toBe(200);
+  await newDocument(page, first);
+  const org = Org.parse(((await (await request.get("/api/orgs", as(first))).json()) as { items: unknown[] }).items.at(-1));
+  expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(first), data: { email: second, role: "owner" } })).status()).toBe(200);
+
+  await page.getByRole("button", { name: "Share", exact: true }).click();
+  await expect(dialogOf(page)).toBeVisible();
+  expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(second), data: { email: first, role: "editor" } })).status()).toBe(200);
+  // F24: the room closes the session within 10 s; the reconnect mints one that says "editor".
+  await expect(page.getByRole("button", { name: "Share", exact: true })).toHaveCount(0, { timeout: 15_000 });
+  await expect(dialogOf(page)).toHaveCount(0);
+  await expect(page.getByRole("status").first()).toHaveText("live");
+  await page.keyboard.press("?");
+  await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
 });
