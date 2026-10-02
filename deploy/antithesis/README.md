@@ -168,6 +168,9 @@ No property failed. Two things the SUT does that the next bead (Z.3) must know t
    dead worker's message as active under that job id and drops the offer. The run starts again only when BullMQ's
    own stalled-job check re-delivers it: measured 62 s after the dead worker's last heartbeat. Shortening `staleMs`
    does not shorten the retry. Within the property (the job resumes, and not before it is stale).
+   Fixed since (`noon-elo.2.6`, not yet re-run here): the workers' BullMQ lock lasts `staleMs` and their stall check
+   runs every `sweepMs`, so the message is free about when the row is: the bound is now `staleMs` plus a few sweeps
+   (about 25 s with the app's 15 s and 5 s; Z.3's 6 s stale and 1 s sweeps: about 9 s).
 
 Z.3's findings (a sync node killed by a reset on a refused upgrade, fixed; what a slow Postgres does to opening a
 document; what a job-store outage longer than `staleMs` does to a healthy run) are in

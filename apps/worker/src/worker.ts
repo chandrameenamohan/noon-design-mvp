@@ -161,8 +161,14 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
   // BullMQ's own retries and stalled-job checks are not what brings a job back: Postgres is (the sweep below).
   // A message whose worker died is either re-delivered by BullMQ (claim() refuses it while the row still says
   // running, then takes it once the sweep has put the row back) or dropped, and the sweep offers the row again.
+  // But BullMQ must let go of it: while the dead worker's message is still `active`, the sweep's offer under the same
+  // jobId is a no-op, and with BullMQ's defaults (a 30 s lock, a stall check every 30 s, two checks to see a stall) a
+  // killed worker's job came back ~62 s after its last beat, whatever staleMs said (noon-elo.2.6). So the lock lasts
+  // staleMs and the check runs every sweep: the message is free about when the row is (staleMs and a few sweeps: two
+  // stall checks, and one more offer if the freed message reached a worker before the row was queued again).
+  // A live worker frozen past staleMs loses its message too, which is harmless: claim() refuses it while the row runs.
   const workers = QUEUES.filter((name) => handlers[name] !== undefined).map((name) => {
-    const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: concurrency[name] ?? 4, ...scoped });
+    const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: concurrency[name] ?? 4, lockDuration: staleMs, stalledInterval: sweepMs, ...scoped });
     worker.on("error", (err) => log("warn", describeError(err), { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
     return worker;
   });

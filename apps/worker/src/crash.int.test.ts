@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
-import { Queue } from "bullmq";
+import { Queue, Worker } from "bullmq";
 import { connection, createProducer, type Producer } from "@noon/queue";
 import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
@@ -59,6 +59,26 @@ test("a job left running by a dead worker runs again once its heartbeat is stale
   expect(Date.now() - startedAt).toBeGreaterThanOrEqual(900); // not before its beat went stale: a live worker's job is never taken
   expect(attempts).toEqual([2]);
   expect(await row(key.jobId)).toMatchObject({ status: "succeeded", error: null, attempts: 2 });
+});
+
+// noon-elo.2.6: the dead worker's message is still `active` in BullMQ, so the sweep's offer under the same jobId is a
+// no-op until BullMQ lets go of it. With its defaults (30 s lock, 30 s stall checks) that was ~62 s after the last beat.
+test("a job whose dead worker still holds its BullMQ message runs again within staleMs and a few sweeps, not BullMQ's 30 s checks", async () => {
+  const key = await aJob();
+  // The dead worker: it took the message and claimed the job, then stopped without a word (no completion, no
+  // more lock renewals). Its lock is the one our workers take: staleMs long.
+  const dead = new Worker("ai", async (message) => {
+    await db.db.jobStore().claim(message.data as typeof key);
+    await new Promise(() => undefined);
+  }, { connection: connection(TEST_REDIS_URL), prefix, lockDuration: 1000 });
+  await producer.enqueue(key);
+  await until(async () => (await row(key.jobId)).status === "running", "the dead worker claimed it");
+  await dead.close(true);
+  const startedAt = Date.now();
+  await work(() => Promise.resolve(undefined), 1000);
+  await until(async () => (await row(key.jobId)).status === "succeeded", "the job succeeded on the live worker", 10_000);
+  expect(Date.now() - startedAt).toBeLessThan(10_000); // 1 s stale + a few 100 ms sweeps; BullMQ's defaults took 30 s and more
+  expect(await row(key.jobId)).toMatchObject({ status: "succeeded", attempts: 2 });
 });
 
 test("while its worker beats, a long job is never taken from it, however long it runs", async () => {
