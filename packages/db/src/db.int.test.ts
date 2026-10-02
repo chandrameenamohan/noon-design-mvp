@@ -32,6 +32,15 @@ test("running migrations again changes nothing", async () => {
   expect(await t.db.appliedMigrations()).toEqual(before);
 });
 
+test("a stack that applied git_skipped and git_not_before under their old numbers migrates past the renumbering", async () => {
+  // noon-wv8.3.3: 765de37 renamed 0022_git_skipped/0023_git_not_before to 0023/0024; history is keyed by name, so
+  // such a stack runs both again. They must change nothing the second time.
+  await t.rawQuery("update schema_migrations set name = '0022_git_skipped.sql' where name = '0023_git_skipped.sql'");
+  await t.rawQuery("update schema_migrations set name = '0023_git_not_before.sql' where name = '0024_git_not_before.sql'");
+  await t.db.migrate();
+  expect(await t.db.appliedMigrations()).toEqual(expect.arrayContaining(["0023_git_skipped.sql", "0024_git_not_before.sql"]));
+});
+
 test("a workspace created in org A is visible to A and invisible to B", async () => {
   const a = await t.createOrg("Acme");
   const b = await t.createOrg("Globex");

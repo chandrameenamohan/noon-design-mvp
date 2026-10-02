@@ -3,7 +3,9 @@
 -- on no more: applying it would set its pages back. It ends `skipped`, not `done`: the git peer diffs each push
 -- from the branch's newest DONE event, and an old commit counted there would make the next push replay what was
 -- already applied over the canvas.
-alter table git_events drop constraint git_events_status_check;
+-- Safe to run twice: a stack that applied it as 0022_git_skipped.sql runs it again under this name.
+alter table git_events drop constraint if exists git_events_status_check;
 alter table git_events add constraint git_events_status_check check (status in ('pending', 'running', 'done', 'failed', 'skipped'));
-alter table git_events drop constraint git_events_check;
+alter table git_events drop constraint if exists git_events_check;
+alter table git_events drop constraint if exists git_events_finished;
 alter table git_events add constraint git_events_finished check ((finished_at is not null) = (status in ('done', 'failed', 'skipped')));
