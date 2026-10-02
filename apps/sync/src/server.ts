@@ -271,7 +271,9 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     if (!store) return { room: createRoom({ doc: emptyDoc(), manifest, limits: roomLimits, ...(rate ? { rate } : {}) }), orgId };
     let stored;
     try {
-      stored = await store.load(orgId, documentId);
+      // Bounded, like the room's own journal calls: a database that takes the query and never answers would hold every
+      // peer of this document for ever, with no "try again" (noon-mo3.3.4).
+      stored = await bounded(store.load(orgId, documentId));
     } catch {
       return { closeCode: CLOSE.unavailable }; // the database is down: "try again", NOT "your document is broken"
     }
@@ -304,7 +306,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     // must never open on top of a corrupt document: every later op would build on the damage.
     if (checkDoc(doc).length > 0) return { closeCode: CLOSE.documentCorrupt };
     try {
-      for (const row of await store.since(orgId, documentId, seq)) {
+      for (const row of await bounded(store.since(orgId, documentId, seq))) {
         applyOpInto(doc, row.op);
         seq = row.seq;
       }
