@@ -189,6 +189,13 @@ test("a sandbox of an older image, or signed with an older key, is made anew wit
   await startSandbox(newDocument(), options);
 }, 120_000);
 
+test("a pool proxy removed behind the worker's back (docker rm, a prune) is made again by the next start (noon-9gz.1)", async () => {
+  await startSandbox(newDocument(), options); // this process now remembers the proxy as made
+  await docker("rm", "--force", `noon-sandbox-proxy-${pool}`);
+  const again = await startSandbox(newDocument(), options);
+  expect((await fetch(again.url)).status).toBe(200);
+}, 120_000);
+
 test("the URL names the proxy's loopback address, so a listener on ::1 cannot answer for it", async () => {
   // `localhost` may resolve to ::1 first, where Docker did not bind and anything else may listen.
   expect((await startSandbox(newDocument(), options)).url).toMatch(TOKENED);

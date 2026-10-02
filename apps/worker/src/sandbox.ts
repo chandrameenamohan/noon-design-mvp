@@ -139,7 +139,13 @@ async function start(documentId: string, options: SandboxOptions): Promise<Sandb
     if (await create(run, name, documentId, options)) await deliverSeed(docker, name, options.seed, deadline);
     // Every start, not only the first: a proxy made anew since (a new key, a new program) is on no
     // sandbox's network until it is joined again.
-    await join(run, name, proxyName(options.pool));
+    await join(run, name, proxyName(options.pool)).catch(async (err: unknown) => {
+      // The proxy this process made sure of is gone (docker rm, a prune) while it lived: forget it, make it again, once (noon-9gz.1).
+      if (!String(err).includes("No such container")) throw err;
+      proxies.delete(options.pool);
+      await ensureProxy(run, options.pool, options.image, options.previewKey, proxyPort);
+      await join(run, name, proxyName(options.pool));
+    });
     await ready(run, name, deadline);
     // The base is read AFTER the dev server answered, from the container that answered: never one
     // remembered from before a restart that somebody else may have finished differently.
