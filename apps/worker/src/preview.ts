@@ -30,14 +30,14 @@ export function createPreviewHandler({ sessions, manifest, sandbox, stopping, st
   /** Asked when the job STARTS, which may be long after it was created. */
   stillMember: (documentId: string, userId: string) => Promise<boolean>;
   /** Where the canvas learns the address to put in its iframe: null while the sandbox is down ("rebuilding"), then the new one. */
-  reportUrl: (job: Job, url: string | null) => Promise<void>;
+  reportUrl: (job: Job & { attempt?: number }, url: string | null) => Promise<void>;
   tickMs?: number;
   /** Pushes closer than this outrun the dev server's own file watcher (learning-tests/sandbox FINDINGS 2). */
   paceMs?: number;
   aliveEveryMs?: number;
   /** How long the document may have nobody in it before the preview stops following it. */
   idleMs?: number;
-}): (job: Job, cancelled: AbortSignal) => Promise<undefined> {
+}): (job: Job & { attempt?: number }, cancelled: AbortSignal) => Promise<undefined> {
   return async (job, cancelled) => {
     const userId = job.createdBy;
     if (userId === undefined || !(await stillMember(job.documentId, userId))) throw new JobFailure("owner_missing");

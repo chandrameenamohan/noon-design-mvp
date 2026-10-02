@@ -14,6 +14,8 @@ type JobKey = JobRef & { attempt: number };
 /** A process drains ONLY the queues it has a handler for: the AI worker never holds the Docker socket the sandbox needs. */
 /** `job.attempt`: the claim this run holds (F28); whatever the handler reports under it lands only while it is the latest. */
 export type Handlers = Partial<Record<QueueName, (job: Job & { attempt: number }, cancelled: AbortSignal, spent: (sofar: UsageAmount) => void) => Promise<UsageAmount | undefined>>>;
+/** The key a handler's writes go under: the job, and the attempt that holds it (F28), so a stale attempt's write lands nowhere (noon-wv8.6.2). */
+export const attemptKey = (job: Job & { attempt?: number }): JobRef & { attempt?: number | undefined } => ({ queue: job.queue, jobId: job.id, orgId: job.orgId, attempt: job.attempt });
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */

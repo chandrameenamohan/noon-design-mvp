@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { UsageAmount } from "@noon/contracts";
-import { JobFailure, runAttempt, type Handlers } from "./worker.ts";
+import { attemptKey, JobFailure, runAttempt, type Handlers } from "./worker.ts";
 
 // noon-37s: whatever way an attempt ends, what it consumed is recorded ONCE, before the row is finished, and the
 // bookkeeping never changes how it ended.
@@ -42,4 +42,10 @@ test("a run that spent nothing records nothing", async () => {
 test("a usage row that cannot be written never masks how the run ended", async () => {
   expect((await attempt((_job, _signal, spent) => { spent(spend(1)); return Promise.reject(new JobFailure("rate_limited")); }, { recordFails: true })).calls).toEqual(["record", "finish failed rate_limited"]);
   expect((await attempt(() => Promise.resolve(spend(1)), { recordFails: true })).calls).toEqual(["record", "finish succeeded"]);
+});
+
+// noon-wv8.6.2: whatever a handler reports goes under the attempt that holds the job. Without it the fence is off,
+// and a slow attempt 1 could write its output over attempt 2's (Ship's {commit, pr}) while the job runs.
+test("a handler's writes are keyed by the job AND its attempt", () => {
+  expect(attemptKey({ ...job, queue: "ship", attempt: 2 })).toEqual({ queue: "ship", jobId: "j1", orgId: "o1", attempt: 2 });
 });

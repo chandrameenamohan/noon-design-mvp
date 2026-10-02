@@ -13,7 +13,7 @@ import { reapSandboxes } from "./sandbox.ts";
 import { createShipHandler } from "./ship.ts";
 import { probeTools, sdkRunner } from "./sdk.ts";
 import { buildTools } from "./tools.ts";
-import { startWorker, type Handlers } from "./worker.ts";
+import { attemptKey, startWorker, type Handlers } from "./worker.ts";
 
 const config = loadConfig(process.env); // refuses to start when ANTHROPIC_API_KEY is set
 const db = createDb({ connectionString: config.databaseUrl });
@@ -32,7 +32,7 @@ function aiHandlers(): Handlers {
   // still reach a terminal status the user can read): it fails every run as `tools_missing`.
   const ready = probeTools(buildTools({ submit: () => ({ ok: false, reason: "not_ready" }), get doc(): never { throw new Error("the probe calls no tool"); } }, manifest));
   ready.then(() => process.stdout.write("agent tools registered and isolated\n"), (err: unknown) => { log(`agent tool probe failed: ${describeError(err)}`); });
-  return { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, roleOf, report: (job, progress) => db.jobStore().report({ queue: "ai", jobId: job.id, orgId: job.orgId, attempt: job.attempt }, progress), runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
+  return { ai: createAiHandler({ sessions: sync.sessions, manifest, oauthToken: config.oauthToken, ready, stopping: stopping.signal, roleOf, report: (job, progress) => db.jobStore().report(attemptKey(job), progress), runAgent: sdkRunner({ model: config.model, oauthToken: config.oauthToken ?? "" }) }) };
 }
 function sandboxHandlers(): Handlers {
   const sandbox = { image: config.sandbox.image, docker: config.sandbox.docker, pool: config.sandbox.pool, proxyPort: config.sandbox.proxyPort, previewKey: config.sandbox.previewKey, seed: config.sandbox.seed };
@@ -50,7 +50,7 @@ function sandboxHandlers(): Handlers {
   return {
     sandbox: createPreviewHandler({
       sessions: sync.sessions, manifest, sandbox, stopping: stopping.signal, stillMember,
-      reportUrl: (job, url) => db.jobStore().report({ queue: "sandbox", jobId: job.id, orgId: job.orgId }, url === null ? null : { url }),
+      reportUrl: (job, url) => db.jobStore().report(attemptKey(job), url === null ? null : { url }),
     }),
   };
 }
@@ -60,7 +60,7 @@ function shipHandlers(): Handlers {
   return {
     ship: createShipHandler({
       sessions: sync.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
-      report: (job, output) => db.jobStore().report({ queue: "ship", jobId: job.id, orgId: job.orgId }, output),
+      report: (job, output) => db.jobStore().report(attemptKey(job), output),
     }),
   };
 }

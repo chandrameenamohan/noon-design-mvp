@@ -182,10 +182,10 @@ export function createShipHandler({ sessions, manifest, seed, stopping, stillMem
   /** Asked when the job STARTS, which may be long after it was created. */
   stillMember: (documentId: string, userId: string) => Promise<boolean>;
   /** Writes the job's output (jobs.output): what the canvas shows. Each commit also goes into ship_commits, which the git peer skips, whichever attempt made it (noon-91u). */
-  report: (job: Job, output: ShipOutput) => Promise<void>;
+  report: (job: Job & { attempt?: number }, output: ShipOutput) => Promise<void>;
   connectTimeoutMs?: number;
   fetchImpl?: typeof fetch;
-}): (job: Job, cancelled: AbortSignal) => Promise<undefined> {
+}): (job: Job & { attempt?: number }, cancelled: AbortSignal) => Promise<undefined> {
   /** The room's CONFIRMED document: never the optimistic one, never a copy in Postgres that may be behind the room. */
   async function readDocument(job: Job, userId: string): Promise<Doc> {
     const peer = readingPeer(job, userId, sessions, manifest); // for the person who pressed Ship
