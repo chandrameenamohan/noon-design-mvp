@@ -57,8 +57,8 @@ import { Page } from "@PAGE@";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("the preview is missing #root");
-// The canvas names the document it expects (?doc=). A stale iframe reconnecting to a port another
-// document's sandbox took meanwhile asks for the wrong one, and gets nothing of it.
+// The canvas names the document it expects (?doc=). The proxy already routes /preview/<document>/<token>/
+// to that document's sandbox alone (noon-9gz); this is the second lock, should a page ever be served for the wrong one.
 if (new URLSearchParams(location.search).get("doc") === "@DOC@") createRoot(root).render(<StrictMode><Page /></StrictMode>);
 else root.textContent = "This preview belongs to another document. Reload the canvas.";
 EOF
@@ -102,9 +102,10 @@ const lockTheOrigin = () => ({
 });
 
 /**
- * The worker's PREVIEW_BASE, /preview/<document>/<port>/: the canvas's dev server can carry this one on its
+ * The worker's PREVIEW_BASE, /preview/<document>/<token>/: the canvas's dev server can carry this one on its
  * own origin (noon-l96). Everything outside it is a bare 404, before Vite's own answer, which NAMES the base
- * ("did you mean to visit /preview/<document>/...") and would hand the document id to anyone trying ports.
+ * ("did you mean to visit /preview/<document>/<token>/...") and would hand this container's token to anyone
+ * holding an earlier one of the same document (sandbox-proxy.ts).
  */
 const BASE = process.env.PREVIEW_BASE ?? "/";
 const onlyUnderTheBase = () => ({
