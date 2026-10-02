@@ -1,18 +1,21 @@
 # HANDOFF: Noon-like MVP
 
-Updated 2026-10-01 ~20:20. **`main` = `4d485c8`**, pushed to the private GitHub repo; `build/epics` is that plus this handoff commit (not pushed).
+Updated 2026-10-02 ~13:30. **`main` = `b25965e`** after a green gate on that commit; `build/epics` = that + this
+handoff commit. Whether they are pushed: `git status -sb` / `git log origin/main -1` (push only on the owner's say-so).
 **Read this first, then run `bd prime`.** Facts and owner decisions only; where a file or a bead is the
 source of truth, this points at it.
 
 ## 0. First five minutes of the next session
 
-1. `git branch --show-current` must say `build/epics`. `git status --short`: about 19 files are modified
-   or untracked ON PURPOSE (Z.3's unfinished work, §4.1). Do not revert, stash or commit them blindly.
+1. `git branch --show-current` must say `build/epics`. `git status --short` should be clean apart from
+   `.beads/interactions.jsonl`, `PROMPT_23_SEP.md` and a one-line `.gitignore` change (`.gstack/`, not ours).
 2. `cat .claude/settings.local.json` must allow `Bash(git commit --no-verify:*)` (`build/epics` only).
 3. `uptime`. Before any Docker suite, follow §5.
 4. Recreate the builder rules from §7 in the new session's scratchpad (the old scratchpad is gone).
-5. Check the demo is up (§8): `curl -s localhost:5173/api/ready`. If the owner wants it and it is down,
-   restart per §8.
+5. `scripts/demo.sh status` (§8). If the owner wants the demo and a piece is down, the OWNER runs
+   `scripts/demo.sh up` from their own terminal.
+6. `docker` is not on PATH in Claude's shell (`/usr/local/bin/docker` is a dangling OrbStack link). Prefix:
+   `export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"`. `scripts/demo.sh` finds it itself.
 
 ## 1. Who and what
 
@@ -20,107 +23,73 @@ Owner (chandrameenamohan@gmail.com): Java/Python backend engineer preparing for 
 Backend Architect" role, learning TypeScript from zero, wants principal-engineer depth.
 Project: multiplayer design canvas where a user, an AI agent, git and a sandbox preview all edit or
 render one document. Claude writes ALL code; each epic ships a handbook lesson and drills that start RED.
-The owner showcased the running app to a Noon engineer on 2026-10-01.
 
 ## 2. Locked decisions
 
 - Process: owner's `software_development_workflow_v6.md`, FULL tier, W3 BUILD.
-- **Orchestration (owner, 2026-09-30):** the main session only orchestrates (spawn, record in bd,
-  publish). Run in parallel whatever can run in parallel; **the Workflow tool is allowed** (this
-  replaced the older "never use Workflow"). Docker suites: one at a time, always.
+- **Orchestration:** the main session only orchestrates (spawn, record in bd, publish). Run in parallel
+  whatever can; the Workflow tool is allowed. Docker suites: one at a time, always.
 - **Models:** `opus` and `sonnet` execute (builders, bug fixes, routine runs). `fable` only judges and
-  verifies (review panels, per-bead verifiers). If fable's limit is low, use `opus` for those too.
+  verifies. **Owner 2026-10-01: use fable frugally** (`bd memories owner-fable-frugal`): one fable verifier
+  and one fable reviewer per R bead with tight prompts, no fable refuter per finding (opus refutes and
+  re-checks fixes), fable only for a disputed must-fix. If fable's limit is low, use `opus`.
 - **`main` takes only gated code.** The gate is `make clean-clone` fully green on the exact commit,
-  then a fast-forward. `--no-verify` is for commits on `build/epics` only. Never weaken a check.
+  then a fast-forward (`git fetch . build/epics:main`). `--no-verify` is for commits on `build/epics` only.
+  Never weaken a check. A gate failure is diagnosed before any re-run.
 - Node 24, TS ~6.0, native type stripping (no enums/param properties), own sync (not Yjs), Claude
   Agent SDK with `CLAUDE_CODE_OAUTH_TOKEN` (never `ANTHROPIC_API_KEY`).
 - Ponytail mode: laziest working thing, `ponytail:` comments with ceiling + upgrade path; never
   simplify away validation at trust boundaries, data-loss prevention, security, accessibility.
-- Web browsing: gstack `/browse` only. Secrets: `.env` git-ignored, never print it.
+- Web browsing: gstack `/browse` only. Secrets: `.env` git-ignored, never print it or `~/.config/noon/*`.
 - Tracking: `bd` only (never TodoWrite, never `bd edit`). Memories: `bd remember`.
-- **Order:** Z.3 → its review panel → second merge to `main` → E11.
 - **The owner never wants a process killed by Claude.** List heavy processes; the owner stops them.
+- **Every push needs the owner's say-so.**
+- **Public demo: ngrok is permanent** (owner 2026-10-02). The Cloudflare tunnel, DNS and Access app stay idle.
 
 ## 3. What is done
 
 | Item | State |
 |---|---|
-| E4–E10 (all task beads and epics) | Built, suites green, a fresh verifier per bead, review panels for R beads. **Closed.** |
-| Original bugs `noon-3m1`, `noon-ibo`, `noon-91u`, `noon-37s`, `noon-6zq`, `noon-l5f` | Fixed and closed |
-| Z.1 `noon-cs6.1` | `make scenario` green on a clean clone (SPEC §8 on two sync nodes). Closed. |
-| Z.2a `noon-cs6.2` | 22-property catalog under `antithesis/scratchbook/`, `make catalog-check`. Closed. |
-| Z.2b `noon-cs6.4` | `deploy/antithesis/` harness, baseline 22/22 properties, 20/20 guards. Closed. |
-| Merge | `main` fast-forwarded to `4d485c8` on 2026-10-01 20:13 after a green gate on that commit: unit 1183, integration 384, e2e 44/44, canvas p95 86 ms. |
-| Handbook | All 10 lesson pages rebuilt at HEAD and committed with PDFs |
+| E0–E10 | Built, verified, closed |
+| Z (`noon-cs6`): Z.1, Z.2a, Z.2b, Z.3 | **Closed.** Z.3 report: `deploy/antithesis/reports/2026-10-01-z3-scenarios.md` (12 scenario forms 3/3, baseline 23/23 + 21/21 guards, chaos 20 20/20) |
+| Fixes from Z.3 and its gate | `e432e27` refused upgrade + reset killed sync (`noon-cs6.3.1`); `8f2dfcc` silent client held a refused socket (`noon-cs6.3.4`); `8c427e4` MinIO call timeouts (`noon-mo3.3.1`); `46ab89a` api 413 cut the next keep-alive request (`noon-9vy`, found by gate run 1) |
+| Second merge | `main` = `46ab89a` after `make clean-clone` green on it (unit 1188, integration 385, e2e 44/44, canvas p95 96 ms); `main` and `build/epics` pushed 2026-10-02 |
+| E11 (`noon-3g7`) | **Closed.** `scripts/demo.sh up|down|status` (`e844ed1`); owner verified live canvas + preview in a real browser |
+| Third merge | `main` = `b25965e` after `make clean-clone` green on it (unit 1188, integration 385, e2e 44, canvas p95 80 ms), run while another project held port 3100. Gate fixes on the way: `7c968f7` e2e api port from `E2E_API_PORT` (clean-clone uses 53100; `noon-njq`), `b25965e` preview restart test race (`noon-3ye`) |
 
-Per-bead detail (design, fixes, VERIFY notes, panel findings, verifier verdicts) is in `bd show <id>`.
+Per-bead detail is in `bd show <id>` comments.
 
-## 4. What is left (in order)
+## 4. What is left
 
-### 4.1 Z.3 `noon-cs6.3` — ON HOLD, unfinished, uncommitted
-
-Its builder was put on hold at 15:40 for the showcase and the merge. Its agent does not survive the
-session, so **spawn a new opus builder** and give it `bd show noon-cs6.3` (the ON HOLD comment has the
-full state) plus this list:
-
-- **Uncommitted in the working tree, keep it:** `deploy/antithesis/{run.sh,driver/*,test/v1/noon/*}`,
-  `antithesis/scratchbook/{property-catalog.md,property-relationships.md,properties/dropped-webhook-push-reaches-canvas.md}`,
-  the `Dockerfile` comment, and `apps/sync/src/snapshots.ts` + its test.
-- **Pass 1, one run each:** baseline 22/22; the seven named scenarios PASS; the new `webhook-dropped`
-  scenario PASS (reconcile brought the push in 28 s); `worker-store-unavailable` PASS.
-- **Failures were harness bugs:** 3 of 4 MinIO runs failed on the builder's own scene (it expects edits
-  submitted before the welcome to be held; they are refused locally). `store-slow 2000` did not finish
-  (editors not live in 20 s): undiagnosed.
-- **`snapshots.ts` adds a timeout on every MinIO call (`noon-mo3.3.1`).** No scenario has shown it is
-  needed. Decide: keep it with its unit test, or drop it.
-- **Left:** fix the MinIO scene; verifier nits `noon-cs6.4.1` and `.2` in `run.sh` (`.3` is done);
-  repeat each scenario; `run.sh chaos 20`; the report under `deploy/antithesis/reports/`; lint,
-  typecheck, unit, knip, jscpd (the tree currently has one lint and one knip finding in these edits);
-  commit with key `noon-cs6.3`.
-- Then: a fable verifier and a fable review panel (it is an R bead), close `noon-cs6.3` and `noon-cs6`.
-- **Agents stall:** three builders today went idle "waiting for a monitor" for 1–3 hours. Tell each to
-  wait for the completion notification and never go idle mid-run, and check on any agent that has been
-  silent for 30 minutes.
-
-### 4.2 Second merge
-
-After Z.3 is committed: `make clean-clone` on the new HEAD, fast-forward `main`
-(`git fetch . build/epics:main`), push **only when the owner asks** (§9).
-
-### 4.3 E11 `noon-3g7`
-
-The public demo already serves the current build through ngrok (§8). What remains is the planned move
-to the Cloudflare tunnel (`noon.sennamind.com`, tunnel and Access app exist, idle) and a restart recipe
-that does not depend on a Claude session.
-
-### 4.4 Waiting on the owner
-
-- **Seven lesson pages not republished:** lessons 2, 3, 4, 7, 8, 9, 10. Lessons 1, 5, 6 are done. The
-  auto-mode classifier denied the rest, in subagents and in the main session. It needs a permission
-  rule allowing the Artifact tool; do not retry without one. URLs are in `docs/handbook/index.md`.
-- **Public repo refresh and README:** offered, not yet asked for (§9).
-- **63 open P3 bugs** from panels and verifiers (`bd list --status=open`). The four to fix before any
-  real launch: `noon-wv8.6.3` (Gitea write token in the sandbox worker), `noon-elo.7.1` (per-email
-  sign-in lockout), `noon-dtf.2.4` (a demoted creator's AI run still spends), `noon-wv8.6.2` (ship
-  report not fenced by attempt).
+- **Open from Z.3:** `noon-cs6.3.2` (P2: at 2 s per Postgres answer a document takes 34 s to open, at 4 s
+  never; fix = status frame while the room loads), `noon-cs6.3.3` (P3: a Postgres outage longer than
+  `staleMs` can restart a healthy AI run, a second model call).
+- **63 older P3 bugs** (`bd list --status=open`). The four to fix before any real launch: `noon-wv8.6.3`
+  (Gitea write token in the sandbox worker), `noon-elo.7.1` (per-email sign-in lockout), `noon-dtf.2.4`
+  (a demoted creator's AI run still spends), `noon-wv8.6.2` (ship report not fenced by attempt).
+- **Waiting on the owner:**
+  - Seven lesson pages not republished (lessons 2, 3, 4, 7, 8, 9, 10): needs a permission rule allowing
+    the Artifact tool; do not retry without one. URLs in `docs/handbook/index.md`.
+  - Public repo refresh and README: offered, not asked for (§9).
+  - Rotate the ngrok basic-auth password: it was printed in three agent transcripts on 2026-10-02.
+    New value in `~/.config/noon/ngrok-pass` AND `~/.config/noon/ngrok-policy.yml`, then `demo.sh down; up`.
+- No handbook lesson for E11 (a hosting script); owner may ask for one.
 
 ## 5. Quiet machine protocol (owner rule)
 
 Before any Docker suite: `ps -Ao pid,pcpu,comm -r | head -20`, identify each heavy process, and **give
-the owner a table (name, PID, CPU, what it is); the owner stops them.** Keep Docker's
-`com.apple.Virtualization.VirtualMachine` and `claude`. Known offenders: `opencode serve`, `omnigent`
-python (25 processes), `hakimo-gastown` (`bd send-metrics`, its `dolt`, a `mysqld` that restarts),
-Zoom with screen share, other projects' containers.
+the owner a table (name, PID, CPU, what it is) plus the commands to stop them; the owner runs them.**
+Keep Docker's `com.apple.Virtualization.VirtualMachine`, this session's `claude`, the demo's Vite/ngrok.
+Known offenders: `omnigent` (60 processes; quit the app, `pkill -f omnigent`), `opencode serve`,
+hakimo-gastown (`tmux -L hakimo-gastown kill-server`; its `bd send-metrics`, and a `mysqld` that
+something keeps relaunching: `pkill -f mysqld_safe; pkill -x mysqld`), Slack, Asana, Dia, Zoom, other
+projects' containers. Watch swap as well as load (`sysctl vm.swapusage`).
 
-What today taught:
-- The gate itself drives the load to 28–40. A Zoom call or `opencode` on top makes timing specs fail.
-- At load ~150 with 15 GB of swap nothing can be trusted; wait for the load to fall under ~6.
 - **Never run e2e or `make check` in the main checkout while the demo is up:** `e2e/setup.ts` stops the
   compose workers. Use `make clean-clone` (own compose project `noon-clean`, own ports).
 - `make chaos` cannot run on the dev stack while its api hands out the ngrok `wsUrl`; it runs in the clone.
-- The two duration-asserting specs (`canvas.spec` p95, `progress.spec` first step) now run in a
-  Playwright project `timed`, alone, after the others. If one fails again, read the per-edit split it
-  prints before blaming load.
+- The antithesis harness is its own compose project `noon-antithesis`; it never touches the demo.
+- Duration-asserting specs run in the Playwright project `timed`, alone, after the others.
 
 ## 6. Running agents (what worked)
 
@@ -128,11 +97,15 @@ What today taught:
   then `bd show <id>` incl. comments, …" plus the bead's risks. Reports under 150–200 words.
 - After each report: `bd comments add <id> "Built on build/epics <hash> by <agent> (<model>) …"`.
   Agents send their report twice (message + idle notification): record once.
-- Verifiers and panels: the Workflow script pattern used today (one fable agent per bead, schema-typed
-  verdict, a refuter per must-fix) handled 51 beads in about 20 minutes.
-- **zsh gotcha:** `for b in $V` does not split words in zsh. Pass all ids to one `bd close id1 id2 …`.
-  `bd close` refuses a bead whose dependencies are open: use `--force` when those are verified too.
+- Follow-up work for a finished agent: `SendMessage` to its name keeps its context (used for review fixes
+  and gate re-runs on 2026-10-02).
+- Gate runner: a sonnet agent runs `make clean-clone` once and reports; it never re-runs on failure.
+- **Check a running agent's log yourself every ~30 min.** On 2026-10-02 a builder missed its own gate's
+  EXIT for two hours ("waiting on gate events"); its log had finished long before.
+- **zsh gotchas:** `for b in $V` does not split words; pass all ids to one `bd close id1 id2 …`. A line
+  starting `echo =====X` is `=`-expansion: quote it.
 - Only one agent may use Docker at a time; say so in every prompt, and name the dev stack as off limits.
+- Agents stall "waiting for a monitor": tell each to wait for the completion notification or poll its log.
 
 ## 7. Builder rules (recreate as `<scratchpad>/builder-rules.md`)
 
@@ -142,50 +115,49 @@ What today taught:
 - Run `make lint typecheck unit` plus your new unit tests, `pnpm exec jscpd .` and `knip`. Run a Docker
   suite only when the prompt says Docker is yours, and only through `make clean-clone` or the
   harness's own compose project. Never `make check` or e2e in the main checkout.
-- Run anything over a few minutes in the background to a log and wait for its completion notification.
-  Never go idle while a run is in progress or after a failure you have not diagnosed.
+- `docker` is not on PATH: prefix `export PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"`.
+- Run anything over a few minutes in the background to a log and wait for its completion notification
+  (poll the log if none will come). Never go idle while a run is in progress or after an undiagnosed failure.
 - Commit only your paths: `git commit --no-verify -F <msgfile> -- <paths>`. Message: "<bead key> <what
   the user can now do>", body = WHY, trailer `Co-Authored-By: Claude <model> <noreply@anthropic.com>`.
-- Never touch `HANDOFF.md`, `PROMPT_23_SEP.md`, `.beads/*`, `.claude/*`, `.env`. No `bd
-  close/update/remember/create`. Missing input: report "NEEDS INPUT".
+- Never touch `HANDOFF.md`, `PROMPT_23_SEP.md`, `.beads/*`, `.claude/*`, `.env`, `~/.config/noon/*`
+  contents in output. No `bd close/update/remember/create`. Missing input: report "NEEDS INPUT".
 - Never kill a process you did not start. Never pull the MinIO image (local only, §8).
-- Live demo: never touch ports 5173/5199, the `noon-design-mvp` compose project, or ngrok.
+- Live demo: never touch ports 5173/5199/4040, the `noon-design-mvp` compose project, ngrok, or
+  `scripts/demo.sh up/down`.
 
-## 8. Public demo (ngrok) — serving the CURRENT build
+## 8. Public demo (ngrok)
 
-- URL https://unpuffed-overtamely-zoey.ngrok-free.dev, basic auth user `noon`, password in
-  `~/.config/noon/ngrok-pass` (never commit it). Local: http://localhost:5199.
-- Smoke-tested end to end on 2026-10-01 through the public URL: sign-up, document, sync, a real AI run
-  (17 s, token valid), preview, Ship (PR in Gitea), usage. A new account must create an organisation
-  first. The PR link is `http://localhost:3002/...`, so it opens only on this machine.
-- **Pieces and how to restart them:**
-  - ngrok (pid 42176 at handoff): `ngrok http 5173 --traffic-policy-file ~/.config/noon/ngrok-policy.yml`
-  - public web: `cd apps/web && PUBLIC_HOST=unpuffed-overtamely-zoey.ngrok-free.dev pnpm exec vite --port 5173 --strictPort`
-  - local web: `cd apps/web && pnpm exec vite --port 5199 --strictPort`
-  - api with public addresses: `H=unpuffed-overtamely-zoey.ngrok-free.dev; SYNC_PUBLIC_URL="sync=wss://$H/sync,sync-2=wss://$H/sync-2" PREVIEW_PUBLIC_URL="https://$H" docker compose up -d --no-build --wait api`
-  - The two Vite servers were started from the previous Claude session and may die with it.
-- The old frozen worktree `../noon-demo` is no longer served; the owner approved stopping it.
+- Host in `~/.config/noon/ngrok-host`; basic auth user `noon`, password `~/.config/noon/ngrok-pass`;
+  policy `~/.config/noon/ngrok-policy.yml` (basic auth on everything except `/preview/`). Never commit any.
+- **`scripts/demo.sh up|down|status`** (README "Public demo"). `up` starts only missing pieces: the api
+  with public addresses, public Vite 5173 (`PUBLIC_HOST`), local Vite 5199, ngrok. Detached; pid files and
+  logs in `~/.local/state/noon-demo`. `down` stops only what `up` started and leaves the api's public
+  addresses. The owner runs `up` from their own terminal so nothing is a child of a Claude session.
+- State 2026-10-02: ngrok pid 71102 (started by `demo.sh`); the two Vites (87710, 73430) are older
+  hand-started ones, reparented to launchd, so `down` will not stop them.
+- gstack `/browse` cannot send basic auth on WebSocket upgrades: a headless smoke test stops at sign-up;
+  the canvas needs a real browser (owner verified 2026-10-02).
+- A new account gets an organisation and a document automatically. The PR link is `http://localhost:3002/...`,
+  so it opens only on this machine. The preview iframe works through the public URL.
 - **MinIO image:** no registry serves `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` any more. It
   exists as a local image and as `~/.config/noon/minio-RELEASE.2025-09-07T16-13-09Z.tar`; `init.sh`
-  loads the tarball when the image is missing. A machine without the tarball cannot run `./init.sh`.
+  loads the tarball when the image is missing.
 
 ## 9. GitHub
 
-- **Private:** https://github.com/chandrameenamohan/noon-design-mvp = remote `origin`, full history,
-  `main` and `build/epics` at `4d485c8`.
+- **Private:** https://github.com/chandrameenamohan/noon-design-mvp = remote `origin`, full history.
 - **Public:** https://github.com/chandrameenamohan/noon-design-mvp-public = ONE commit, a snapshot of
-  `1eb02c0` WITHOUT this file. The owner chose this over making the private repo public, because this
-  file holds their email, the job-preparation line, their employer's name and the demo URL.
+  `1eb02c0` WITHOUT this file (it holds the owner's email, job-preparation line, employer and demo URL).
 - To refresh the public repo: `git archive <branch>` into a scratch dir, delete `HANDOFF.md`, grep for
   personal details, commit with the GitHub no-reply email, push. Never push history or this file there.
 - **Every push needs the owner's say-so.** The `bd` issue data is not on GitHub.
 
 ## 10. Where things are written down
 
-`SPEC.md` (spec), `BEADS.md` + `.beads/key-map.json` (bead graph), `bd memories` (owner rules and
-lessons: `owner-model-policy`, `verification-pass-2026-10-01`, `merge-2026-10-01`, `public-demo-state`,
-`github-remote`, `handbook-republish-pending`, `zsh-loop-gotcha`), `bd show <id>` comments (per-bead
-build notes, panel findings, verifier verdicts), `VERIFICATION.md`, `Makefile` (`check`, `chaos`,
-`drills`, `scenario`, `clean-clone`, `catalog-check`, `harness-*`), `docs/handbook/` (lessons,
-builders, PDFs), `deploy/antithesis/README.md` (the harness), `antithesis/scratchbook/` (properties).
-An explainer for showcasing, "Noon Design to Code": https://claude.ai/artifact/AZ1Y6vJYUfqD4w6u2YaUZt
+`SPEC.md`, `BEADS.md` + `.beads/key-map.json`, `bd memories` (`owner-model-policy`, `owner-fable-frugal`,
+`merge-2026-10-02`, `public-demo-state`, `github-remote`, `handbook-republish-pending`, `zsh-loop-gotcha`),
+`bd show <id>` comments, `VERIFICATION.md`, `Makefile`, `docs/handbook/`, `deploy/antithesis/README.md`
+and `reports/`, `antithesis/scratchbook/`, `README.md`. Antithesis explainer for other projects:
+`/Users/cm/100x/personal/noon-antithesis-writeup.md`. Showcase explainer:
+https://claude.ai/artifact/AZ1Y6vJYUfqD4w6u2YaUZt
