@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 import { z } from "zod";
-import { ClientMessage, type Doc, type HealthResponse, type Role, type SequencedOp } from "@noon/contracts";
+import { ClientMessage, type Doc, type HealthResponse, type Role, type SequencedOp, type ServerMessage } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
 import { keepLease, takeLease, type Holder, type Leases } from "@noon/lease";
 import { manifest } from "@noon/design-system";
@@ -35,6 +35,7 @@ const PROTOCOL = "noon.v1";
 export const MAX_FRAME_BYTES = 64 * 1024; // an op is small; the contract caps props, this caps the frame BEFORE it is parsed
 // A journal call slower than this is logged: the e2e bound on a whole edit, browser to browser, is 200 ms.
 const SLOW_JOURNAL_MS = 250;
+const LOADING_FRAME = JSON.stringify({ type: "loading" } satisfies ServerMessage);
 const TOKEN_LEEWAY_SECONDS = 5; // the api signs, this process verifies: two clocks never agree exactly
 const DOCUMENT_PATH = /^\/documents\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 // 4000-4999 are ours to define. They mirror the HTTP status a REST call would have had.
@@ -79,9 +80,11 @@ type Options = {
    * announcement the api could not publish (it tries once), so a revoked share cannot stay open for good.
    */
   sweepMs?: number;
+  /** Between the upgrade and the welcome, a "loading" frame this often: a client gives up on 10 s of silence (noon-cs6.3.2). */
+  loadingEveryMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 30_000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 30_000, loadingEveryMs = 3000 }: Options): Promise<RunningSyncServer> {
   const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
@@ -435,6 +438,13 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     const early: RawData[] = [];
     let onFrame = (data: RawData): void => void early.push(data);
     ws.on("message", (data) => { onFrame(data); });
+    // Opening is about six database answers in a row (role, fence, claim, load, replay, ...), and a client gives up on
+    // a connection that says nothing for 10 s, then dials again: at 4 s an answer a document never opened (Z.3
+    // finding 2). Until the welcome, say "still loading" now and then. Ends at the welcome or the close, whichever first.
+    // ponytail: a load that hangs for good keeps the client waiting too; ceiling: only the role reads, fence and claim
+    // are unbounded (the lease and the load are); upgrade: bound those as well.
+    const loading = setInterval(() => { if (ws.readyState === ws.OPEN) ws.send(LOADING_FRAME); }, loadingEveryMs);
+    ws.on("close", () => { clearInterval(loading); });
 
     const peer: Peer = {
       // WHO this is comes from the verified token and from nothing else (SPEC §2.3).
@@ -535,6 +545,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       if (parsed.data.type === "presence") room.presence(peer, parsed.data);
       else void room.submit(peer, parsed.data);
     };
+    clearInterval(loading);
     room.join(peer); // welcome first...
     for (const data of early.splice(0)) onFrame(data); // ...then whatever arrived while the document was loading
   }

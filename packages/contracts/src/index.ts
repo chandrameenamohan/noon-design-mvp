@@ -475,5 +475,9 @@ export const ServerMessage = z.discriminatedUnion("type", [
   // refuses every op as "unavailable" and acknowledges none: a peer holds its edits and sends them again
   // once it hears `readOnly: false`. An older client skips this type and falls back on the refusals.
   z.object({ type: z.literal("status"), readOnly: z.boolean() }),
+  // "Still opening the document": sent every few seconds between the upgrade and the welcome, so that a client's
+  // silence watchdog does not give up on a node that is waiting on a slow database (noon-cs6.3.2). It says nothing
+  // else. An older client skips the type, but any frame resets its silence clock, so it is helped too.
+  z.object({ type: z.literal("loading") }),
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

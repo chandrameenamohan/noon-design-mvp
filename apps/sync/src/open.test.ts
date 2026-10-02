@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, test } from "vitest";
 import WebSocket from "ws";
-import { SequencedOp } from "@noon/contracts";
+import { SequencedOp, type Role } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
+import { manifest } from "@noon/design-system";
+import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
 
@@ -54,4 +56,34 @@ test("a journal row the contract refuses is a corrupt document (4500), logged", 
 });
 test("a journal query that fails is still 'try again' (4503)", async () => {
   expect(await closeCodeOf(fakeStore({ since: () => Promise.reject(new Error("connection terminated")) }))).toBe(4503);
+});
+
+// noon-cs6.3.2 (Z.3 finding 2): opening is about six Postgres answers in a row (the role before the upgrade and again
+// after it, fence, claim, load, the journal since the snapshot), and the client gives up on a connection that has
+// said nothing for ackTimeoutMs (10 s), then dials again. At 4 s per answer a document never opened. While the room
+// loads, the node now says "loading" every loadingEveryMs, and the client's silence clock sees a live node.
+// Here: four answers of 200 ms each (800 ms) against a client that gives up after 400 ms of silence.
+test("a slow open keeps the client's silence watchdog quiet: one connection, then live", async () => {
+  const slow = <T>(value: T) => (): Promise<T> => new Promise((resolve) => { setTimeout(() => { resolve(value); }, 200); });
+  server = await startSyncServer({
+    port: 0, secrets: [SECRET], roles: slow<Role | undefined>("editor"), loadingEveryMs: 100,
+    store: fakeStore({ load: slow({ doc: undefined, seq: 0, snapshotSeq: 0 }), since: slow([]) }),
+  });
+  const documentId = randomUUID();
+  let dialled = 0;
+  class Counted extends globalThis.WebSocket {
+    constructor(url: string | URL, protocols?: string | string[]) {
+      super(url, protocols);
+      dialled++;
+    }
+  }
+  const peer = connectPeer({ manifest, session: () => Promise.resolve(session(documentId)), WebSocketImpl: Counted, ackTimeoutMs: 400 });
+  try {
+    for (const deadline = Date.now() + 4000; peer.status !== "live"; await new Promise((resolve) => setTimeout(resolve, 20))) {
+      if (Date.now() > deadline) throw new Error(`not live after 4 s (status ${peer.status}, ${String(dialled)} connections)`);
+    }
+    expect(dialled).toBe(1); // without the frames: a resync at 400 ms, and a third or fourth try before the room opens
+  } finally {
+    peer.close();
+  }
 });

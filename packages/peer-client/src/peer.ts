@@ -196,6 +196,7 @@ export function connectPeer({ manifest, session, onChange, onRejected, onOp, onS
       if (others.has(message.peerId)) changePresence(() => others.delete(message.peerId));
       return;
     }
+    if (message.type === "loading") return; // the room is still opening: hearing it at all (lastHeard) was the point
     if (message.type === "status") {
       readOnly = message.readOnly;
       onChange?.();
