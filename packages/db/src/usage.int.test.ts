@@ -71,3 +71,19 @@ test("noon-elo.5.1 take: a key over its limit in a one-minute window, whose rule
   expect(verdict.ok).toBe(false);
   expect(verdict.ok ? 0 : verdict.retryAfterSeconds).toBeLessThanOrEqual(3600);
 });
+
+test("noon-elo.7.2 take: every hit prunes up to two other keys' rows whose window ended over a day ago, oldest first", async () => {
+  const keys = ((await t.rawQuery("select key from rate_limits where win < extract(epoch from now()) - 86400 order by win")) as { rows: { key: string }[] }).rows;
+  expect(keys).toEqual([]); // nothing else here has ended: these three are the only ones
+  const ended = ["a", "b", "c"].map((n) => `test:ended-${n}-${crypto.randomUUID()}`);
+  await t.rawQuery("insert into rate_limits (key, win, hits) select k, (extract(epoch from now()) - 2 * 86400)::bigint + i, 9 from unnest($1::text[]) with ordinality as e(k, i)", [ended]);
+  const fresh = `test:${crypto.randomUUID()}`;
+  await t.rawQuery("insert into rate_limits (key, win, hits) values ($1, (extract(epoch from now()) - 600)::bigint, 1)", [fresh]); // not ended: kept
+  const left = async () => ((await t.rawQuery("select key from rate_limits where key = any($1) order by win", [[...ended, fresh]])) as { rows: { key: string }[] }).rows.map((r) => r.key);
+
+  expect(await t.db.take(`test:${crypto.randomUUID()}`, { limit: 5, windowSeconds: 3600 })).toEqual({ ok: true });
+  expect(await left()).toEqual([ended[2], fresh]);
+  expect(await t.db.take(ended[2] ?? "", { limit: 5, windowSeconds: 3600 })).toEqual({ ok: true }); // its own row is reset, not deleted
+  expect(await t.db.take(`test:${crypto.randomUUID()}`, { limit: 5, windowSeconds: 3600 })).toEqual({ ok: true });
+  expect(new Set(await left())).toEqual(new Set([fresh, ended[2]]));
+});

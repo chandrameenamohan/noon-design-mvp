@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { Client, Pool, type PoolClient, type QueryResultRow } from "pg";
 import { AuditEntry, Conflict, CreateRunBody, Doc, Document, FailureReason, Id, IdempotencyKey, Member, Name, Org, Preview, PreviewOutput, Role, Run, RunProgress, SandboxUrl, SequencedOp, ShareBody, Ship, ShipOutput, UsageAmount, UsageReport, User, Workspace, type Page } from "@noon/contracts";
 import { z } from "zod";
-import { Rule, verdict, type Verdict } from "./limit.ts";
+import { LONGEST_WINDOW_SECONDS, Rule, verdict, type Verdict } from "./limit.ts";
 
 export { Rule } from "./limit.ts";
 
@@ -457,15 +457,23 @@ export function createDb({ connectionString, schema }: { connectionString: strin
    * `win` is the second the window began, not its index (noon-elo.5.1): an index counts in units of one window length,
    * so after a rule's window grew every stored index would outrank every new one and a key over its limit would never
    * reset. A start is comparable across lengths: the count resets at the first of the rule's windows to begin after it.
+   * noon-elo.7.2: each hit also deletes up to two OTHER keys' rows whose window began over a day ago (ended, whatever
+   * their rule: a deleted row and a reset count are the same thing). A hit adds at most one row and removes up to two
+   * ended ones, so ended rows never pile up however many keys a client mints. `skip locked`: two hits never wait on, or
+   * both delete, one row; not this key's own row, which the upsert below is writing. `now()`, not `clock_timestamp()`:
+   * stable, so the rate_limits_win index (migration 0022) can serve it. ponytail: pruning rides the traffic,
+   * so a quiet table keeps its ended rows (harmless: they reset on their next hit); upgrade: a worker sweep if it matters.
    */
   async function take(key: string, rule: Rule, via: Pool | PoolClient = pool): Promise<Verdict> {
     const { windowSeconds } = Rule.parse(rule);
     const hit = await one(
       z.object({ hits: z.number().int(), win: count, now: z.number() }),
-      "insert into rate_limits as r (key, win, hits) values ($1, (floor(extract(epoch from clock_timestamp()) / $2) * $2)::bigint, 1) " +
+      "with ended as (delete from rate_limits where key in (select key from rate_limits where win < (extract(epoch from now()) - $3)::bigint " +
+        "and key <> $1 order by win limit 2 for update skip locked)) " +
+        "insert into rate_limits as r (key, win, hits) values ($1, (floor(extract(epoch from clock_timestamp()) / $2) * $2)::bigint, 1) " +
         "on conflict (key) do update set hits = case when r.win >= excluded.win then r.hits + 1 else 1 end, win = greatest(r.win, excluded.win) " +
         "returning hits, win::text, extract(epoch from clock_timestamp())::float8 as now",
-      [z.string().min(1).max(200).parse(key), windowSeconds],
+      [z.string().min(1).max(200).parse(key), windowSeconds, LONGEST_WINDOW_SECONDS],
       via,
     );
     if (!hit) throw new Error("rate limit: no row");
