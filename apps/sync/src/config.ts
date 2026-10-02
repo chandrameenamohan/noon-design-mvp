@@ -23,7 +23,8 @@ const Env = z.object({
   SNAPSHOT_BUCKET: z.string().optional().transform((value) => value || "snapshots"),
   // Tunable (SPEC §2.9): every N ops, every T seconds while peers are connected, and always on last leave.
   SNAPSHOT_EVERY_OPS: positive("SNAPSHOT_EVERY_OPS", 500),
-  SNAPSHOT_EVERY_SECONDS: positive("SNAPSHOT_EVERY_SECONDS", 30),
+  // At most 2^31-1 ms once multiplied (about 24 days): past it Node's setInterval fires every 1 ms instead (noon-mo3.3.2).
+  SNAPSHOT_EVERY_SECONDS: positive("SNAPSHOT_EVERY_SECONDS", 30).refine((seconds) => seconds * 1000 <= 2 ** 31 - 1, "SNAPSHOT_EVERY_SECONDS must be at most 2147483 (about 24 days)"),
   // E7.1: room leases (F20). The node id is how the api's and worker's routing tables name this process.
   REDIS_URL: RedisUrl,
   SYNC_NODE_ID: z.string({ error: "SYNC_NODE_ID is required" }).pipe(NodeId),

@@ -29,6 +29,9 @@ test("MinIO has no defaults for its address or credentials; the snapshot cadence
   });
   expect(loadConfig({ ...base, ...MINIO, SNAPSHOT_EVERY_OPS: "50", SNAPSHOT_EVERY_SECONDS: "5" })).toMatchObject({ cadence: { everyOps: 50, everyMs: 5000 } });
   for (const bad of ["0", "-5", "1.5", "0x10", "ten"]) expect(() => loadConfig({ ...base, ...MINIO, SNAPSHOT_EVERY_OPS: bad })).toThrow(/SNAPSHOT_EVERY_OPS/);
+  // noon-mo3.3.2: setInterval takes at most 2^31-1 ms; past it Node fires the timer every 1 ms instead.
+  expect(loadConfig({ ...base, ...MINIO, SNAPSHOT_EVERY_SECONDS: "2147483" })).toMatchObject({ cadence: { everyMs: 2_147_483_000 } });
+  expect(() => loadConfig({ ...base, ...MINIO, SNAPSHOT_EVERY_SECONDS: "2147484" })).toThrow(/SNAPSHOT_EVERY_SECONDS/);
 });
 
 test("a node needs Redis and an id its routing tables can name; the lease ttl is tunable", () => {
