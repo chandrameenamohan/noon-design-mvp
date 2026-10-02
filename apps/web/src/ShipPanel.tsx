@@ -12,6 +12,7 @@ const FAILURES: Partial<Record<string, string>> = {
   sync_unreachable: "The server could not read the document. Try again in a little while.",
   worker_stopped: "The server was restarted while shipping. Try again.",
   owner_missing: "You are no longer a member of this document's organisation.",
+  forbidden: "You can no longer edit this document: an owner made you a viewer, so it was not shipped.",
 };
 const sentence = (ship: Ship): string =>
   ship.status === "queued" ? "Waiting to ship."

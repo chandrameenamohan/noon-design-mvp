@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import { generate } from "@noon/codegen";
-import type { Doc, Manifest, ShipOutput } from "@noon/contracts";
+import type { Doc, Manifest, Role, ShipOutput } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { readingPeer, whenLive, type SyncSessions } from "./live.ts";
 import { cli, gitEnv, pagePath, type SeedRepo } from "./sandbox.ts";
-import { JobFailure } from "./worker.ts";
+import { JobFailure, requireEditor } from "./worker.ts";
 
 /**
  * The `ship` queue's handler (F17, SPEC §8 step 9): the document's page, generated afresh from the room's
@@ -173,14 +173,14 @@ export async function ensurePull({ seed, documentId, signal, fetchImpl = fetch, 
   throw new JobFailure("gitea_unavailable", "Gitea says the branch has a pull request, and none is open");
 }
 
-export function createShipHandler({ sessions, manifest, seed, stopping, stillMember, report, connectTimeoutMs = 10_000, fetchImpl }: {
+export function createShipHandler({ sessions, manifest, seed, stopping, roleOf, report, connectTimeoutMs = 10_000, fetchImpl }: {
   sessions: SyncSessions;
   manifest: Manifest;
   seed: SeedRepo;
   /** Aborted when the worker is told to stop (SIGTERM). */
   stopping: AbortSignal;
-  /** Asked when the job STARTS, which may be long after it was created. */
-  stillMember: (documentId: string, userId: string) => Promise<boolean>;
+  /** Asked when the job STARTS, which may be long after it was created: that user's role on the document now, undefined if none. */
+  roleOf: (documentId: string, userId: string) => Promise<Role | undefined>;
   /** Writes the job's output (jobs.output): what the canvas shows. Each commit also goes into ship_commits, which the git peer skips, whichever attempt made it (noon-91u). */
   report: (job: Job & { attempt?: number }, output: ShipOutput) => Promise<void>;
   connectTimeoutMs?: number;
@@ -199,7 +199,8 @@ export function createShipHandler({ sessions, manifest, seed, stopping, stillMem
 
   return async (job, cancelled) => {
     const userId = job.createdBy;
-    if (userId === undefined || !(await stillMember(job.documentId, userId))) throw new JobFailure("owner_missing");
+    if (userId === undefined) throw new JobFailure("owner_missing");
+    requireEditor(await roleOf(job.documentId, userId)); // POST /ship needs an editor; a viewer by now may not push (noon-87s)
     const signal = AbortSignal.any([cancelled, stopping]);
     try {
       const generated = generate(await readDocument(job, userId), manifest);

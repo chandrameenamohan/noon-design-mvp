@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { UsageAmount } from "@noon/contracts";
-import { attemptKey, JobFailure, runAttempt, type Handlers } from "./worker.ts";
+import { attemptKey, JobFailure, requireEditor, runAttempt, type Handlers } from "./worker.ts";
 
 // noon-37s: whatever way an attempt ends, what it consumed is recorded ONCE, before the row is finished, and the
 // bookkeeping never changes how it ended.
@@ -48,4 +48,11 @@ test("a usage row that cannot be written never masks how the run ended", async (
 // and a slow attempt 1 could write its output over attempt 2's (Ship's {commit, pr}) while the job runs.
 test("a handler's writes are keyed by the job AND its attempt", () => {
   expect(attemptKey({ ...job, queue: "ship", attempt: 2 })).toEqual({ queue: "ship", jobId: "j1", orgId: "o1", attempt: 2 });
+});
+
+// noon-dtf.2.4, noon-87s: a job that edits for someone (an AI run, a Ship) starts only while they may still edit.
+test("a job acting for someone starts only if they are still an editor or owner, and names why not", () => {
+  for (const role of ["editor", "owner"] as const) expect(() => { requireEditor(role); }).not.toThrow();
+  expect(() => { requireEditor("viewer"); }).toThrow(expect.objectContaining({ reason: "forbidden" }) as Error);
+  expect(() => { requireEditor(undefined); }).toThrow(expect.objectContaining({ reason: "owner_missing" }) as Error);
 });

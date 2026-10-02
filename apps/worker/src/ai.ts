@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { includes, type Manifest, type Op, type Role, type RunProgress, type UsageAmount } from "@noon/contracts";
+import type { Manifest, Op, Role, RunProgress, UsageAmount } from "@noon/contracts";
 import type { Job } from "@noon/db";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
@@ -7,7 +7,7 @@ import { roomUrl, stableOpId, type SyncSessions } from "./live.ts";
 import { withProgress } from "./progress.ts";
 import type { RunAgent } from "./sdk.ts";
 import { buildTools, type AgentPeer } from "./tools.ts";
-import { JobFailure } from "./worker.ts";
+import { JobFailure, requireEditor } from "./worker.ts";
 
 export type { RunAgent };
 
@@ -79,9 +79,8 @@ export function createAiHandler({ sessions, manifest, oauthToken, runAgent, read
     // The session is signed for the person the run acts for. They were a member when they asked; a run can
     // wait in the queue, and being removed from the org must take effect on what has not started yet. So must being
     // made a viewer: the room would refuse every op, and the model's tokens would buy nothing (noon-dtf.2.4).
-    const role = userId === undefined ? undefined : await roleOf(job.documentId, userId);
-    if (userId === undefined || role === undefined) throw new JobFailure("owner_missing");
-    if (!includes(role, "editor")) throw new JobFailure("forbidden");
+    if (userId === undefined) throw new JobFailure("owner_missing");
+    requireEditor(await roleOf(job.documentId, userId));
 
     const ids = replayIds(job.id);
     const peer = connectPeer({

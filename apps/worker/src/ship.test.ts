@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { ensurePull, openPullOf, pushRejected, remoteHeads, repoApi } from "./ship.ts";
+import { manifest } from "@noon/design-system";
+import { createShipHandler, ensurePull, openPullOf, pushRejected, remoteHeads, repoApi } from "./ship.ts";
 import { JobFailure } from "./worker.ts";
 
 // E5.5 (F17), the pure half: where Gitea's API is, which pull request is the branch's, and how the pull request
@@ -80,4 +81,16 @@ test("Gitea refusing or away fails the ship by a name the user can read", async 
   // A 409 whose pull request is nowhere among the open ones (closed in between) is not a pull request.
   const vanished = fakeGitea([json(409, {}), json(200, [pull(1, "noon/other")])]);
   await expect(ensurePull({ seed, documentId: DOC, signal, fetchImpl: vanished.fetchImpl })).rejects.toMatchObject({ reason: "gitea_unavailable" });
+});
+
+// noon-87s: starting a Ship needs an editor, so does running it. A creator made a viewer (or removed) while it waited
+// in the queue gets a named failure, and nothing is read, pushed or reported.
+test.each([["viewer", "forbidden"], [undefined, "owner_missing"]] as const)("a Ship whose creator is now %s fails as %s before anything is done", async (role, reason) => {
+  const reported: unknown[] = [];
+  const handler = createShipHandler({
+    sessions: { secret: "s".repeat(40), syncUrl: "ws://127.0.0.1:1" }, manifest, seed, stopping: new AbortController().signal,
+    roleOf: () => Promise.resolve(role), report: (_job, output) => { reported.push(output); return Promise.resolve(); }, connectTimeoutMs: 200,
+  });
+  await expect(handler({ id: "j1", orgId: "o1", documentId: DOC, queue: "ship", input: {}, createdBy: "u1" }, new AbortController().signal)).rejects.toMatchObject({ reason });
+  expect(reported).toEqual([]);
 });

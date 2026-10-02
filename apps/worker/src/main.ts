@@ -59,7 +59,7 @@ function sandboxHandlers(): Handlers {
 function shipHandlers(): Handlers {
   return {
     ship: createShipHandler({
-      sessions: sync.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, stillMember,
+      sessions: sync.sessions, manifest, seed: config.sandbox.seed, stopping: stopping.signal, roleOf,
       report: (job, output) => db.jobStore().report(attemptKey(job), output),
     }),
   };

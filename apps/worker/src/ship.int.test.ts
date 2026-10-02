@@ -39,7 +39,7 @@ let outputs: { jobId: string; output: ShipOutput }[];
 async function ship(): Promise<ShipOutput | undefined> {
   const handler = createShipHandler({
     sessions: { secret: TEST_SECRET, syncUrl: ctx.server.url }, manifest, seed, stopping: new AbortController().signal,
-    stillMember: () => Promise.resolve(true),
+    roleOf: () => Promise.resolve("editor" as const),
     report: (reporting, output) => { outputs.push({ jobId: reporting.id, output }); return Promise.resolve(); },
   });
   const job: Job = { id: randomUUID(), orgId: TEST_ORG, documentId, queue: "ship", input: {}, createdBy: person.userId };

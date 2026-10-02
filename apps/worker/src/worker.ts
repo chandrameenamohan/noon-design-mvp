@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import type { UsageAmount } from "@noon/contracts";
+import { includes, type Role, type UsageAmount } from "@noon/contracts";
 import type { Db, Job } from "@noon/db";
 import { connection, createProducer, describeError, JobRef, QUEUES, type QueueName } from "@noon/queue";
 
@@ -16,6 +16,14 @@ type JobKey = JobRef & { attempt: number };
 export type Handlers = Partial<Record<QueueName, (job: Job & { attempt: number }, cancelled: AbortSignal, spent: (sofar: UsageAmount) => void) => Promise<UsageAmount | undefined>>>;
 /** The key a handler's writes go under: the job, and the attempt that holds it (F28), so a stale attempt's write lands nowhere (noon-wv8.6.2). */
 export const attemptKey = (job: Job & { attempt?: number }): JobRef & { attempt?: number | undefined } => ({ queue: job.queue, jobId: job.id, orgId: job.orgId, attempt: job.attempt });
+/**
+ * A job that edits for someone (an AI run, a Ship) starts only while they may still EDIT the document: it may have
+ * waited in the queue long after they asked. `role` is theirs now; undefined = no longer a member (noon-dtf.2.4, noon-87s).
+ */
+export function requireEditor(role: Role | undefined): void {
+  if (role === undefined) throw new JobFailure("owner_missing");
+  if (!includes(role, "editor")) throw new JobFailure("forbidden");
+}
 export type RunningWorker = { close(): Promise<void> };
 
 /** Thrown by a handler to fail a job with a reason the USER may read. Any other error is stored as `internal`. */
