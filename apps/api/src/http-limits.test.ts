@@ -5,6 +5,7 @@ import type { Db, Rule } from "@noon/db";
 import { buildApp } from "./app.ts";
 import { trustedProxies } from "./client-address.ts";
 import { devHeaderIdentity } from "./identity.ts";
+import { hashPassword } from "./password.ts";
 
 // E9.6's wiring against an in-memory limiter, so it runs in `make unit`: which key each request is charged to, and
 // which requests are charged at all. The Postgres count itself (shared by instances, the window's end as Retry-After)
@@ -12,9 +13,11 @@ import { devHeaderIdentity } from "./identity.ts";
 
 const SESSIONS = { secret: "unit-only-session-secret-0123456789abcdef", sync: { kind: "one", url: "ws://sync.test:3001" } as const, ttlSeconds: 90 };
 const tight = { limit: 2, windowSeconds: 60 };
-const limits = { user: tight, address: tight, mint: { limit: 1, windowSeconds: 60 }, attempt: tight };
+const limits = { user: tight, address: tight, mint: { limit: 1, windowSeconds: 60 }, attempt: tight, signinBrake: { limit: 5, windowSeconds: 60 } };
+const CAT = { email: "cat@example.com", password: "correct horse battery" };
+const catHash = hashPassword(CAT.password);
 
-function app({ trust = "loopback" } = {}) {
+function app({ trust = "loopback", rules = limits } = {}) {
   const hits = new Map<string, number>();
   const charged: string[] = [];
   const lookups: string[] = [];
@@ -29,11 +32,13 @@ function app({ trust = "loopback" } = {}) {
     listOrgsFor: () => Promise.resolve({ items: [], nextCursor: null }),
     getDocumentForMember: (id: string) => { lookups.push(id); return Promise.resolve(undefined); },
     ping: () => Promise.resolve(),
+    credentialsFor: async (email: string) => (email.toLowerCase() === CAT.email ? { user: { id: "id-cat", email: CAT.email, name: "Cat" }, passwordHash: await catHash } : undefined),
+    startSession: () => Promise.resolve(),
   };
-  const hono = buildApp({ db: db as unknown as Db, identify: devHeaderIdentity, sessions: SESSIONS, enqueue: () => Promise.resolve(), limits, trustProxy: trustedProxies(trust), webhookSecret: "w".repeat(32), allowAttempt: () => Promise.resolve({ ok: true }) });
+  const hono = buildApp({ db: db as unknown as Db, identify: devHeaderIdentity, sessions: SESSIONS, enqueue: () => Promise.resolve(), limits: rules, trustProxy: trustedProxies(trust), webhookSecret: "w".repeat(32) });
   /** `peer`: the socket's address, as @hono/node-server hands it over. */
-  const call = (path: string, { method = "GET", headers = {}, peer }: { method?: string; headers?: Record<string, string>; peer?: string } = {}) =>
-    hono.request(path, { method, headers }, peer === undefined ? undefined : { incoming: { socket: { remoteAddress: peer } } });
+  const call = (path: string, { method = "GET", headers = {}, peer, body }: { method?: string; headers?: Record<string, string>; peer?: string; body?: string } = {}) =>
+    hono.request(path, { method, headers, ...(body === undefined ? {} : { body }) }, peer === undefined ? undefined : { incoming: { socket: { remoteAddress: peer } } });
   return { call, charged, lookups };
 }
 const ann = { "x-dev-user": "ann@example.com" };
@@ -106,5 +111,31 @@ test("sign-in attempts default to the limiter, per route and email, under a hash
     .request("/auth/signin", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "Ann@Example.com", password: "x" }) });
   expect(again.status).toBe(429);
   expect(ErrorBody.parse(await again.json())).toEqual({ error: "too_many_attempts", retryAfterSeconds: 3 });
-  expect(hits).toEqual(["address:unknown", `attempt:${createHash("sha256").update("signin:ann@example.com").digest("hex")}`]);
+  expect(hits).toEqual(["address:unknown", `attempt:${createHash("sha256").update("signin:ann@example.com:unknown").digest("hex")}`]);
+});
+
+// The per-address limit is the route-wide one (E9.6); these tests are about the sign-in caps behind it.
+const roomy = { ...limits, address: { limit: 100, windowSeconds: 60 } };
+/** A sign-in for Cat from `from` (believed: the peer is a trusted loopback proxy). */
+const signIn = (call: ReturnType<typeof app>["call"], from: string, password: string) =>
+  call("/auth/signin", { method: "POST", peer: "127.0.0.1", headers: { "content-type": "application/json", "x-forwarded-for": from }, body: JSON.stringify({ email: "CAT@example.com", password }) });
+
+test("wrong passwords from one address are refused with a retry time, and do not lock the owner out from another", async () => {
+  const { call } = app({ rules: roomy });
+  const statuses = [];
+  for (let i = 0; i < 12; i++) statuses.push((await signIn(call, "198.51.100.1", "wrong wrong wrong")).status);
+  expect(statuses).toEqual([401, 401, ...Array<number>(10).fill(429)]);
+  const refused = await signIn(call, "198.51.100.1", CAT.password); // the right password too, from there: the cap is per address
+  expect(refused.status).toBe(429);
+  expect(refused.headers.get("retry-after")).toBe("7");
+  expect(ErrorBody.parse(await refused.json())).toEqual({ error: "too_many_attempts", retryAfterSeconds: 7 });
+  expect((await signIn(call, "198.51.100.2", CAT.password)).status).toBe(200);
+});
+
+test("guesses spread over many addresses still meet a looser per-email brake", async () => {
+  const { call } = app({ rules: roomy });
+  const statuses = [];
+  for (const from of ["198.51.100.1", "198.51.100.2", "198.51.100.3"]) for (let i = 0; i < 2; i++) statuses.push((await signIn(call, from, "wrong wrong wrong")).status);
+  expect(statuses).toEqual([401, 401, 401, 401, 401, 429]); // the sixth guess on Cat, from a fresh address
+  expect((await signIn(call, "198.51.100.4", "wrong wrong wrong")).status).toBe(429);
 });

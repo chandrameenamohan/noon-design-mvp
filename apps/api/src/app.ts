@@ -139,11 +139,12 @@ export type AppDeps = {
   /** E8.1: how long a sign-in lasts, and whether its cookie is Secure (everywhere but development, which is plain http). */
   signIn?: { ttlSeconds: number; secureCookie: boolean };
   /**
-   * E8.1: may this sign-up or sign-in go ahead? `key` names the route and the email; refused is 429 with its wait.
-   * Default (E9.6): `limits.attempt` per key, counted in Postgres under the key's SHA-256 (an email may outgrow a
+   * E8.1: may this sign-up or sign-in go ahead? `key` names the route and the email (and, for sign-in's tighter
+   * count, the client address); `rule` is the limit it is counted against. Refused is 429 with its wait.
+   * Default (E9.6): `rule` per key, counted in Postgres under the key's SHA-256 (an email may outgrow a
    * rate_limits key, and the table need not hold addresses).
    */
-  allowAttempt?: (key: string) => Promise<Verdict>;
+  allowAttempt?: (key: string, rule: Rule) => Promise<Verdict>;
   /** E9.6 (F31): the per-user, per-address, session-minting and sign-in limits (config.ts HTTP_LIMITS). */
   limits?: HttpLimits;
   /** E9.6: the peers whose X-Forwarded-For names the client (TRUST_PROXY). Default: loopback only. */
@@ -181,7 +182,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
       process.stderr.write(`${JSON.stringify({ level: "warn", path: c.req.path, message: `access change not announced: ${describeError(err)}` })}\n`);
     });
   };
-  const attempt = allowAttempt ?? ((key: string) => db.take(`attempt:${createHash("sha256").update(key).digest("hex")}`, limits.attempt));
+  const attempt = allowAttempt ?? ((key: string, rule: Rule) => db.take(`attempt:${createHash("sha256").update(key).digest("hex")}`, rule));
   // Paid for now, not by the first sign-in with an unknown email (whose extra hash would be a timing tell).
   dummyHash().catch(() => undefined);
 
@@ -231,7 +232,8 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   const UNLIMITED = new Set(["/health", "/ready", WEBHOOK_PATH]);
   const PUBLIC_PATHS = new Set(["/health", "/ready", WEBHOOK_PATH, "/auth/signup", "/auth/signin", "/auth/signout", "/auth/me"]);
   // ponytail: an IPv6 address is its own key; ceiling: a client with a /64 has 2^64 of them; upgrade: key IPv6 by /64.
-  const byAddress = (c: Context) => db.take(`address:${clientAddress(peerOf(c), c.req.header("x-forwarded-for"), trustProxy) ?? "unknown"}`, limits.address);
+  const addressOf = (c: Context) => clientAddress(peerOf(c), c.req.header("x-forwarded-for"), trustProxy) ?? "unknown";
+  const byAddress = (c: Context) => db.take(`address:${addressOf(c)}`, limits.address);
   const requireUser = createMiddleware<{ Variables: { user: User } }>(async (c, next) => {
     if (UNLIMITED.has(c.req.path)) return next();
     if (PUBLIC_PATHS.has(c.req.path)) {
@@ -281,16 +283,21 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   // still create the account. That is the one place an account's existence shows, and it is rate limited.
   app.post("/auth/signup", async (c) => {
     const { email, name, password } = await body(c, SignUpBody);
-    const allowed = await attempt(`signup:${email.toLowerCase()}`);
+    const allowed = await attempt(`signup:${email.toLowerCase()}`, limits.attempt);
     if (!allowed.ok) return limited(c, allowed.retryAfterSeconds, "too_many_attempts");
     const user = await db.signUp({ email, name, passwordHash: await hashPassword(password) });
     return user === "taken" ? fail(c, 409, "email_taken") : signedIn(c, user, 201);
   });
   // No such email and the wrong password are one answer, in one time: both cost exactly one scrypt.
+  // noon-elo.7.1: the tight count is per email AND address, so someone else's wrong guesses never lock the owner
+  // out; the per-email brake (config.ts) is asked only past it, so one address can charge it 10 times a window at most.
   app.post("/auth/signin", async (c) => {
     const { email, password } = await body(c, SignInBody);
-    const allowed = await attempt(`signin:${email.toLowerCase()}`);
+    const account = email.toLowerCase();
+    const allowed = await attempt(`signin:${account}:${addressOf(c)}`, limits.attempt);
     if (!allowed.ok) return limited(c, allowed.retryAfterSeconds, "too_many_attempts");
+    const braked = await attempt(`signin:${account}`, limits.signinBrake);
+    if (!braked.ok) return limited(c, braked.retryAfterSeconds, "too_many_attempts");
     const found = await db.credentialsFor(email);
     const matches = await verifyPassword(password, found?.passwordHash ?? (await dummyHash()));
     return found && matches ? signedIn(c, found.user, 200) : fail(c, 401, "invalid_credentials");

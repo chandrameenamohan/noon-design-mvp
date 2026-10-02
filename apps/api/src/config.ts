@@ -71,14 +71,20 @@ export const AI_RUN_LIMIT: Rule = { limit: 60, windowSeconds: 3600 };
  * editor polls about 3 a second). `address`: the routes that name no user (sign-up, sign-in, sign-out, /auth/me) and
  * any request whose caller is not recognised, per client address. `mint`: POST /documents/:id/session, per user,
  * tighter than `user` and counted before the document is looked up, so a revoked collaborator's peer that keeps
- * asking is refused cheaply. `attempt`: sign-up and sign-in per email, so an online guesser gets 10 tries per 5 minutes
- * on one account whatever address they come from. ponytail: constants, one for everyone; upgrade: env or a plan column.
+ * asking is refused cheaply. `attempt`: sign-up per email, and sign-in per email AND client address, so one address
+ * gets 10 tries per 5 minutes on one account, and wrong guesses from elsewhere never lock the owner out (noon-elo.7.1).
+ * `signinBrake`: sign-in per email from every address together, against guesses spread over many addresses.
+ * ponytail: the brake is still a lockout, for whoever controls 5 addresses (5 x 10 per 5 minutes trips it), and a
+ * guesser with 5 or more addresses gets 50 tries per 5 minutes on one account; upgrade: past the brake, ask for a
+ * per-account captcha or an emailed sign-in link instead of refusing. ponytail: constants, one for everyone; upgrade:
+ * env or a plan column.
  */
 export const HTTP_LIMITS = {
   user: { limit: 600, windowSeconds: 60 },
   address: { limit: 300, windowSeconds: 60 },
   mint: { limit: 60, windowSeconds: 60 },
   attempt: { limit: 10, windowSeconds: 300 },
+  signinBrake: { limit: 50, windowSeconds: 300 },
 } satisfies Record<string, Rule>;
 export type HttpLimits = typeof HTTP_LIMITS;
 

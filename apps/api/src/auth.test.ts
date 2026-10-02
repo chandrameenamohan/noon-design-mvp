@@ -171,7 +171,7 @@ test("a session past its lifetime no longer authenticates", async () => {
   expect((await get("/orgs", { cookie })).status).toBe(401);
 });
 
-test("the rate-limit seam is asked with the route and the email; a no is 429 with its wait, before any hash or lookup", async () => {
+test("the rate-limit seam is asked with the route and the email (and, signing in, the address); a no is 429 with its wait, before any hash or lookup", async () => {
   const asked: string[] = [];
   const { post, store } = app({ allowAttempt: (key) => { asked.push(key); return Promise.resolve({ ok: false, retryAfterSeconds: 42 }); } });
   const up = await post("/auth/signup", ann);
@@ -181,7 +181,7 @@ test("the rate-limit seam is asked with the route and the email; a no is 429 wit
     expect(res.headers.get("retry-after")).toBe("42");
     expect(ErrorBody.parse(await res.json())).toEqual({ error: "too_many_attempts", retryAfterSeconds: 42 });
   }
-  expect(asked).toEqual(["signup:ann@example.com", "signin:ann@example.com"]);
+  expect(asked).toEqual(["signup:ann@example.com", "signin:ann@example.com:unknown"]); // no socket here: no address
   expect(store.calls).toEqual([]);
 });
 

@@ -16,6 +16,7 @@ const limits = {
   address: { limit: 3, windowSeconds: WINDOW },
   mint: { limit: 2, windowSeconds: WINDOW },
   attempt: { limit: 2, windowSeconds: WINDOW },
+  signinBrake: { limit: 5, windowSeconds: WINDOW },
 };
 const ctx = useTestServer({ limits, trustProxy: trustedProxies("loopback") });
 
@@ -79,12 +80,18 @@ describe("integration:http-rate-limit-429-retry-after", () => {
     }
   });
 
-  test("sign-in is limited per email, whatever address the guesses come from, with a retry time", async () => {
+  test("sign-in is limited per email and address, with a retry time; another address's guesses do not lock the owner out", async () => {
     expect((await anonymous("/auth/signup", "198.51.100.10", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "cat@example.com", name: "Cat", password: "correct horse battery" }) })).status).toBe(201);
-    const guess = (from: string) => anonymous("/auth/signin", from, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "CAT@example.com", password: "wrong wrong wrong" }) });
-    expect((await guess("198.51.100.11")).status).toBe(401);
-    expect((await guess("198.51.100.12")).status).toBe(401);
-    await expectLimited(await guess("198.51.100.13"), "too_many_attempts");
+    const signIn = (from: string, password = "wrong wrong wrong") => anonymous("/auth/signin", from, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "CAT@example.com", password }) });
+    expect((await signIn("198.51.100.11")).status).toBe(401);
+    expect((await signIn("198.51.100.11")).status).toBe(401);
+    await expectLimited(await signIn("198.51.100.11"), "too_many_attempts"); // the third request: the address limit (3) still has room
+    expect((await signIn("198.51.100.12", "correct horse battery")).status).toBe(200);
+    // Spread over addresses, guesses meet the per-email brake (5): 2 + 1 above, 2 more here, then refused. A guess the
+    // per-address count refused charged nothing, or the second one here would already be.
+    expect((await signIn("198.51.100.13")).status).toBe(401);
+    expect((await signIn("198.51.100.13")).status).toBe(401);
+    await expectLimited(await signIn("198.51.100.14"), "too_many_attempts");
   });
 
   test("the probes and Gitea's webhook are never limited into failure", async () => {
