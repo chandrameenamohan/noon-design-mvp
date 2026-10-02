@@ -123,7 +123,10 @@ type JobStore = {
    * ship already waiting for its document fails too (the waiting one ships everything, and two may not wait).
    */
   requeueStale(staleMs: number, maxAttempts: number): Promise<{ requeued: number; lost: number }>;
-  /** What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per job. */
+  /**
+   * What this job consumed, against ITS org (taken from the row; a key under another org writes nothing). Once per
+   * job, by the key's `attempt` only while that attempt holds the job (a given-up attempt bills nothing).
+   */
   recordUsage(key: JobKey, amount: UsageAmount): Promise<void>;
   /**
    * What a RUNNING job has to say before it ends: a sandbox's preview URL (null while it restarts), a ship's
@@ -733,15 +736,19 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         );
         return counted ?? { requeued: 0, lost: 0 };
       },
-      async recordUsage({ jobId, orgId }, amount) {
+      async recordUsage({ jobId, orgId, attempt }, amount) {
         if (!isId(jobId) || !isId(orgId)) return;
         const a = UsageAmount.parse(amount); // the same contract the reader uses, BEFORE the write
         // insert ... select FROM THE JOB: org, document and user are what the row says, never what a caller
         // says, and a key that names the job under another org selects nothing. `on conflict`: billed once.
+        // Billed once, so by the attempt that holds the job (noon-elo.2.4): `attempts` as finish() fences it, and not
+        // `queued` (given away, the next claim not yet made). A given-up attempt's spend is ours, not the org's; the
+        // job's LAST attempt bills even when the sweep ended it (worker_lost, cancelled).
         await pool.query(
           "insert into usage (org_id, job_id, document_id, user_id, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) " +
-            "select j.org_id, j.id, j.document_id, j.created_by, 'ai_run', $3, $4, $5, $6, $7, $8 from jobs j where j.org_id = $1 and j.id = $2 on conflict (job_id) do nothing",
-          [orgId, jobId, a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheWriteTokens, a.costUsd.toFixed(6)],
+            "select j.org_id, j.id, j.document_id, j.created_by, 'ai_run', $3, $4, $5, $6, $7, $8 from jobs j where j.org_id = $1 and j.id = $2 " +
+            "and ($9::int is null or (j.attempts = $9 and j.status <> 'queued')) on conflict (job_id) do nothing",
+          [orgId, jobId, a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheWriteTokens, a.costUsd.toFixed(6), attempt ?? null],
         );
       },
       queued: (limit) =>

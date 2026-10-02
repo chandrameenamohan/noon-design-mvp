@@ -65,6 +65,36 @@ test("the dead attempt's late writes land nowhere: its finish and its beat are f
   expect(await row(key.jobId)).toMatchObject({ status: "succeeded", error: null });
 });
 
+// noon-elo.2.4: usage is billed once per job, so the attempt that bills must be the one that holds it. Unfenced, a
+// given-up attempt's partial spend landed first and the replacement's full spend hit `on conflict do nothing`.
+test("the usage a given-up attempt reports lands nowhere, before or after the next claim; the attempt that holds the job is billed", async () => {
+  const jobs = t.db.jobStore();
+  const key = await aJob();
+  const spent = (costUsd: number) => ({ model: "claude-test-1", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd });
+  const billed = async () => ((await t.rawQuery("select cost_usd::float8 as cost from usage where job_id = $1", [key.jobId])) as { rows: { cost: number }[] }).rows.map((r) => r.cost);
+  await jobs.claim(key);
+  await silentFor(key.jobId, 60);
+  await jobs.requeueStale(10_000, 3);
+  await jobs.recordUsage({ ...key, attempt: 1 }, spent(0.1)); // given away, not yet claimed again: still attempts = 1
+  await jobs.claim(key);
+  await jobs.recordUsage({ ...key, attempt: 1 }, spent(0.2)); // attempt 2 holds it
+  expect(await billed()).toEqual([]);
+  await jobs.recordUsage({ ...key, attempt: 2 }, spent(0.5));
+  await jobs.finish({ ...key, attempt: 2 }, "succeeded");
+  expect(await billed()).toEqual([0.5]);
+});
+
+test("the last attempt of a job the sweep ended (worker_lost, or cancelled) still bills what it spent", async () => {
+  const jobs = t.db.jobStore();
+  const key = await aJob();
+  await jobs.claim(key);
+  await t.rawQuery("update jobs set cancel_requested_at = now() where id = $1", [key.jobId]);
+  await silentFor(key.jobId, 60);
+  await jobs.requeueStale(10_000, 3);
+  await jobs.recordUsage({ ...key, attempt: 1 }, { model: "claude-test-1", inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.3 });
+  expect(((await t.rawQuery("select count(*)::int as n from usage where job_id = $1", [key.jobId])) as { rows: [{ n: number }] }).rows[0].n).toBe(1);
+});
+
 test("a job that kills its worker every time ends: after maxAttempts claims it fails as worker_lost", async () => {
   const jobs = t.db.jobStore();
   const key = await aJob();
