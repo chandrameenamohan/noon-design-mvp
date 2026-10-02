@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { AuditPage, Document, Member, Org, Run, UsageReport, Workspace, type Doc } from "@noon/contracts";
 import { box, button, layer, tile, treeOf } from "./editor.ts";
 import { expect, test } from "./fixtures.ts";
+import { PORTS } from "./ports.ts";
 import { closePulls, openPullsOf, pageInGitea, pageOf, pushPage, welcomeOf } from "./gitea.ts";
 
 // e2e:spec-scenario (SPEC §8, Z.1): the browser half of the end-to-end scenario, in its order, on ONE document, with
@@ -19,7 +20,8 @@ const as = (email: string) => ({ headers: { "x-dev-user": email } });
 test.setTimeout(480_000);
 // The owner's socket to the node killed in step 7, and the second it spends dialling the dead port before /session
 // names the other node. Expected here, nowhere else.
-test.use({ allowedConsole: /WebSocket connection to 'ws:\/\/localhost:310[14]\/documents\/[^']+' failed/u });
+const NODES = [String(PORTS.sync), String(PORTS.sync2)]; // the two sync nodes' ports (e2e/ports.ts)
+test.use({ allowedConsole: new RegExp(`WebSocket connection to 'ws://localhost:(${NODES.join("|")})/documents/[^']+' failed`, "u") });
 
 /** The sync node a page is on now: the port of the last room socket it opened. Called before the page connects. */
 function nodeOf(p: Page): () => string {
@@ -84,7 +86,7 @@ test("SPEC §8: sign-up to audit trail on two sync nodes, with the AI, git, a no
   const editorNode = nodeOf(editor);
   await editor.goto(`/?user=${outsider}&doc=${documentId}`);
   await expect(editor.getByRole("status")).toHaveText("live");
-  expect(["3101", "3104"]).toContain(ownerNode());
+  expect(NODES).toContain(ownerNode());
   expect(editorNode()).toBe(ownerNode()); // one room globally: both on the node that holds the document's lease
 
   await expect(page.getByRole("list", { name: "Also here" }).getByRole("listitem")).toContainText(outsider.split("@")[0] ?? ""); // its name, as the api vouches for it
@@ -220,7 +222,7 @@ test("SPEC §8: sign-up to audit trail on two sync nodes, with the AI, git, a no
 
     // --- 7. `kill -9` the node that owns the room mid-edit: the other node takes it; no acknowledged op lost or doubled. (F18, F19, F21)
     const victim = ownerNode();
-    const survivor = victim === "3101" ? "3104" : "3101";
+    const survivor = NODES.find((node) => node !== victim);
     await layer(page, "Page").click();
     for (let i = 0; i < 3; i++) await tile(page, "Text").click();
     await expect(page.getByText("saved", { exact: true })).toBeVisible(); // three acknowledged

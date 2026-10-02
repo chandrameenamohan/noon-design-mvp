@@ -9,7 +9,9 @@ src=$(git rev-parse --show-toplevel)
 tmp=$(mktemp -d)
 # Every port docker-compose.yml publishes: one left at its default collides with the dev stack's, and compose refuses to start.
 export COMPOSE_PROJECT_NAME=noon-clean PG_PORT=55432 API_PORT=53000 SYNC_PORT=53001 SYNC_2_PORT=53003 REDIS_PORT=56379 SANDBOX_PROXY_PORT=20200 GITEA_PORT=53002 MINIO_PORT=59005 TOXIPROXY_PORT=58474
-export E2E_API_PORT=53100 # the e2e layer's own api (playwright.config.ts), off the 3100 other projects' dev servers hold
+# The e2e layer's own servers and sandbox pool (e2e/ports.ts): off the dev checkout's, so a `make e2e` there can run
+# beside this one, and neither's teardown removes the other's sandboxes (noon-cs6.1.1). 53100: off the 3100 other projects hold.
+export E2E_API_PORT=53100 E2E_WEB_PORT=55174 E2E_SYNC_PORT=53101 E2E_WORKER_PORT=53102 E2E_SYNC_2_PORT=53104 E2E_SANDBOX_PROXY_PORT=20300 E2E_SANDBOX_POOL=noon-clean-e2e
 unset POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD GITEA_ADMIN_PASSWORD GITEA_WEBHOOK_SECRET GITEA_TOKEN GITEA_READ_TOKEN MINIO_PASSWORD # the clone must generate its own secrets
 command -v docker >/dev/null 2>&1 || PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 
@@ -17,10 +19,13 @@ cleanup() {
   (cd "$tmp" && docker compose down -v --rmi local >/dev/null 2>&1)
   # What the clone's sandbox worker started through Docker itself, which compose does not know of: its sandboxes,
   # its proxy, and then their networks (each holds one of the daemon's few address pools).
-  for label in "noon.sandbox=$COMPOSE_PROJECT_NAME" "noon.proxy-pool=$COMPOSE_PROJECT_NAME"; do
-    docker ps --all --quiet --filter "label=$label" | xargs docker rm --force >/dev/null 2>&1
+  # The e2e layer's pool too, should its own teardown not have run.
+  for pool in "$COMPOSE_PROJECT_NAME" "$E2E_SANDBOX_POOL"; do
+    for label in "noon.sandbox=$pool" "noon.proxy-pool=$pool"; do
+      docker ps --all --quiet --filter "label=$label" | xargs docker rm --force >/dev/null 2>&1
+    done
+    docker network ls --quiet --filter "label=noon.sandbox=$pool" | xargs docker network rm >/dev/null 2>&1
   done
-  docker network ls --quiet --filter "label=noon.sandbox=$COMPOSE_PROJECT_NAME" | xargs docker network rm >/dev/null 2>&1
   rm -rf "$tmp"
 }
 trap cleanup EXIT
