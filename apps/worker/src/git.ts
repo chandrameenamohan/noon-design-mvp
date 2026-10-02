@@ -22,7 +22,7 @@ export type Apply = (event: GitEvent, page: ChangedPage, base: () => Promise<Pag
 /** Thrown by `apply` when the push cannot be applied YET (the document's room is read-only, E6.1b): the event waits, it does not fail. */
 export class WaitAgain extends Error {}
 /** What the git peer needs of the store. */
-export type PeerStore = Pick<GitStore, "record" | "heads" | "lastDone" | "claim" | "heartbeat" | "finish" | "takeReconcileRequest">;
+export type PeerStore = Pick<GitStore, "record" | "heads" | "lastDone" | "claim" | "heartbeat" | "finish" | "takeReconcileRequest" | "shippedCommit">;
 type Moved = { ref: string; before: string; after: string };
 
 const PAGE = /^src\/pages\/noon-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tsx$/u; // sandbox.ts's pagePath
@@ -124,8 +124,21 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
    * Undefined: neither (a new branch, a force-push that dropped `before`).
    */
   async function diffBase(event: GitEvent, done: string | undefined): Promise<string | undefined> {
-    if (done !== undefined && (await isAncestor(done, event.after))) return done;
-    return !ZERO.test(event.before) && (await has(event.before)) ? event.before : undefined;
+    const from = done !== undefined && (await isAncestor(done, event.after)) ? done : !ZERO.test(event.before) && (await has(event.before)) ? event.before : undefined;
+    return from === undefined ? undefined : ((await lastShipped(from, event.after)) ?? from);
+  }
+
+  /**
+   * noon-wv8.6.4: the newest commit Ship made between `from` and the push's own. Ship's page is what the room held
+   * when it read it, so it is where the push is diffed from: a ship whose delivery was lost, folded into a later
+   * push, would otherwise replay Ship's values over canvas edits made since. `after` itself is left out (push.ts
+   * skips a page Ship made). ponytail: one lookup per first-parent commit, newest first, stopping at the first hit;
+   * ceiling: a push of thousands of commits with no ship among them asks thousands of times; upgrade: one `= any($1)`.
+   */
+  async function lastShipped(from: string, after: string): Promise<string | undefined> {
+    const commits = (await git("-C", mirror, "rev-list", "--first-parent", `${from}..${after}`)).split("\n").filter((commit) => commit !== "" && commit !== after);
+    for (const commit of commits) if (await store.shippedCommit(commit)) return commit;
+    return undefined;
   }
 
   /**

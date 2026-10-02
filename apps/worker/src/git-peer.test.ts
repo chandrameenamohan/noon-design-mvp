@@ -20,8 +20,8 @@ afterEach(() => {
 });
 
 type Row = GitEvent & { status: string; attempt: number };
-/** git_events in memory: the same unique key on (branch, commit), claimed oldest first. */
-function memoryStore(rows: Row[] = []): PeerStore {
+/** git_events in memory: the same unique key on (branch, commit), claimed oldest first. `shipped`: ship_commits. */
+function memoryStore(rows: Row[] = [], shipped: ReadonlySet<string> = new Set()): PeerStore {
   return {
     record(e) {
       if (rows.some((r) => r.ref === e.ref && r.after === e.after)) return Promise.resolve(false);
@@ -42,6 +42,7 @@ function memoryStore(rows: Row[] = []): PeerStore {
       return Promise.resolve();
     },
     takeReconcileRequest: () => Promise.resolve(false),
+    shippedCommit: (sha) => Promise.resolve(shipped.has(sha)),
   };
 }
 
@@ -158,6 +159,21 @@ test("noon-wv8.3.1.1: two peers on one branch, the newer push finished first: th
   expect(await p1).toBe(true);
   expect(seen.map((s) => s.page)).toEqual([{ documentId: DOC, path: pagePath(DOC), tsx: "v2\n" }]); // never v1 after v2
   expect(rows.find((r) => r.after === older)?.status).toBe("skipped");
+});
+
+test("noon-wv8.6.4: a push folding in a ship whose delivery was lost is diffed from Ship's commit, so Ship's page is not replayed onto the room", async () => {
+  const shipped = new Set<string>();
+  const { origin, store, peer, seen } = await setUp(memoryStore([], shipped));
+  const applied = await origin.commit({ [pagePath(DOC)]: "v1\n" }, "applied", "main");
+  await store.record({ ref: main, before: await git(origin.work, "rev-parse", "HEAD~1"), after: applied });
+  while (await peer.processNext());
+  seen.length = 0;
+  const ship = await origin.commit({ [pagePath(DOC)]: "shipped\n" }, "Ship: its webhook never arrived", "main");
+  shipped.add(ship);
+  const pushed = await origin.commit({ [pagePath(DOC)]: "v3\n" }, "an engineer's push, delivered", "main");
+  await store.record({ ref: main, before: ship, after: pushed });
+  await peer.processNext();
+  expect(seen).toEqual([{ page: { documentId: DOC, path: pagePath(DOC), tsx: "v3\n" }, base: "shipped\n" }]); // not v1
 });
 
 test("noon-wv8.3.3: a force-push back to an older commit is still applied (it moved the branch backwards, on purpose)", async () => {
