@@ -9,7 +9,7 @@ type Reason = Parameters<typeof sentenceFor>[0];
 export type Refusal = { id: string; reason: Reason; op?: Op };
 import { openSession } from "./api.ts";
 
-function openStore(documentId: string, onRejected: (rejection: Rejection) => void, onOp: (message: SequencedOp) => void, onSession: (session: SessionResponse) => void) {
+function openStore(documentId: string, onRejected: (rejection: Rejection) => void, onOp: (message: SequencedOp) => void, onSession: (session: SessionResponse) => void, onRole: (role: Role) => void) {
   const listeners = new Set<() => void>();
   const tell = (): void => { for (const listener of listeners) listener(); };
   // Every session minted passes here (a reconnect too), so the role the editor shows controls by is the api's latest word.
@@ -18,7 +18,7 @@ function openStore(documentId: string, onRejected: (rejection: Rejection) => voi
     if (minted) onSession(minted);
     return minted;
   };
-  const peer = connectPeer({ manifest, session, onChange: tell, onStatus: tell, onRejected, onOp });
+  const peer = connectPeer({ manifest, session, onChange: tell, onStatus: tell, onRejected, onOp, onRole });
   return {
     peer,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -42,8 +42,8 @@ const NOTHING = { subscribe: () => () => undefined, snapshot: () => "" };
  * `onOp` (E10.6): every op the room orders, ours included, with its actor. Held in a ref, so the caller may
  * pass a new function each render without the peer being opened again.
  *
- * `role` (E10.8): the caller's role on the document as the api said when it minted the latest session; undefined until
- * it has, or when the api did not say. What the top bar shows controls by (Share is the owners'); never what decides.
+ * `role` (E10.8): the caller's role on the document as the api said when it minted the latest session, or as the room
+ * said since when it changed while the session stayed open (noon-frc); undefined until either has, or when the api did not say. What the top bar shows controls by (Share is the owners'); never what decides.
  */
 export function usePeer(documentId: string, onOp?: (message: SequencedOp) => void) {
   const [refusals, setRefusals] = useState<Refusal[]>([]);
@@ -54,7 +54,7 @@ export function usePeer(documentId: string, onOp?: (message: SequencedOp) => voi
   latestOnOp.current = onOp;
   useEffect(() => {
     // `quiet` (someone else removed the node first) is not news: the canvas already shows it (F5).
-    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason, rejection.op); }, (message) => latestOnOp.current?.(message), (session) => { setRole(session.role); });
+    const opened = openStore(documentId, (rejection) => { if (!rejection.quiet) refuse(rejection.reason, rejection.op); }, (message) => latestOnOp.current?.(message), (session) => { setRole(session.role); }, setRole);
     setStore(opened);
     return () => { opened.peer.close(); };
   }, [documentId]);

@@ -14,19 +14,22 @@ const ORG = "22222222-2222-4222-8222-222222222222";
 let server: RunningSyncServer | undefined;
 afterEach(async () => { await server?.close(); server = undefined; });
 
-type Peer = { ws: WebSocket; userId: string; types: string[]; welcomed: Promise<unknown>; closed: Promise<number> };
+type Peer = { ws: WebSocket; userId: string; types: string[]; said: unknown[]; welcomed: Promise<unknown>; closed: Promise<number> };
 function join(url: string, documentId: string): Peer {
   const userId = randomUUID();
   const ws = new WebSocket(`${url}/documents/${documentId}`, ["noon.v1", signSessionToken({ userId, orgId: ORG, documentId, secret: SECRET, ttlSeconds: 60 })]);
   ws.on("error", () => undefined);
   const types: string[] = [];
+  const said: unknown[] = [];
   // Listening from the start: the welcome can come in the same packet as the upgrade's answer.
   const welcomed = new Promise((resolve) => ws.on("message", (data: WebSocket.RawData) => {
-    const type = (JSON.parse(frameText(data)) as { type: string }).type;
+    const message = JSON.parse(frameText(data)) as { type: string };
+    const { type } = message;
     types.push(type);
+    said.push(message);
     if (type === "welcome") resolve(type);
   }));
-  return { ws, userId, types, welcomed, closed: new Promise((resolve) => ws.once("close", resolve)) };
+  return { ws, userId, types, said, welcomed, closed: new Promise((resolve) => ws.once("close", resolve)) };
 }
 const addOp = (): ClientMessage => ({ type: "op", opId: randomUUID(), baseSeq: 0, op: { type: "add_node", nodeId: randomUUID(), parentId: ROOT_ID, index: 0, component: "Stack", props: {} } });
 const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -109,4 +112,25 @@ test("a revoke nobody announced still closes the session within F24's 10 s, at t
   const started = performance.now();
   expect(await outsider.closed).toBe(4404);
   expect(performance.now() - started).toBeLessThan(10_000);
+});
+
+// noon-frc: an owner demoted to editor may still edit, so the session stayed open and the page kept its owner controls
+// (Share) until it reconnected. A session that stays open is told its new role, once per change.
+test("a session whose role changes and stays open is told the new role once; a sweep that finds it unchanged says nothing", async () => {
+  const documentId = randomUUID();
+  const access = new Map<string, Role | undefined>();
+  server = await startSyncServer({ port: 0, secrets: [SECRET], sweepMs: 60_000, roles: (_org, _doc, userId) => Promise.resolve(access.get(userId)) });
+  const owner = join(server.url, documentId);
+  access.set(owner.userId, "owner");
+  await owner.welcomed;
+  await server.recheck("all"); // unchanged: nothing to say
+
+  access.set(owner.userId, "editor");
+  await server.recheck({ orgId: ORG, userId: owner.userId });
+  await server.recheck("all"); // the sweep after the announcement finds nothing new
+  access.set(owner.userId, "owner");
+  await server.recheck("all");
+  await settle(50);
+  expect(owner.said.filter((message) => (message as { type: string }).type === "role")).toEqual([{ type: "role", role: "editor" }, { type: "role", role: "owner" }]);
+  expect(owner.ws.readyState).toBe(WebSocket.OPEN);
 });

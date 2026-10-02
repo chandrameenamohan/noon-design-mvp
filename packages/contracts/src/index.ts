@@ -479,5 +479,9 @@ export const ServerMessage = z.discriminatedUnion("type", [
   // silence watchdog does not give up on a node that is waiting on a slow database (noon-cs6.3.2). It says nothing
   // else. An older client skips the type, but any frame resets its silence clock, so it is helped too.
   z.object({ type: z.literal("loading") }),
+  // This session's role changed and the session stays open (noon-frc): an owner demoted to editor may still edit, so
+  // nothing else would tell its page to stop showing owner controls. Sent once per change; what the page shows by,
+  // never what decides (the room and the api do). An older client skips the type and learns at its next session.
+  z.object({ type: z.literal("role"), role: Role }),
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;

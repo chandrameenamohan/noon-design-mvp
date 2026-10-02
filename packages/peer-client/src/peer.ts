@@ -1,4 +1,4 @@
-import { ServerMessage, type ClientMessage, type Doc, type Presence, type Manifest, type Op, type SequencedOp } from "@noon/contracts";
+import { ServerMessage, type ClientMessage, type Doc, type Presence, type Manifest, type Op, type Role, type SequencedOp } from "@noon/contracts";
 import { createReplica, type LocalResult, type Outcome, type Rejection } from "./replica.ts";
 
 export type { Outcome, Rejection };
@@ -26,6 +26,8 @@ export type PeerOptions = {
    */
   onOp?: (message: SequencedOp) => void;
   onStatus?: (status: PeerStatus) => void;
+  /** The room says our role changed while this session stays open (noon-frc): what a page shows controls by, never what decides. */
+  onRole?: (role: Role) => void;
   /** Node 24 and every browser have the same WebSocket built in, so one client serves both. Tests pass a saboteur. */
   WebSocketImpl?: typeof WebSocket;
   retryMs?: { min: number; max: number };
@@ -51,7 +53,7 @@ const KNOWN_TYPES: ReadonlySet<unknown> = new Set(ServerMessage.options.map((opt
  * all edit through this. The thinking is in replica.ts; this file is only the wire: connect, wait
  * for the welcome, send, reconnect.
  */
-export function connectPeer({ manifest, session, onChange, onRejected, onOp, onStatus, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, mintOpId, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
+export function connectPeer({ manifest, session, onChange, onRejected, onOp, onStatus, onRole, WebSocketImpl = WebSocket, retryMs = { min: 250, max: 10_000 }, ackTimeoutMs = 10_000, maxPending, mintOpId, presence: timing = { sendEveryMs: 50, refreshMs: 2000, forgetAfterMs: 5000 } }: PeerOptions) {
   const replica = createReplica({ manifest, ...(maxPending === undefined ? {} : { maxPending }), ...(mintOpId === undefined ? {} : { mintOpId }) });
   let status: PeerStatus = "closed"; // until open() below, a line from now; this way the first onStatus is "connecting"
   let closedBecause: string | undefined;
@@ -182,7 +184,8 @@ export function connectPeer({ manifest, session, onChange, onRejected, onOp, onS
     // applied. "unavailable" says exactly that (keep it, come back through a fresh welcome).
     // Presence is cosmetic: a frame of it that we cannot read is dropped like an unknown type. Ending
     // the peer over it would throw away the user's unsent edits because of someone's pointer.
-    if (!parsed.success && (type === "presence" || type === "presence_left")) return;
+    // So is a role frame: the room still decides what we may do. One naming a role newer than this client is skipped.
+    if (!parsed.success && (type === "presence" || type === "presence_left" || type === "role")) return;
     if (!parsed.success && type === "rejected") parsed = ServerMessage.safeParse({ ...(raw as object), reason: "unavailable" });
     if (!parsed.success) { finish("protocol"); return; }
 
@@ -194,6 +197,10 @@ export function connectPeer({ manifest, session, onChange, onRejected, onOp, onS
     }
     if (message.type === "presence_left") {
       if (others.has(message.peerId)) changePresence(() => others.delete(message.peerId));
+      return;
+    }
+    if (message.type === "role") {
+      onRole?.(message.role);
       return;
     }
     if (message.type === "loading") return; // the room is still opening: hearing it at all (lastHeard) was the point

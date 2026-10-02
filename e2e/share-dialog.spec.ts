@@ -132,20 +132,19 @@ test("the owner shares from the bar's dialog; the outsider edits live, is made a
   await watcher.close();
 });
 
-// noon-2h1.8.2: an owner with the dialog open is demoted by another owner. Their session comes back as an editor's, the
-// Share button and its dialog go, and the global shortcuts work again (the dialog's open state no longer outlives it).
-// The room does NOT close an owner's socket when they become an editor (its role sweep only changes what they may edit,
-// and an editor may edit), so the page learns the new role from its next session: here the socket drops, as a network
-// blip or a sync restart drops it, and the reconnect mints one that says "editor".
-test("an owner demoted while the Share dialog is open loses the dialog at the next session, and the global shortcuts work again", async ({ page, request }) => {
+// noon-2h1.8.2: an owner with the dialog open is demoted by another owner. The Share button and its dialog go, and the
+// global shortcuts work again (the dialog's open state no longer outlives it). noon-frc: an editor may still edit, so the
+// room keeps the session open and tells it the new role (a "role" frame, at the announcement or the 5 s sweep): the page
+// follows on the SAME socket, which the route below counts.
+test("an owner demoted while the Share dialog is open loses the dialog on the open session, and the global shortcuts work again", async ({ page, request }) => {
   const first = `e2e-${stamp}-share-demoted@example.com`;
   const second = `e2e-${stamp}-share-coowner@example.com`;
-  let drop = (): void => { throw new Error("the document's socket was not routed"); };
+  let sockets = 0;
   await page.routeWebSocket(/\/documents\//, (ws) => {
+    sockets += 1;
     const server = ws.connectToServer();
     ws.onMessage((message) => { server.send(message); });
     server.onMessage((message) => { ws.send(message); });
-    drop = () => { void server.close(); void ws.close(); };
   });
   expect((await request.get("/api/auth/me", as(second))).status()).toBe(200);
   await newDocument(page, first);
@@ -156,10 +155,16 @@ test("an owner demoted while the Share dialog is open loses the dialog at the ne
   await share.click();
   await expect(dialogOf(page)).toBeVisible();
   expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(second), data: { email: first, role: "editor" } })).status()).toBe(200);
-  drop();
-  await expect(share).toHaveCount(0, { timeout: 15_000 });
+  await expect(share).toHaveCount(0, { timeout: 10_000 }); // F24: a role change reaches an open session within 10 s
   await expect(dialogOf(page)).toHaveCount(0);
+  expect(sockets).toBe(1);
   await expect(page.getByRole("status").first()).toHaveText("live");
   await page.keyboard.press("?");
   await expect(page.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // Made an owner again: the Share button comes back, on the same session.
+  expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(second), data: { email: first, role: "owner" } })).status()).toBe(200);
+  await expect(share).toBeVisible({ timeout: 10_000 });
+  expect(sockets).toBe(1);
 });

@@ -267,6 +267,19 @@ test("onOp hears every op the room orders, with the actor the room stamped on it
   peer.close();
 });
 
+test("onRole hears the room say our role changed while the session stays open (noon-frc); a role this client does not know is skipped, not the end of the peer", async () => {
+  const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [] }); });
+  const heard: string[] = [];
+  const peer = connectPeer(options(net, { onRole: (role) => { heard.push(role); } }));
+  await until(() => peer.status === "live", "live");
+  net.sockets[0]?.say({ type: "role", role: "editor" });
+  net.sockets[0]?.say({ type: "role", role: "auditor" });
+  net.sockets[0]?.say({ type: "role", role: "owner" });
+  expect(heard).toEqual(["editor", "owner"]);
+  expect(peer.status).toBe("live");
+  peer.close();
+});
+
 test("someone who goes silent is forgotten: a dead connection never says goodbye", async () => {
   const net = fakeNet((socket) => { socket.say({ ...welcome, you: "p1", peers: [ada] }); });
   const peer = connectPeer(options(net, { presence: { sendEveryMs: 10, refreshMs: 40, forgetAfterMs: 120 } }));

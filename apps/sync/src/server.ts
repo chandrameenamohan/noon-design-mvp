@@ -103,7 +103,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   let closing = false;
   // Every socket past the upgrade, from BEFORE its role is first read: a change published while that read is in
   // flight still finds it. `asked`/`applied` number the reads, so an older answer never replaces a newer one.
-  type Connected = { peer: Peer; ws: WebSocket; documentId: string; asked: number; applied: number };
+  // `role`: the last one read, so that a session is told only of a change (noon-frc).
+  type Connected = { peer: Peer; ws: WebSocket; documentId: string; asked: number; applied: number; role?: Role };
   const connected = new Set<Connected>();
   // "Alive" into Redis every tenth of a ttl (E7.2): /session stops sending peers to a node that went quiet,
   // and a node knows which leases can only expire. A failed beat is not logged: Redis being away already is.
@@ -394,6 +395,9 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       return false;
     }
     peer.mayEdit = role !== "viewer";
+    // The first read is the one /session also answered: only a change since is news to the page.
+    if (entry.role !== undefined && entry.role !== role) peer.send({ type: "role", role });
+    entry.role = role;
     return true;
   }
 

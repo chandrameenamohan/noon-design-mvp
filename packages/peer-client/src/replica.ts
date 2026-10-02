@@ -26,7 +26,7 @@ export type LocalResult = { ok: true; opId: string; /** False: it changes nothin
  * `maybeApplied`: it was on the wire of an EARLIER connection, so a room we no longer talk to may have applied it.
  */
 /** Everything the server says about the DOCUMENT. Presence is not the replica's business (peer.ts keeps it). */
-export type DocMessage = Exclude<ServerMessage, { type: "presence" | "presence_left" | "status" | "loading" }>;
+export type DocMessage = Exclude<ServerMessage, { type: "presence" | "presence_left" | "status" | "loading" | "role" }>;
 
 type Pending = ClientOp & { staleCount: number; inFlight: boolean; maybeApplied: boolean };
 
