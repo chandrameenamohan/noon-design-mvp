@@ -96,7 +96,10 @@ me='x-dev-user: init-smoke@example.com'
 org=$(curl -fsS -X POST "$api/orgs" -H "$me" -H 'content-type: application/json' -d '{"name":"init.sh smoke"}')
 org_id=$(printf '%s' "$org" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
 [ -n "$org_id" ] || { echo "FAIL: POST /orgs returned '$org'"; exit 1; }
-[ "$(curl -fsS -H "$me" "$api/orgs/$org_id")" = "$org" ] || { echo "FAIL: GET /orgs/$org_id did not return the created org"; exit 1; }
+# GET is the created org, field for field, plus the caller's role in it (noon-2h1.8.3, OrgAsMember).
+got=$(curl -fsS -H "$me" "$api/orgs/$org_id" || true) # a refused GET is the FAIL below, with its message
+node -e 'const { role, ...rest } = JSON.parse(process.argv[2]); require("node:assert").deepStrictEqual(rest, JSON.parse(process.argv[1])); if (role !== "owner") process.exit(1);' "$org" "$got" 2>/dev/null \
+  || { echo "FAIL: GET /orgs/$org_id did not return the created org with role owner: '$got'"; exit 1; }
 super=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select rolsuper from pg_roles where rolname = 'noon_app'")
 [ "$super" = "f" ] || { echo "FAIL: the app role is missing or is a superuser ('$super')"; exit 1; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$api/orgs/$org_id")" = "401" ] || { echo "FAIL: a request without an identity was not refused"; exit 1; }
