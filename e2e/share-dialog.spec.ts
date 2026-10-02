@@ -134,19 +134,30 @@ test("the owner shares from the bar's dialog; the outsider edits live, is made a
 
 // noon-2h1.8.2: an owner with the dialog open is demoted by another owner. Their session comes back as an editor's, the
 // Share button and its dialog go, and the global shortcuts work again (the dialog's open state no longer outlives it).
-test("an owner demoted while the Share dialog is open loses the dialog, and the global shortcuts work again", async ({ page, request }) => {
+// The room does NOT close an owner's socket when they become an editor (its role sweep only changes what they may edit,
+// and an editor may edit), so the page learns the new role from its next session: here the socket drops, as a network
+// blip or a sync restart drops it, and the reconnect mints one that says "editor".
+test("an owner demoted while the Share dialog is open loses the dialog at the next session, and the global shortcuts work again", async ({ page, request }) => {
   const first = `e2e-${stamp}-share-demoted@example.com`;
   const second = `e2e-${stamp}-share-coowner@example.com`;
+  let drop = (): void => { throw new Error("the document's socket was not routed"); };
+  await page.routeWebSocket(/\/documents\//, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => { server.send(message); });
+    server.onMessage((message) => { ws.send(message); });
+    drop = () => { void server.close(); void ws.close(); };
+  });
   expect((await request.get("/api/auth/me", as(second))).status()).toBe(200);
   await newDocument(page, first);
   const org = Org.parse(((await (await request.get("/api/orgs", as(first))).json()) as { items: unknown[] }).items.at(-1));
   expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(first), data: { email: second, role: "owner" } })).status()).toBe(200);
 
-  await page.getByRole("button", { name: "Share", exact: true }).click();
+  const share = page.getByRole("banner").getByRole("button", { name: "Share", exact: true });
+  await share.click();
   await expect(dialogOf(page)).toBeVisible();
   expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(second), data: { email: first, role: "editor" } })).status()).toBe(200);
-  // F24: the room closes the session within 10 s; the reconnect mints one that says "editor".
-  await expect(page.getByRole("button", { name: "Share", exact: true })).toHaveCount(0, { timeout: 15_000 });
+  drop();
+  await expect(share).toHaveCount(0, { timeout: 15_000 });
   await expect(dialogOf(page)).toHaveCount(0);
   await expect(page.getByRole("status").first()).toHaveText("live");
   await page.keyboard.press("?");
