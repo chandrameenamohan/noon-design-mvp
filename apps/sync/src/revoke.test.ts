@@ -4,6 +4,7 @@ import WebSocket from "ws";
 import type { ClientMessage, Role } from "@noon/contracts";
 import { ROOT_ID } from "@noon/doc-model";
 import { signSessionToken } from "@noon/session-token";
+import { frameText } from "./raw.ts";
 import { startSyncServer, type RunningSyncServer } from "./server.ts";
 
 // A role read that can be changed (or hung) mid-test, for sessions that are already open: no Postgres needed.
@@ -21,7 +22,7 @@ function join(url: string, documentId: string): Peer {
   const types: string[] = [];
   // Listening from the start: the welcome can come in the same packet as the upgrade's answer.
   const welcomed = new Promise((resolve) => ws.on("message", (data: WebSocket.RawData) => {
-    const type = (JSON.parse(String(data)) as { type: string }).type;
+    const type = (JSON.parse(frameText(data)) as { type: string }).type;
     types.push(type);
     if (type === "welcome") resolve(type);
   }));
