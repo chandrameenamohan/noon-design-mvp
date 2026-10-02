@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { createProducer, describeError, RedisUrl } from "./index.ts";
-import { TEST_REDIS_URL } from "./testing.ts";
+import { poisonableRedis, TEST_REDIS_URL } from "./testing.ts";
 
 // Node's default for an unhandled rejection is to END THE PROCESS: here that would be the api, mid-shutdown.
 async function withoutUnhandledRejections(work: () => Promise<void>): Promise<void> {
@@ -30,6 +30,22 @@ test("with Redis slow, a deadline that wins and a close() in the middle of the h
     const producer = createProducer({ redisUrl: TEST_REDIS_URL, prefix: "test-deadline", timeoutMs: 1 }); // real Redis, but never within 1 ms of a cold connection
     await expect(producer.enqueue({ queue: "ai", jobId: crypto.randomUUID(), orgId: crypto.randomUUID() })).rejects.toThrow(/redis did not answer/);
     await producer.close();
+  }));
+
+// noon-cs6.3.3: a queue whose connection failed to START (BullMQ's version check threw, gate 11) is dead for good: every
+// later call awaits the same rejected start. Cached, it made a sweep that met it once fail at every sweep after, so the
+// worker never offered a job from Postgres again and never said it was alive. The next call must start a new one.
+test("a queue whose Redis connection failed to start is made anew at the next call, not kept broken for ever", () =>
+  withoutUnhandledRejections(async () => {
+    const redis = await poisonableRedis(1); // the queue's one connection
+    const producer = createProducer({ redisUrl: redis.url, prefix: "test-restart", timeoutMs: 2000 });
+    try {
+      await expect(producer.ping()).rejects.toThrow(/split is not a function/u);
+      await expect(producer.ping()).resolves.toBeUndefined();
+    } finally {
+      await producer.close();
+      await redis.close();
+    }
   }));
 
 test("REDIS_URL must be a redis URL with a host", () => {

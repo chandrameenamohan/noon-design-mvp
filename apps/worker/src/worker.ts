@@ -172,12 +172,29 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
   // staleMs and the check runs every sweep: the message is free about when the row is (staleMs and a few sweeps: two
   // stall checks, and one more offer if the freed message reached a worker before the row was queued again).
   // A live worker frozen past staleMs loses its message too, which is harmless: claim() refuses it while the row runs.
-  const workers = QUEUES.filter((name) => handlers[name] !== undefined).map((name) => {
-    const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: concurrency[name] ?? 4, lockDuration: staleMs, stalledInterval: sweepMs, ...scoped });
-    worker.on("error", (err) => log("warn", describeError(err), { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
-    return worker;
-  });
-  await Promise.all(workers.map((w) => w.waitUntilReady()));
+  // A Worker whose connection failed to START never fetches, and never will: BullMQ's version check threw on a reply it
+  // could not read ("doc.split is not a function", gate 11; noon-cs6.3.3). Started again, a few times; Redis merely away
+  // does not land here (the start waits for it). ponytail: three tries back to back, then the boot fails as before.
+  async function drain(name: QueueName): Promise<Worker> {
+    for (let tries = 1; ; tries++) {
+      const worker = new Worker(name, (message) => run(message.data), { connection: connection(redisUrl), concurrency: concurrency[name] ?? 4, lockDuration: staleMs, stalledInterval: sweepMs, ...scoped });
+      worker.on("error", (err) => log("warn", describeError(err), { queue: name })); // without a listener, a Redis hiccup is an uncaught exception
+      try {
+        await worker.waitUntilReady();
+        return worker;
+      } catch (err) {
+        // Closed while its OTHER connection is still starting, BullMQ 5.81 has already dropped the listener that start's
+        // failure is emitted to: an unhandled rejection, which ends a Node process. So both starts end first.
+        // ponytail: reads a BullMQ private (a TS cast); upgrade: drop it once BullMQ keeps that listener past close().
+        const blocking = (worker as unknown as { blockingConnection: { client: Promise<unknown> } }).blockingConnection.client;
+        await Promise.allSettled([worker.client, blocking]);
+        await worker.close(true).catch(() => undefined);
+        if (tries === 3) throw err;
+        log("warn", `queue connection did not start, starting it again: ${describeError(err)}`, { queue: name });
+      }
+    }
+  }
+  const workers = await Promise.all(QUEUES.filter((name) => handlers[name] !== undefined).map(drain));
 
   // Redis is not the truth (SPEC §2.9): it can be flushed, and the api can die between its INSERT
   // and its enqueue. Whatever Postgres still calls `queued` is offered again; jobId + claim() make

@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
 import { Queue, Worker } from "bullmq";
 import { connection, createProducer, type Producer } from "@noon/queue";
-import { TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
+import { poisonableRedis, TEST_REDIS_URL } from "../../../packages/queue/src/testing.ts";
 import { createTestDb, type TestDb } from "../../../packages/db/src/testing.ts";
 import { startWorker, type Handlers, type RunningWorker } from "./worker.ts";
 
@@ -142,4 +142,24 @@ test("Redis wiped under a working worker: the running job ends once, the waiting
   }
   expect(calls.toSorted()).toEqual([held, ...waiting].map((key) => key.jobId).toSorted()); // each ran once: no duplicate job
   for (const key of [held, ...waiting]) expect(await row(key.jobId)).toMatchObject({ status: "succeeded", attempts: 1 });
+});
+
+// noon-cs6.3.3, gate 11: BullMQ's version check, at a connection's start, read a reply that was not INFO's and threw
+// ("doc.split is not a function"). A Worker whose start failed never fetches: the worker must start it again, not
+// die at boot (or, in this file, fail the next test) over one unreadable reply.
+test("a worker whose Redis connections fail to start starts them again, and then runs a job once", async () => {
+  const redis = await poisonableRedis(2); // the ai Worker's two connections: the one it fetches on and the blocking one
+  const calls: string[] = [];
+  try {
+    const worker = await startWorker({ db: db.db, redisUrl: redis.url, prefix, handlers: { ai: (job) => { calls.push(job.id); return Promise.resolve(undefined); } }, sweepMs: 100, cancelPollMs: 100, staleMs: 60_000 });
+    running.push(worker);
+    const key = await aJob();
+    await producer.enqueue(key);
+    await until(async () => (await row(key.jobId)).status === "succeeded", "the job succeeded");
+    expect(calls).toEqual([key.jobId]);
+  } finally {
+    await Promise.all(running.map((w) => w.close()));
+    running = [];
+    await redis.close();
+  }
 });

@@ -55,7 +55,15 @@ export function createProducer({ redisUrl, prefix, timeoutMs = 2000 }: { redisUr
   // simply hung, and 80 s later still had). The caller gets an answer within the deadline instead.
   async function withinDeadline(work: (queue: Queue) => Promise<unknown>, name: QueueName): Promise<void> {
     const queue = queueFor(name);
-    const attempt = queue.waitUntilReady().then(() => work(queue));
+    // A connection whose START failed (BullMQ's version check threw on a reply it could not read: gate 11) is dead for
+    // good, every later call awaiting the same rejected start: forget it, so the next call starts a new one. Redis
+    // merely away does not land here: the start waits for it, and the deadline below answers the caller (noon-cs6.3.3).
+    const started = queue.waitUntilReady().catch(async (err: unknown) => {
+      if (queues.get(name) === queue) queues.delete(name);
+      await queue.close().catch(() => undefined);
+      throw err;
+    });
+    const attempt = started.then(() => work(queue));
     // When the deadline wins, `attempt` is still out there and may fail later. A rejection nobody
     // handles ends a Node process. (The case the review reproduced, a close() in mid-handshake, is
     // cured in close() below and tested; this line is for the failures we have not met yet.)
