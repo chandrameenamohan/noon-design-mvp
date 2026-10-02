@@ -9,8 +9,12 @@
 //   sandbox: a document open with its preview up; worker-sandbox is killed and started again: the preview's job is
 //            taken again (attempt 2) and the canvas's preview comes back, instead of the document being blocked for
 //            ever (the E4.2b finding).
-//   ship:    worker-ship is killed as soon as a ship runs, and started again: the ship ends `succeeded` and Gitea has
-//            exactly ONE open pull request for the document (Ship's own idempotence, E5.5).
+//   ship:    Gitea is paused first, so the ship is held `running` on its first git call (unheld, a ship ends sooner
+//            than one poll here notices it run, noon-elo.2.1); worker-ship is killed while it runs, Gitea resumed, the
+//            worker started again: the ship ends `succeeded` as attempt 2 and Gitea has exactly ONE open pull request
+//            for the document (Ship's own idempotence, E5.5). ponytail: the kill lands before the commit, never between
+//            the push and the pull request; that retry (the branch already holds the page, the PR is opened on it) is
+//            the "Ship again" case of apps/worker/src/ship.int.test.ts. Upgrade: a hook in the worker to stop after the push.
 // Waits poll the observable, never a fixed sleep; every service is started again in `finally`. Prints one JSON line;
 // exit 0 = PASS. Cleanup: the org (cascade), the stub containers, the ship's branch in Gitea.
 import { execFileSync } from "node:child_process";
@@ -147,25 +151,32 @@ async function shipRound(): Promise<Record<string, unknown>> {
   const doc = await newDocument("chaos kill worker: ship");
   const branch = `noon/${doc}`;
   const editor = person(doc);
+  let giteaPaused = false;
   try {
     await until(() => editor.status === "live", "the person is live", 15_000);
     const add: Op = { type: "add_node", nodeId: "b1", parentId: "root", index: 0, component: "Button", props: { label: "Pay" } };
     const edit = editor.submit(add);
     check(edit.ok && (await edit.settled).ok, "the page has a Button");
+    compose("pause", "gitea"); // the ship's git calls hang (each up to 60 s: ship.ts), so it is still running when killed
+    giteaPaused = true;
     const ship = idOf(await call("POST", `/documents/${doc}/ship`, undefined, { "idempotency-key": randomUUID() }));
     await until(() => job(ship).status !== "queued", "the ship starts", 60_000);
-    const midShip = job(ship).status === "running";
+    const atKill = job(ship);
     compose("kill", "--signal", "SIGKILL", "worker-ship");
+    check(atKill.status === "running" && atKill.attempts === 1, `the kill lands mid-ship, attempt 1 running (got ${JSON.stringify(atKill)})`);
+    compose("unpause", "gitea");
+    giteaPaused = false;
     compose("start", "worker-ship");
     await until(() => !["queued", "running"].includes(job(ship).status), "the ship ends", STALE_MS + 90_000);
     const done = job(ship);
-    check(done.status === "succeeded", `the ship succeeds (got ${JSON.stringify(done)})`);
+    check(done.status === "succeeded" && done.attempts === 2, `the killed ship is retried and succeeds as attempt 2 (got ${JSON.stringify(done)})`);
     const pulls = (await (await fetch(`${gitea}/pulls?state=open&limit=50`, { headers: { authorization: `token ${giteaToken}` } })).json()) as { head: { ref: string } }[];
     const ours = pulls.filter((p) => p.head.ref === branch).length;
     check(ours === 1, `exactly one open pull request for ${branch} (got ${String(ours)})`);
-    return { round: "ship", killedMidShip: midShip, attempts: done.attempts };
+    return { round: "ship", killedMidShip: true, attempts: done.attempts };
   } finally {
     editor.close();
+    if (giteaPaused) compose("unpause", "gitea");
     compose("start", "worker-ship");
     await fetch(`${gitea}/branches/${encodeURIComponent(branch)}`, { method: "DELETE", headers: { authorization: `token ${giteaToken}` } }).catch(() => undefined);
   }
