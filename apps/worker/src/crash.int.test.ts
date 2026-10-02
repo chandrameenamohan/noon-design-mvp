@@ -66,11 +66,13 @@ test("a job left running by a dead worker runs again once its heartbeat is stale
 test("a job whose dead worker still holds its BullMQ message runs again within staleMs and a few sweeps, not BullMQ's 30 s checks", async () => {
   const key = await aJob();
   // The dead worker: it took the message and claimed the job, then stopped without a word (no completion, no
-  // more lock renewals). Its lock is the one our workers take: staleMs long.
+  // more lock renewals). Its lock and stall checks are the ones our workers take: staleMs long, every sweep. Not
+  // BullMQ's 30 s default: the first check of a queue holds its `stalled-check` key for its OWN interval, and every
+  // other worker's check is skipped until then, so the job stayed held past this test (and ran in the Redis wipe's).
   const dead = new Worker("ai", async (message) => {
     await db.db.jobStore().claim(message.data as typeof key);
     await new Promise(() => undefined);
-  }, { connection: connection(TEST_REDIS_URL), prefix, lockDuration: 1000 });
+  }, { connection: connection(TEST_REDIS_URL), prefix, lockDuration: 1000, stalledInterval: 100 });
   await producer.enqueue(key);
   await until(async () => (await row(key.jobId)).status === "running", "the dead worker claimed it");
   await dead.close(true);
