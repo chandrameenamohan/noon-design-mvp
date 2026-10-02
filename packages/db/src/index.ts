@@ -392,7 +392,11 @@ function decodeCursor(cursor: string): { ts: string; id: string } | undefined {
   return { ts, id };
 }
 
-export function createDb({ connectionString, schema }: { connectionString: string; schema?: string }): Db {
+/**
+ * `warm`: connections the pool keeps open however long they sit idle (noon-cs6.3.2). On a slow Postgres, opening one
+ * (several round trips) can alone outlast the sync node's journal bound; a warm one answers in one. close() ends them.
+ */
+export function createDb({ connectionString, schema, warm = 0 }: { connectionString: string; schema?: string; warm?: number }): Db {
   // `schema` goes into libpq's space-separated startup options, where a space would smuggle in
   // extra `-c` settings (the review set session_replication_role this way). Plain identifiers only.
   if (schema !== undefined && !IDENTIFIER.test(schema)) {
@@ -403,6 +407,7 @@ export function createDb({ connectionString, schema }: { connectionString: strin
   const pool = new Pool({
     connectionString,
     application_name: "noon-db",
+    min: warm,
     ...(schema === undefined ? {} : { options: `-c search_path=${schema}` }),
   });
   // Postgres restarting, or killing an idle connection, makes the pool emit 'error'. An 'error'
