@@ -98,7 +98,7 @@ h2 { scroll-margin-top: 24px; }
   <p class="lede">The win: you can explain, to an interviewer or to yourself, how an AI edits a shared document without a single new rule in the room, why a queue is never the truth, what it takes to stop a process you do not own, and where the money goes; and you can point at the line of code for every claim.</p>
 
   <div class="aside">
-    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">94222ab</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4 and 7 are the ones an architect interview will dig into.</p>
+    <p><strong>How to use this page.</strong> Every code block is cut from the repo at commit <span class="mono">d4eea6f</span>, so what you read is what runs. It is long: one section a day is a fine pace. Sections 1, 3, 4 and 7 are the ones an architect interview will dig into.</p>
     <p class="mono">./init.sh&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Postgres + Redis + api + sync + worker<br>docker compose logs -f worker&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# "agent tools registered and isolated", then each run<br>make integration&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# the worker against real Postgres, Redis and sync<br>pnpm exec playwright test e2e/ai.spec.ts&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# two browser contexts and a scripted model</p>
     <p>Try it: open a document in two windows, type an instruction in the AI panel of one, and watch the nodes arrive in both. Without <span class="mono">CLAUDE_CODE_OAUTH_TOKEN</span> in <span class="mono">.env</span> every run fails at once as <em>token_missing</em>, which the panel says in words; the browser test does not need a token, because its model is scripted.</p>
   </div>
@@ -158,10 +158,12 @@ export const JobRef = z.strictObject({ queue: z.enum(QUEUES), jobId: Id, orgId: 
   async function sweepOnce(): Promise&lt;void&gt; {
     try {
       await producer.ping(); // with nothing queued the loop below never touches Redis, and &quot;alive&quot; would mean &quot;Postgres is up&quot;
-      const stale = await jobs.requeueStale(staleMs, maxAttempts);
-      if (stale.requeued + stale.lost &gt; 0) log(&quot;warn&quot;, &quot;jobs left running by a dead worker&quot;, stale);
+      if (store.mayRequeue()) {
+        const stale = await fromStore(jobs.requeueStale(staleMs, maxAttempts));
+        if (stale.requeued + stale.lost &gt; 0) log(&quot;warn&quot;, &quot;jobs left running by a dead worker&quot;, stale);
+      }
       // One refused offer must not hide the 99 behind it: it stays `queued` and is offered again next time.
-      for (const ref of await jobs.queued(100)) await producer.enqueue(ref).catch((err: unknown) =&gt; log(&quot;warn&quot;, `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
+      for (const ref of await fromStore(jobs.queued(100))) await producer.enqueue(ref).catch((err: unknown) =&gt; log(&quot;warn&quot;, `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
       onAlive?.();
     } catch (err) {
       log(&quot;warn&quot;, `sweep failed: ${describeError(err)}`);
@@ -263,6 +265,7 @@ const FAILURES: Partial&lt;Record&lt;string, string&gt;&gt; = {
   sync_unreachable: &quot;The AI lost its connection to the document. What it had already changed stays.&quot;,
   worker_stopped: &quot;The server was restarted during the run. What the AI had already changed stays.&quot;,
   owner_missing: &quot;You are no longer a member of this document&#x27;s organisation.&quot;,
+  forbidden: &quot;You can no longer edit this document: an owner made you a viewer. What the AI had already changed stays.&quot;,
 };
 const sentence = (run: Run): string =&gt;
   run.status === &quot;queued&quot; ? &quot;The AI is waiting to start.&quot;
@@ -288,12 +291,13 @@ const sentence = (run: Run): string =&gt;
       clearTimeout(timer);
     }
   }</code></pre></div><p>Three details carry the pattern. <code>Promise.race</code> picks the first to settle; <em>the loser is still running</em>. So the loser gets a <code>.catch</code> now, because a rejection nobody handles ends a Node process. And the timer is cleared in <code>finally</code>, or a fast success would leave a timer behind.</p><p><strong>The run.</strong> A run must end, whatever happens around it. Left <code>running</code>, its row blocks the document's next run for ever and holds one of the worker's four slots. So the handler builds one promise, <code>ended</code>, that only ever rejects, and always with a name the user can read:</p><p class="label">From <span class="mono">apps/worker/src/ai.ts</span></p><div class="scroll"><pre><code>    // A run must END, whatever happens around it. Left `running`, its row blocks this document&#x27;s next
-    // run for ever (one unfinished run per document) and holds one of the worker&#x27;s few slots. So three
-    // things can end it from outside, each with a name the user can read; whichever comes first wins.
+    // run for ever (one unfinished run per document) and holds one of the worker&#x27;s few slots. So these
+    // things can end it from outside (and the room&#x27;s `forbidden`, below), each with a name the user can read; whichever comes first wins.
     const abort = new AbortController();
     let watchdog: NodeJS.Timeout | undefined;
+    let end: (reason: string) =&gt; void = () =&gt; undefined;
     const ended = new Promise&lt;never&gt;((_, reject) =&gt; {
-      const end = (reason: string): void =&gt; { reject(new JobFailure(reason)); };
+      end = (reason) =&gt; { reject(new JobFailure(reason)); };
       stopping.addEventListener(&quot;abort&quot;, () =&gt; { end(&quot;worker_stopped&quot;); }, { once: true, signal: abort.signal });
       cancelled.addEventListener(&quot;abort&quot;, () =&gt; { end(&quot;cancelled&quot;); }, { once: true, signal: abort.signal }); // F10: the ops already applied stay // SIGTERM: say so NOW, inside the shutdown deadline
       const deadline = Date.now() + runTimeoutMs;
@@ -528,6 +532,23 @@ export type Outcome = { ok: true; seq?: number } | { ok: false; reason: Rejectio
   } finally {
     await small.close();
   }
+});
+
+test(&quot;a run whose creator is made a viewer DURING it stops at the room&#x27;s first `forbidden`, instead of spending on refused ops (noon-dtf.2.4)&quot;, async () =&gt; {
+  // A room that reads everyone as a viewer: what a run sees once an owner demotes its creator mid-run.
+  const { startSyncServer } = await import(&quot;../../sync/src/server.ts&quot;);
+  const viewersOnly = await startSyncServer({ port: 0, secrets: [TEST_SECRET], roles: () =&gt; Promise.resolve(&quot;viewer&quot;) });
+  try {
+    let calls = 0;
+    const running = createAiHandler({ ...base(), sessions: { secret: TEST_SECRET, syncUrl: viewersOnly.url }, runAgent: async ({ tools, signal }) =&gt; {
+      while (!signal.aborted) { calls += 1; await call(tools, &quot;add_node&quot;, { parentId: &quot;root&quot;, component: &quot;Card&quot;, props: {} }); }
+      throw new Error(&quot;aborted&quot;);
+    } })(job(), never);
+    await expect(running).rejects.toMatchObject({ reason: &quot;forbidden&quot; });
+    expect(calls).toBeLessThanOrEqual(2); // the first refusal ends it; the model is not left to try again and again
+  } finally {
+    await viewersOnly.close();
+  }
 });</code></pre></div><div class="scroll"><table><tr><th>TypeScript (this repo)</th><th>Java</th><th>Python</th></tr><tr><td><code>Promise&lt;Outcome&gt;</code> that never rejects: four outcomes as values</td><td><code>CompletableFuture&lt;Outcome&gt;</code>, with the temptation to <code>completeExceptionally</code></td><td>an <code>asyncio.Future</code> resolved with a result object</td></tr><tr><td><code>isError: true</code> in the tool result</td><td>returning an error DTO instead of throwing across an RPC</td><td>the same</td></tr><tr><td>a <code>Map</code> for a lookup keyed by untrusted strings</td><td><code>HashMap</code>: no prototype to collide with</td><td><code>dict</code>: no prototype to collide with</td></tr></table></div><div class="break"><p class="label">Case study · found by review, by a verifier, or by a test that flaked</p><p><strong>A tool call waited for ever on a sync server that had died.</strong></p><p>peer-client retries a lost server for ever (that is right for a browser tab), and an op it cannot send is never answered. So a tool call in the middle of a run waited on <code>settled</code> for a verdict that no server would ever give, and the run held its slot until the process was restarted. The watchdog inside <code>ended</code> now ends the run as <code>sync_unreachable</code> after a bounded silence, and <code>peer.close()</code> in <code>finally</code> settles every waiting op as <code>connection_closed</code>. The tool call comes back with an error, the model is aborted, the row is finished.</p><p class="label">From <span class="mono">apps/worker/src/ai.int.test.ts</span></p><div class="scroll"><pre><code>test(&quot;when the sync server goes away in the middle of a run, the waiting tool call comes back as an error and the run ends as `sync_unreachable`&quot;, async () =&gt; {
   const { startSyncServer } = await import(&quot;../../sync/src/server.ts&quot;);
   const doomed = await startSyncServer({ port: 0, secrets: [TEST_SECRET] });
@@ -590,7 +611,7 @@ alter table jobs add column cancel_requested_at timestamptz;</code></pre></div><
     // `lost` aborts it too: this worker went silent for longer than staleMs and the job was given to another.
     const cancel = new AbortController();
     const watch = setInterval(() =&gt; {
-      jobs.heartbeat(mine).then((state) =&gt; {
+      fromStore(jobs.heartbeat(mine)).then((state) =&gt; {
         if (state === &quot;lost&quot; &amp;&amp; !cancel.signal.aborted) log(&quot;warn&quot;, &quot;job taken over after a silence: stopping this attempt&quot;, { jobId: ref.jobId, attempt: job.attempt });
         if (state !== &quot;running&quot;) cancel.abort();
       }, () =&gt; undefined); // a failed beat is tried again in a second; staleMs is many of them
@@ -654,15 +675,19 @@ create table usage (
   cost_usd           numeric(12, 6) not null check (cost_usd &gt;= 0),
   created_at         timestamptz not null default now()
 );
-create index usage_org on usage (org_id, created_at, id);</code></pre></div><p>The write comes <em>from the job row</em>: <code>insert ... select</code> takes org, document and user from what the row says, never from what the caller says. A key that names the job under another org selects nothing and writes nothing. And <code>on conflict (job_id) do nothing</code>: a message delivered twice bills once.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async recordUsage({ jobId, orgId }, amount) {
+create index usage_org on usage (org_id, created_at, id);</code></pre></div><p>The write comes <em>from the job row</em>: <code>insert ... select</code> takes org, document and user from what the row says, never from what the caller says. A key that names the job under another org selects nothing and writes nothing. And <code>on conflict (job_id) do nothing</code>: a message delivered twice bills once.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>      async recordUsage({ jobId, orgId, attempt }, amount) {
         if (!isId(jobId) || !isId(orgId)) return;
         const a = UsageAmount.parse(amount); // the same contract the reader uses, BEFORE the write
         // insert ... select FROM THE JOB: org, document and user are what the row says, never what a caller
         // says, and a key that names the job under another org selects nothing. `on conflict`: billed once.
+        // Billed once, so by the attempt that holds the job (noon-elo.2.4): `attempts` as finish() fences it, and not
+        // `queued` (given away, the next claim not yet made). A given-up attempt&#x27;s spend is ours, not the org&#x27;s; the
+        // job&#x27;s LAST attempt bills even when the sweep ended it (worker_lost, cancelled).
         await pool.query(
           &quot;insert into usage (org_id, job_id, document_id, user_id, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd) &quot; +
-            &quot;select j.org_id, j.id, j.document_id, j.created_by, &#x27;ai_run&#x27;, $3, $4, $5, $6, $7, $8 from jobs j where j.org_id = $1 and j.id = $2 on conflict (job_id) do nothing&quot;,
-          [orgId, jobId, a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheWriteTokens, a.costUsd.toFixed(6)],
+            &quot;select j.org_id, j.id, j.document_id, j.created_by, &#x27;ai_run&#x27;, $3, $4, $5, $6, $7, $8 from jobs j where j.org_id = $1 and j.id = $2 &quot; +
+            &quot;and ($9::int is null or (j.attempts = $9 and j.status &lt;&gt; &#x27;queued&#x27;)) on conflict (job_id) do nothing&quot;,
+          [orgId, jobId, a.model, a.inputTokens, a.outputTokens, a.cacheReadTokens, a.cacheWriteTokens, a.costUsd.toFixed(6), attempt ?? null],
         );
       },</code></pre></div><p>Order matters. The worker records usage <em>before</em> it finishes the row. A crash between the two leaves <code>running</code>, an owned ceiling that epic 9 will sweep, rather than losing the spend. And a failed <code>recordUsage</code> is logged, never a failed run: a run that worked is not failed over its bookkeeping.</p><p class="label">From <span class="mono">apps/worker/src/worker.ts</span></p><div class="scroll"><pre><code>/**
  * One claimed attempt, from its handler to its row&#x27;s end. However it ends (succeeded, failed, cancelled), what it
@@ -696,6 +721,32 @@ export async function runAttempt({ jobs, key, job, handler, cancel, log: say = l
   }
   if (consumed) await jobs.recordUsage(key, consumed).catch((err: unknown) =&gt; { say(&quot;error&quot;, `usage not recorded: ${describeError(err)}`, { jobId: key.jobId }); });
   await (reason === undefined ? jobs.finish(key, status) : jobs.finish(key, status, reason));
+}
+
+/**
+ * Whether this process&#x27;s sweep may give stale jobs away (noon-cs6.3.3). A Postgres outage longer than staleMs makes
+ * EVERY running job&#x27;s beat stale, the healthy ones&#x27; too: when Postgres came back it was a race between a live worker&#x27;s
+ * next beat and a sweep, and a lost race restarted the run from step one (a second model call). After a failed store
+ * call (a sweep&#x27;s or a beat&#x27;s), the sweep waits until Postgres has answered this process again for `graceMs`
+ * (staleMs): the same silence a live worker is allowed at any other time, so its beats have landed by then. Chosen
+ * over &quot;a worker beats once before any sweep requeues&quot;: the beat is in the job&#x27;s process and the sweep in every
+ * process, and that ordering would need them to talk; a process knows its own failures where it decides.
+ * ponytail: per process, from its own failures. A store cut from the job&#x27;s worker only (a partition) still looks like
+ * a death to the others, which is what it is to them; a store that HANGS without failing a call is not seen. The cost:
+ * a job whose worker really died during the outage is retried staleMs later than it would have been.
+ * The ceiling: a process with no job running makes no store call between sweeps (sweepMs), so an outage that falls
+ * wholly between two of them is never seen there; if its next sweep lands in the ~cancelPollMs after Postgres is back,
+ * before the live worker&#x27;s first beat, it requeues that healthy job. Upgrade path: decide in the database, not per
+ * process: the sweep&#x27;s requeue counts staleness from the later of the beat and when Postgres last came back (e.g. a
+ * row every process stamps on its first answer after a failure, or pg_postmaster_start_time() for restarts).
+ */
+export function requeueGate(graceMs: number, now: () =&gt; number = Date.now): { mayRequeue(): boolean; failed(): void; answered(): void } {
+  let upSince: number | undefined = -Infinity; // a fresh process has seen no outage
+  return {
+    mayRequeue: () =&gt; upSince !== undefined &amp;&amp; now() - upSince &gt;= graceMs,
+    failed: () =&gt; { upSince = undefined; },
+    answered: () =&gt; { upSince ??= now(); },
+  };
 }</code></pre></div><p>Money is <code>numeric(12, 6)</code>, never float: sums of money must not drift. JavaScript has no decimal type, so the driver hands <code>numeric</code> and <code>bigint</code> over as strings, and the db layer converts once, at its boundary, through a regex that says what a number may look like. Cache tokens are input too, billed at other rates: leaving them out would understate a long run by most of its input.</p><p class="label">From <span class="mono">packages/db/src/index.ts</span></p><div class="scroll"><pre><code>// bigint and numeric arrive as STRINGS from the driver (learning-tests/postgres): converted once, here.
 // Safe because UsageAmount caps what may be WRITTEN at Number.MAX_SAFE_INTEGER, so no stored token count
 // (and no sum of them worth reading) leaves the range a JS number holds exactly.
@@ -784,7 +835,8 @@ async function cuttableRedis(): Promise&lt;{ url: string; cut(): void }&gt; {
   [&quot;the startup probe failed&quot;, () =&gt; ({ ready: Promise.reject(new Error(&quot;tools_missing&quot;)) }), &quot;tools_missing&quot;],
   [&quot;the sync server cannot be reached&quot;, () =&gt; ({ sessions: { secret: TEST_SECRET, syncUrl: &quot;ws://127.0.0.1:1&quot; } }), &quot;sync_unreachable&quot;],
   [&quot;the user who started it no longer exists&quot;, () =&gt; ({}), &quot;owner_missing&quot;],
-  [&quot;the user who started it has since been removed from the org&quot;, () =&gt; ({ stillMember: () =&gt; Promise.resolve(false) }), &quot;owner_missing&quot;],
+  [&quot;the user who started it has since been removed from the org&quot;, () =&gt; ({ roleOf: () =&gt; Promise.resolve(undefined) }), &quot;owner_missing&quot;],
+  [&quot;the user who started it has since been made a viewer&quot;, () =&gt; ({ roleOf: () =&gt; Promise.resolve(&quot;viewer&quot; as const) }), &quot;forbidden&quot;],
 ] as const)(&quot;the run fails fast with a NAME when %s: the model is never called and the document is never even opened&quot;, async (label, override, reason) =&gt; {
   let called = false;
   const handler = createAiHandler({ ...base(), connectTimeoutMs: 500, runAgent: () =&gt; { called = true; return Promise.resolve(usage); }, ...override() });

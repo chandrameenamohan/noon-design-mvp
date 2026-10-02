@@ -105,7 +105,7 @@ section("auth", "6 · Identity: a function type, and failing closed",
       ("the strategy is a REQUIRED argument of <code>buildApp</code>", "profile-specific beans", "dependency overrides")]),
   "<p>A one-method interface in Java is just a function type here. And it is a <em>required</em> parameter with no default: forget it and the code does not compile, so development auth cannot reach production by omission.</p>",
   cut("apps/api/src/app.ts", "  // Identity fails CLOSED:", '  app.use("*", requireUser);', include_end=True),
-  cut("apps/api/src/app.ts", "  // EVERYTHING about one org lives behind this middleware", '  org.get("/", need("viewer"), (c) => c.json(c.var.org));'),
+  cut("apps/api/src/app.ts", "  // EVERYTHING about one org lives behind this middleware", '  org.get("/", need("viewer"),'),
   "<p><strong>404, never 403.</strong> A <code>403</code> says \"this org exists, and you may not see it\". That confirms a fact the caller had no right to. So \"not a member\" and \"no such org\" are <em>one query</em> and <em>one answer</em>. The test walks every per-org route as an outsider and compares status, bytes and headers with the answer for an org that does not exist.</p>",
   case("Three ways the first version could have leaked, all found by review.",
        "<ul><li><strong>\"Anything except production\" is two values too many.</strong> <code>NODE_ENV=test</code> also enabled the header. Now only the literal <code>\"development\"</code> does, and <em>unset means production</em>.</li>"
