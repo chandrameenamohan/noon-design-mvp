@@ -26,6 +26,8 @@ test("Ship twice with the conflict banner up: one open pull request, whose page 
     expect(first).toHaveLength(1);
     expect(await link.textContent()).toBe(`Pull request #${String(first[0]?.number)}`);
     expect(await pageInGitea(documentId)).toBe(pageOf((await welcomeOf(browser, page.url())).doc)); // on top of the broken page, back in shape
+    // noon-wv8.6.1: and the canvas stops saying it is out of shape once the git peer has seen Ship's push.
+    await expect(page.getByRole("alert").filter({ hasText: pushed.commit })).toHaveCount(0, { timeout: 40_000 });
 
     // An edit, and Ship again: the same pull request now holds the new page.
     await page.getByRole("option", { name: "Button", exact: true }).click();

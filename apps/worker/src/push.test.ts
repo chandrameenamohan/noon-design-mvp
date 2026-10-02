@@ -76,7 +76,7 @@ test("E6.1b: a document whose room is read-only is not edited and not failed: th
   expect(sent.filter((frame) => frame.includes('"type":"op"'))).toEqual([]);
 });
 
-test("a refused page becomes the document's conflict, naming commit and file; an applied one clears it; a skipped one changes nothing", async () => {
+test("a refused page becomes the document's conflict, naming commit and file; an applied one, or Ship's own, clears it; another skipped one changes nothing", async () => {
   const calls: unknown[] = [];
   const store = {
     recordConflict: (documentId: string, conflict: unknown) => { calls.push(["record", documentId, conflict]); return Promise.resolve(); },
@@ -93,6 +93,7 @@ test("a refused page becomes the document's conflict, naming commit and file; an
   for (const outcome of outcomes) await keepConflict(store, event, page, outcome);
   expect(calls).toEqual([
     ["record", DOC, { commit: event.after, file: path, reason: "spread", detail: "line 3: a spread" }],
+    ["clear", DOC], // noon-wv8.6.1: Ship's page put the branch back in shape
     ["clear", DOC],
   ]);
 });

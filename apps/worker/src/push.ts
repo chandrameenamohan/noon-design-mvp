@@ -94,11 +94,12 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
 /**
  * E5.4 (F16b): what the canvas's banner shows. A refused page is recorded with its commit and file, and it
  * replaces the conflict the document had; an applied one clears it, as the document's branch is back in
- * shape. A skipped page (another branch, no document) says nothing about the document, so it changes nothing.
+ * shape. So does Ship's own page (noon-wv8.6.1): the branch now holds the codegen byte for byte. Any other skipped
+ * page (another branch, no document) says nothing about the document, so it changes nothing.
  * ponytail: only the NEWEST conflict is kept; ceiling: two refused pushes in a row show only the second;
  * upgrade: a row per event, if engineers ever need the list.
  */
 export async function keepConflict(store: Pick<GitStore, "recordConflict" | "clearConflict">, event: GitEvent, page: ChangedPage, outcome: PushOutcome): Promise<void> {
   if (outcome.kind === "conflict") await store.recordConflict(page.documentId, { commit: event.after, file: page.path, reason: outcome.reason, detail: outcome.detail });
-  else if (outcome.kind === "applied") await store.clearConflict(page.documentId);
+  else if (outcome.kind === "applied" || (outcome.kind === "skipped" && outcome.why === "shipped")) await store.clearConflict(page.documentId);
 }
