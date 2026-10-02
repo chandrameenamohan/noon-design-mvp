@@ -26,7 +26,12 @@ const treeOf = (page: Page): Promise<string> =>
     return JSON.stringify(root ? walk(root) : "no root");
   });
 
-/** An op frame on one of a page's sockets, stamped with the test's clock (which the pages share: one machine). */
+/**
+ * An op frame on one of a page's sockets, stamped with the test's clock (which the pages share: one machine).
+ * Stamped when Playwright's event REACHES the test process, not when the frame moved, and each page's events come
+ * on their own stream: across two pages the order can invert by a few ms (a peer's frame +35 after an editor's
+ * sent +38, noon-ibo.1). Legs under ~50 ms are approximate; a stall of seconds is still unambiguous.
+ */
 type Frame = { at: number; dir: "sent" | "received"; opId: string };
 
 /**
