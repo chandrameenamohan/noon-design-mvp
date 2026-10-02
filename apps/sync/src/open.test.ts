@@ -3,6 +3,7 @@ import { afterEach, expect, test } from "vitest";
 import WebSocket from "ws";
 import { SequencedOp, type Role } from "@noon/contracts";
 import type { DocumentStore } from "@noon/db";
+import type { Leases } from "@noon/lease";
 import { manifest } from "@noon/design-system";
 import { connectPeer } from "@noon/peer-client";
 import { signSessionToken } from "@noon/session-token";
@@ -28,14 +29,15 @@ const session = (documentId: string): { wsUrl: string; token: string } => ({
   wsUrl: `${server?.url ?? ""}/documents/${documentId}`,
   token: signSessionToken({ userId: randomUUID(), orgId: ORG, documentId, secret: SECRET, ttlSeconds: 60 }),
 });
-/** The close code a peer of a fresh document is sent away with. */
-const closeCodeOf = async (store: DocumentStore): Promise<number> => {
-  server = await startSyncServer({ port: 0, secrets: [SECRET], store, journalTimeoutMs: 100 });
+/** The close code a peer of a fresh document is sent away with, by a server with these options. */
+const closeCodeWith = async (options: Omit<Parameters<typeof startSyncServer>[0], "port" | "secrets">): Promise<number> => {
+  server = await startSyncServer({ port: 0, secrets: [SECRET], journalTimeoutMs: 100, ...options });
   const { wsUrl, token } = session(randomUUID());
   const socket = new WebSocket(wsUrl, ["noon.v1", token]);
   socket.on("error", () => undefined);
   return new Promise((resolve) => { socket.on("close", (code) => { resolve(code); }); });
 };
+const closeCodeOf = (store: DocumentStore): Promise<number> => closeCodeWith({ store });
 
 // noon-mo3.3.4: the room's own journal calls were bounded, the load's were not: a Postgres that took the query and
 // never answered held every peer of the document for ever, with no "try again".
@@ -86,4 +88,45 @@ test("a slow open keeps the client's silence watchdog quiet: one connection, the
   } finally {
     peer.close();
   }
+});
+
+/** Leases that always grant the room, unless `over` says otherwise. */
+const fakeLeases = (over: Partial<Leases> = {}): Leases => ({
+  ttlMs: 10_000,
+  acquire: (_documentId, nodeId) => Promise.resolve({ acquired: true, holder: { token: 1, nodeId } }),
+  renew: () => Promise.resolve(true), release: () => Promise.resolve(), owner: () => Promise.resolve(undefined),
+  beat: () => Promise.resolve(), alive: () => Promise.resolve(new Set()), ready: () => Promise.resolve(), close: () => Promise.resolve(),
+  ...over,
+});
+
+// noon-cs6.3.2: with "loading" frames keeping the client's watchdog quiet, a read that hangs for good held the peer
+// for ever, where it used to redial after 10 s and reach another node. Every database read of an open is bounded.
+test("a fence read that never answers is 'try again' (4503) within the journal bound", async () => {
+  expect(await closeCodeWith({ store: fakeStore({ fence: never }), lease: { leases: fakeLeases(), nodeId: "node-a" } })).toBe(4503);
+});
+test("a claim that never answers is 'try again' (4503) within the journal bound", async () => {
+  expect(await closeCodeWith({ store: fakeStore({ claim: never }), lease: { leases: fakeLeases(), nodeId: "node-a" } })).toBe(4503);
+});
+test("a role read before the upgrade that never answers is 'try again' (4503) within the journal bound", async () => {
+  expect(await closeCodeWith({ store: fakeStore(), roles: never })).toBe(4503);
+});
+
+// noon-cs6.3.2: and whatever else takes that long (a dead node's lease, Redis), "loading" stops after loadingForMs: the client's
+// silence clock runs again and it dials anew, perhaps another node.
+test("an open that hangs for good stops saying 'loading' after loadingForMs", async () => {
+  server = await startSyncServer({
+    port: 0, secrets: [SECRET], store: fakeStore(), loadingEveryMs: 20, loadingForMs: 200,
+    // Held by a dead node: the open waits its lease out, a whole ttl (10 s).
+    lease: { leases: fakeLeases({ acquire: () => Promise.resolve({ acquired: false, holder: { token: 1, nodeId: "dead-node" } }) }), nodeId: "node-a" },
+  });
+  const { wsUrl, token } = session(randomUUID());
+  const socket = new WebSocket(wsUrl, ["noon.v1", token]);
+  socket.on("error", () => undefined);
+  const started = performance.now();
+  let last = 0;
+  socket.on("message", () => { last = performance.now() - started; });
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  socket.close();
+  expect(last).toBeGreaterThan(0);
+  expect(last).toBeLessThan(400);
 });

@@ -83,9 +83,11 @@ type Options = {
   sweepMs?: number;
   /** Between the upgrade and the welcome, a "loading" frame this often: a client gives up on 10 s of silence (noon-cs6.3.2). */
   loadingEveryMs?: number;
+  /** ...for this long at most: an open that takes longer is taken for hung, and the client's silence clock may redial. */
+  loadingForMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 5000, loadingEveryMs = 3000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 5000, loadingEveryMs = 3000, loadingForMs = 30_000 }: Options): Promise<RunningSyncServer> {
   const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
@@ -173,7 +175,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   async function admits(claims: { userId: string; orgId: string; actor: { kind: "user" | "agent" | "git" } }, documentId: string): Promise<boolean> {
     if (!roles || claims.actor.kind === "git") return true;
     try {
-      return (await roles(claims.orgId, documentId, claims.userId)) !== undefined;
+      return (await bounded(roles(claims.orgId, documentId, claims.userId), "role read")) !== undefined;
     } catch {
       return true;
     }
@@ -195,7 +197,7 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     if (store) {
       let fence;
       try {
-        fence = await store.fence(orgId, documentId);
+        fence = await bounded(store.fence(orgId, documentId), "fence");
       } catch {
         return { closeCode: CLOSE.unavailable };
       }
@@ -253,7 +255,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     let claimed = true;
     if (store) {
       try {
-        claimed = await store.claim(orgId, documentId, holder.token, claim);
+        // Timed out, it may still land: under a token below the next owner's, so it fences nobody.
+        claimed = await bounded(store.claim(orgId, documentId, holder.token, claim), "claim");
       } catch {
         await release();
         return { closeCode: CLOSE.unavailable };
@@ -454,9 +457,13 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     // Opening is about six database answers in a row (role, fence, claim, load, replay, ...), and a client gives up on
     // a connection that says nothing for 10 s, then dials again: at 4 s an answer a document never opened (Z.3
     // finding 2). Until the welcome, say "still loading" now and then. Ends at the welcome or the close, whichever first.
-    // ponytail: a load that hangs for good keeps the client waiting too; ceiling: only the role reads, fence and claim
-    // are unbounded (the lease and the load are); upgrade: bound those as well.
-    const loading = setInterval(() => { if (ws.readyState === ws.OPEN) ws.send(LOADING_FRAME); }, loadingEveryMs);
+    // Every database read of an open is bounded; for whatever else might hang, the frames stop after loadingForMs and
+    // the client's watchdog redials, perhaps to another node.
+    const loadingUntil = performance.now() + loadingForMs;
+    const loading = setInterval(() => {
+      if (performance.now() >= loadingUntil) clearInterval(loading);
+      else if (ws.readyState === ws.OPEN) ws.send(LOADING_FRAME);
+    }, loadingEveryMs);
     ws.on("close", () => { clearInterval(loading); });
 
     const peer: Peer = {
