@@ -47,5 +47,5 @@ test("a shutdown is not held up by a room waiting out a dead node's lease, and s
   await server.close();
   expect(performance.now() - started).toBeLessThan(2000); // the lease it waits for lives 10 s
   expect(released).toEqual([free]);
-  expect(await waiting.closed).not.toBe(1000);
+  expect(await waiting.closed).toBe(4503); // "try again": its peer reconnects to another node
 });
