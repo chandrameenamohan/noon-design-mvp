@@ -37,8 +37,12 @@ services:
   # E7.3: each sync node reaches Redis through this proxy, one listener per node (scripts/chaos/toxiproxy.json), so
   # that chaos:partition-fenced can cut ONE node off Redis (bytes stop, connections stay open) while it still
   # reaches Postgres. A plain pass-through otherwise. The control API is published on 127.0.0.1 for the chaos runs.
-  # ponytail: in the path of every sync->Redis call, in every run; ceiling: one more hop and one more container.
-  # Upgrade: a chaos-only compose override that inserts it.
+  # ponytail: in the path of every sync->Redis call, in every run (dev, demo, clean clone), not only chaos runs.
+  # Ceiling: one more hop, and one more single point of failure IN SERIES with Redis for BOTH sync nodes: if this
+  # container dies, every room goes down while the api and the workers still reach Redis (noon-98h.3.2). Accepted
+  # for this local stack: `make chaos` cuts nodes off the RUNNING stack (no restart between checks), so the proxy
+  # has to be there before the nodes start. Upgrade: a chaos-only compose override that inserts it, with
+  # `make chaos` recreating sync and sync-2 under it first (and again without it after).
   redis-proxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0
     command: ["-host=0.0.0.0", "-config=/toxiproxy.json"]
