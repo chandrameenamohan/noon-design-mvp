@@ -134,6 +134,32 @@ test("noon-wv8.3.3: an old push redelivered after a later one folded it in is sk
   expect(seen).toEqual([{ page: { documentId: DOC, path: pagePath(DOC), tsx: "v3\n" }, base: "v2\n" }]);
 });
 
+test("noon-wv8.3.1.1: two peers on one branch, the newer push finished first: the older one is skipped, not applied over it", async () => {
+  const rows: Row[] = [];
+  const shared = memoryStore(rows);
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  // P1 claims the older event, then stalls (a slow host) until P2 has worked and finished the newer one.
+  const slow: PeerStore = { ...shared, lastDone: async (ref) => { await gate; return shared.lastDone(ref); } };
+  const { origin, store, seen } = await setUp(shared);
+  const seed = await git(origin.work, "rev-parse", "HEAD");
+  const older = await origin.commit({ [pagePath(DOC)]: "v1\n" }, "one", "main");
+  const newer = await origin.commit({ [pagePath(DOC)]: "v2\n" }, "two", "main");
+  await store.record({ ref: main, before: seed, after: older });
+  await store.record({ ref: main, before: older, after: newer });
+  const peerOf = (name: string, peerStore: PeerStore) => createGitPeer({
+    seed: { url: origin.origin }, dir: join(origin.root, name), store: peerStore, log: () => undefined,
+    apply: async (_event, page, base) => { seen.push({ page, base: (await base()).tsx }); },
+  });
+  const p1 = peerOf("p1", slow).processNext();
+  await vi.waitFor(() => { expect(rows.find((r) => r.after === older)?.status).toBe("running"); });
+  expect(await peerOf("p2", shared).processNext()).toBe(true);
+  release();
+  expect(await p1).toBe(true);
+  expect(seen.map((s) => s.page)).toEqual([{ documentId: DOC, path: pagePath(DOC), tsx: "v2\n" }]); // never v1 after v2
+  expect(rows.find((r) => r.after === older)?.status).toBe("skipped");
+});
+
 test("noon-wv8.3.3: a force-push back to an older commit is still applied (it moved the branch backwards, on purpose)", async () => {
   const { origin, store, peer, seen } = await setUp();
   const older = await origin.commit({ [pagePath(DOC)]: "v1\n" }, "one", "main");
