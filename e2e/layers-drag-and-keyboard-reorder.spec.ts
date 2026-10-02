@@ -119,6 +119,8 @@ test("the tree mirrors the canvas both ways; drag reorders and nests as ONE move
   await page.keyboard.press("Alt+ArrowRight");
   await expect(page.getByRole("alert")).toHaveText(/cannot hold other elements/);
   expect(await componentsOf(pageChildren(page))).toEqual(["Card", "Button", "Text", "Stack"]);
+  // ...and the live region does not claim a move that never happened (noon-2h1.3.1): the alert is the only thing said.
+  await expect(page.locator("[aria-live=polite]", { hasText: /moved/ })).toHaveCount(0);
   await button(page, "Dismiss").click();
   await page.keyboard.press("Alt+ArrowDown");
   await expect.poll(() => componentsOf(pageChildren(other))).toEqual(["Card", "Button", "Stack", "Text"]);

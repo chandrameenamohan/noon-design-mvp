@@ -29,7 +29,8 @@ type Props = {
   /** Whether a node's component takes children: how the drag tells a box from a line. */
   isContainer: (id: string) => boolean;
   onSelect: (id: string) => void;
-  submit: (op: Op) => void;
+  /** Sends one edit; false when the replica refused it (Canvas.tsx shows why, as an alert). */
+  submit: (op: Op) => boolean;
   /** A component from the library carried over a row, and whether it can land there; null while none is. */
   insertion?: Insertion | null;
 };
@@ -74,13 +75,13 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
 
   const select = (id: string): void => { focusNext.current = true; onSelect(id); };
   const toggle = (id: string): void => { setCollapsed((was) => { const next = new Set(was); if (!next.delete(id)) next.add(id); return next; }); };
-  /** One move_node, said as well as sent: a new parent is named, a new place among the same siblings is numbered. */
+  /** One move_node, said as well as sent: a new parent is named, a new place among the same siblings is numbered.
+   *  Said only if the replica took it: a refused move is the alert's to say, and the document did not change. */
   const move = (op: ReturnType<typeof dropToMoveOp>): void => {
     if (!op) return;
     // Worded BEFORE the submit: the replica applies the op to `doc` in place, so afterwards every move looks like a reorder.
     const sentence = `${labelOf(op.nodeId)} moved ${op.newParentId === doc.nodes[op.nodeId]?.parentId ? `to position ${String(op.index + 1)}` : `into ${labelOf(op.newParentId)}`}`;
-    submit(op);
-    setSaid(sentence);
+    setSaid(submit(op) ? sentence : "");
   };
 
   // --- the pointer: press selects; a press that travels becomes a drag --------------------------
@@ -139,8 +140,8 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
     else if (action === "last") { const last = shown.at(-1); if (last) select(last.id); }
     else if (action === "select") select(id);
     else if (action === "remove" && node?.parentId != null) {
-      submit({ type: "remove_node", nodeId: id });
-      setSaid(`${labelOf(id)} removed`);
+      const sentence = `${labelOf(id)} removed`;
+      setSaid(submit({ type: "remove_node", nodeId: id }) ? sentence : "");
       focusNext.current = true; // the selection falls back to the page (derived in Canvas.tsx); so does the focus
     } else if (action === "cancel" && drag) endDrag();
     else return;
