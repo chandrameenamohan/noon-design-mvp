@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { Document, ErrorBody, Org, Workspace } from "@noon/contracts";
+import { Document, ErrorBody, Org, OrgAsMember, Workspace } from "@noon/contracts";
 import { devHeaderIdentity } from "./identity.ts";
 import { startServer } from "./server.ts";
 import { TEST_SESSIONS, useTestServer } from "./testing.ts";
@@ -16,7 +16,7 @@ async function call(method: string, path: string, body?: unknown): Promise<{ sta
 
 test("create an org, then a workspace and a document in it, and read each back", async () => {
   const org = Org.parse((await call("POST", "/orgs", { name: "Acme" })).json);
-  expect(Org.parse((await call("GET", `/orgs/${org.id}`)).json)).toEqual(org);
+  expect(OrgAsMember.parse((await call("GET", `/orgs/${org.id}`)).json)).toEqual({ ...org, role: "owner" });
 
   const created = await call("POST", `/orgs/${org.id}/workspaces`, { name: "Design" });
   expect(created.status).toBe(201);

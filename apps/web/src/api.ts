@@ -1,4 +1,4 @@
-import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Member, MemberPage, Org, Preview, Run, SessionResponse, Ship, UsageReport, User, Workspace, type Role } from "@noon/contracts";
+import { AuditPage, Document, DocumentConflict, DocumentRun, DocumentShip, ErrorBody, Me, Member, MemberPage, Org, OrgAsMember, Preview, Run, SessionResponse, Ship, UsageReport, User, Workspace, type Role } from "@noon/contracts";
 import { z } from "zod";
 import type { MemberRefusal, ShareRefusal } from "./members.ts";
 import type { AuthRefusal } from "./signIn.ts";
@@ -182,11 +182,11 @@ export async function listOrgs(): Promise<Org[]> {
   return z.object({ items: z.array(Org) }).parse(await res.json()).items;
 }
 /** The org, or "gone": not found or not a member (404). */
-export async function readOrg(orgId: string): Promise<Org | "gone"> {
+export async function readOrg(orgId: string): Promise<OrgAsMember | "gone"> {
   const res = await fetch(`/api/orgs/${encodeURIComponent(orgId)}`, { headers: devHeaders });
   if (res.status === 404) return "gone";
   if (!res.ok) throw new Error(`GET org answered ${String(res.status)}`);
-  return Org.parse(await res.json());
+  return OrgAsMember.parse(await res.json());
 }
 /**
  * One page of the org's audit trail, newest first, parsed with the contract (its details are what people typed).

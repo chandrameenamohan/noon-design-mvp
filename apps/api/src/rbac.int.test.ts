@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "vitest";
-import { Document, ErrorBody, Me, Member, Org, Run, Workspace, type Role } from "@noon/contracts";
+import { Document, ErrorBody, Me, Member, Org, OrgAsMember, Run, Workspace, type Role } from "@noon/contracts";
 import { useTestServer } from "./testing.ts";
 
 // integration:rbac-matrix (E8.2, F24). Every org and document route, as an owner, an editor, a viewer and a
@@ -135,7 +135,7 @@ test("two owners demoting each other at the same moment: exactly one wins, and t
   // and reaches the lock as a viewer. It changes nothing.
   const loserId = Me.parse((await call(loser, "GET", "/auth/me")).json).user?.id;
   expect(await ctx.db.db.forOrg(org.id).setMember({ email: who.viewer, role: "editor", by: loserId })).toBe("forbidden");
-  expect((await call(loser, "GET", `/orgs/${org.id}`)).status).toBe(200); // still a member, only not an owner
+  expect(OrgAsMember.parse((await call(loser, "GET", `/orgs/${org.id}`)).json).role).toBe("viewer"); // still a member, only not an owner
   expect(Member.parse((await setRole(winner, org.id, who.viewer, "viewer")).json).role).toBe("viewer"); // the viewer was never promoted
 });
 

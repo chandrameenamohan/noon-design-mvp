@@ -37,8 +37,12 @@ export const ROLE_WORDS: Record<Role, string> = {
 /** The roles as a form offers them, most limited first: the safe choice is the first one a person meets. */
 export const ROLES_TO_OFFER: readonly Role[] = ["viewer", "editor", "owner"];
 
-/** The caller's own role, read from the list they were given: the member list already carries it, so no route need say it twice. */
-export const roleOf = (members: readonly Member[], userId: string | undefined): Role | undefined => members.find((m) => m.userId === userId)?.role;
+/**
+ * The caller's own role: the api's answer (GET /orgs/:orgId says it), unless a change THIS page made since names them
+ * (an owner who stepped down). Never read from the member list: the caller's row may be on a page not read yet.
+ */
+export const ownRole = (said: Role | undefined, changed: readonly Member[], userId: string | undefined): Role | undefined =>
+  (userId === undefined ? undefined : changed.findLast((m) => m.userId === userId)?.role) ?? said;
 
 /**
  * The list after the api answered a change: a member (or share) replaced by their new row, or added at the end; a revoked

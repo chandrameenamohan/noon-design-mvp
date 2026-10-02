@@ -85,3 +85,30 @@ test("an owner adds a member and changes roles from the org page; the last owner
   expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(other), data: { email: owner, role: "viewer" } })).status()).toBe(403);
   await theirs.close();
 });
+
+// noon-2h1.8.3: who is an owner is the api's answer (GET /orgs/:orgId says the caller's role), not a search of the pages
+// read so far. An owner whose own row sorts past the first page (50 members, oldest first) still gets the controls.
+test("an owner whose own row is past the first page of members still gets an owner's controls", async ({ page, request }) => {
+  const founder = `e2e-${stamp}-members-founder@example.com`;
+  const late = `e2e-${stamp}-members-late@example.com`;
+  await page.goto(`/?user=${founder}`);
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  await expect(page.getByRole("status")).toHaveText("live");
+  const org = Org.parse(((await (await request.get("/api/orgs", as(founder))).json()) as { items: unknown[] }).items.at(-1));
+  for (let n = 0; n < 50; n++) {
+    const email = `e2e-${stamp}-members-filler-${String(n)}@example.com`;
+    expect((await request.get("/api/auth/me", as(email))).status()).toBe(200);
+    expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(founder), data: { email, role: "viewer" } })).status()).toBe(200);
+  }
+  expect((await request.get("/api/auth/me", as(late))).status()).toBe(200);
+  expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(founder), data: { email: late, role: "owner" } })).status()).toBe(200);
+
+  await page.goto(`/?user=${late}&org=${org.id}`);
+  await expect(page.getByRole("heading", { name: `Members of ${org.name}`, exact: true })).toBeVisible();
+  const rows = page.getByRole("table", { name: "Members, oldest first" }).locator("tbody tr");
+  await expect(rows).toHaveCount(50);
+  await expect(rows.filter({ hasText: late })).toHaveCount(0); // their own row is on the next page
+  await expect(page.getByText("You run this organisation")).toBeVisible();
+  await expect(page.getByRole("form", { name: "Add a member" })).toBeVisible();
+  await expect(page.getByLabel(`Role of ${founder}`)).toHaveValue("owner");
+});

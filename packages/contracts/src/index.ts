@@ -41,6 +41,9 @@ export type Role = z.infer<typeof Role>;
 const RANK: Record<Role, number> = { viewer: 0, editor: 1, owner: 2 };
 /** Does `role` include everything `need` may do? The roles are nested: owner > editor > viewer. */
 export const includes = (role: Role, need: Role): boolean => RANK[role] >= RANK[need];
+/** GET /orgs/:orgId: the org, and the caller's own role in it (the screens show an owner's controls by it; the api decides regardless). */
+export const OrgAsMember = Org.extend({ role: Role });
+export type OrgAsMember = z.infer<typeof OrgAsMember>;
 export const Member = z.object({ userId: Id, email: User.shape.email, name: Name, role: Role });
 export type Member = z.infer<typeof Member>;
 /**

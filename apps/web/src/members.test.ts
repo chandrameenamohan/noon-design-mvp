@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { Role, type Member } from "@noon/contracts";
-import { memberRefusalWords, ROLE_WORDS, ROLES_TO_OFFER, roleOf, shareRefusalWords, withMember, withoutMember, type MemberRefusal, type ShareRefusal } from "./members.ts";
+import { memberRefusalWords, ROLE_WORDS, ownRole, ROLES_TO_OFFER, shareRefusalWords, withMember, withoutMember, type MemberRefusal, type ShareRefusal } from "./members.ts";
 
 const member = (userId: string, role: Member["role"]): Member => ({ userId, email: `${userId}@example.com`, name: userId, role });
 
@@ -20,12 +20,14 @@ test("every role has words, and the form offers all three, the most limited firs
   expect(ROLES_TO_OFFER).toEqual(["viewer", "editor", "owner"]);
 });
 
-test("the caller's role is read from the list; someone not in it (or nobody) has none", () => {
-  const members = [member("a", "owner"), member("b", "viewer")];
-  expect(roleOf(members, "a")).toBe("owner");
-  expect(roleOf(members, "b")).toBe("viewer");
-  expect(roleOf(members, "c")).toBeUndefined();
-  expect(roleOf(members, undefined)).toBeUndefined();
+test("the caller's role is the api's answer, whoever is on the pages read so far, unless this page changed it since (noon-2h1.8.3)", () => {
+  // An owner whose own row is on a page not read yet: the api still says owner.
+  expect(ownRole("owner", [], "me")).toBe("owner");
+  expect(ownRole("owner", [], undefined)).toBe("owner"); // who-am-I failed: the org's answer is enough
+  expect(ownRole("owner", [member("b", "viewer")], "me")).toBe("owner"); // a change to someone else
+  expect(ownRole("owner", [member("me", "editor")], "me")).toBe("editor"); // stepped down from this page
+  expect(ownRole("owner", [member("me", "editor"), member("me", "viewer")], "me")).toBe("viewer"); // the latest change wins
+  expect(ownRole(undefined, [], "me")).toBeUndefined(); // the api has not answered yet: no owner's controls
 });
 
 test("a changed member replaces their row in place, a new one is added last, a revoked one is gone; the input is not touched", () => {

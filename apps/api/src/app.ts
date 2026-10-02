@@ -24,6 +24,7 @@ import {
   type ErrorBody,
   type HealthResponse,
   type Org,
+  type OrgAsMember,
   type Me,
   type Preview,
   type Role,
@@ -336,7 +337,8 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
     await next();
   });
 
-  org.get("/", need("viewer"), (c) => c.json(c.var.org));
+  // With the caller's role: the members page shows an owner's controls by it, not by finding them in the pages it has read.
+  org.get("/", need("viewer"), (c) => c.json({ ...c.var.org, role: c.var.role } satisfies OrgAsMember));
 
   // E10.8: who is in the org, with their roles. Every member: the same people a member already meets in every document
   // here, and the screen that lets an owner change roles is the one a viewer reads. Only THIS org's rows (the query says so).

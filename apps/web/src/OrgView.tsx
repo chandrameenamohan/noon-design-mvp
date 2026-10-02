@@ -1,7 +1,7 @@
 import { useEffect, useState, type SyntheticEvent } from "react";
 import type { Member, Role, User } from "@noon/contracts";
 import { readMembers, setMemberRole, whoAmI } from "./api.ts";
-import { memberRefusalWords, ROLE_WORDS, ROLES_TO_OFFER, roleOf, withMember } from "./members.ts";
+import { memberRefusalWords, ownRole, ROLE_WORDS, ROLES_TO_OFFER, withMember } from "./members.ts";
 import { OrgNav, Page } from "./Shell.tsx";
 import { useOrgReport } from "./useOrgReport.ts";
 
@@ -30,13 +30,13 @@ function RoleCell({ member, editable, onChange }: { member: Member; editable: bo
  */
 export function OrgView({ orgId }: { orgId: string }) {
   const { org, pages, refused, loading, next, more, reload } = useOrgReport(orgId, readMembers);
-  // undefined: still asking the api who this is. The caller's own role is read from the list (members.ts: roleOf).
+  // undefined: still asking the api who this is; only for "(you)" and a change to one's own role. The caller's role is the api's (members.ts: ownRole).
   const [me, setMe] = useState<User | null>();
   useEffect(() => { whoAmI().then(setMe, () => { setMe(null); }); }, []);
   // Changes THIS page made, applied over the pages read: each is the api's own answer, so the list stays the api's.
   const [changed, setChanged] = useState<Member[]>([]);
   const members = changed.reduce((list, member) => withMember(list, member), pages.flatMap((page) => page.items));
-  const owner = roleOf(members, me?.id) === "owner";
+  const owner = ownRole(org?.role, changed, me?.id) === "owner";
   // One refusal at a time, beside the row (by user id) or the form it was about; and one sentence for a screen reader per change.
   const [problem, setProblem] = useState<{ at: string; text: string }>();
   const [said, setSaid] = useState("");
