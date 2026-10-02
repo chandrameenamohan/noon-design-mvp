@@ -50,3 +50,25 @@ test("an op a revoked editor sent while its socket was being closed is not accep
   await settle(100);
   expect(watcher.types).not.toContain("op");
 });
+
+// noon-dtf.2.2: a role read had no deadline. One on a silently hung Postgres connection held the 30 s sweep (which
+// never overlaps itself) until TCP gave up, disabling the backstop for an unannounced revoke all that time.
+test("a role read that never answers counts as failed and is asked again, so a sweep is not held up by it", async () => {
+  const documentId = randomUUID();
+  let reads = 0;
+  let revoked = false;
+  server = await startSyncServer({
+    port: 0, secrets: [SECRET], journalTimeoutMs: 50, recoverMs: 10,
+    roles: () => {
+      if (!revoked) return Promise.resolve("editor");
+      reads += 1;
+      return reads === 1 ? new Promise<never>(() => undefined) : Promise.resolve(undefined); // hung, then the answer
+    },
+  });
+  const outsider = join(server.url, documentId);
+  await outsider.welcomed;
+  revoked = true;
+  await server.recheck("all");
+  expect(await outsider.closed).toBe(4404);
+  expect(reads).toBe(2);
+});

@@ -59,7 +59,7 @@ type Options = {
   heartbeatMs?: number;
   /** A peer whose unsent backlog passes this is terminated: one stalled reader must not grow our memory. */
   maxBufferedBytes?: number;
-  /** A journal call that has not answered by then counts as failed: a paused or partitioned database hangs rather than refuses. */
+  /** A journal call or role read that has not answered by then counts as failed: a paused or partitioned database hangs rather than refuses. */
   journalTimeoutMs?: number;
   /** How often a read-only room asks the journal whether it can write again (E6.1b). */
   recoverMs?: number;
@@ -377,7 +377,9 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       return true;
     }
     const asked = ++entry.asked;
-    const role = await roles(peer.session.orgId, documentId, peer.session.userId);
+    // Bounded like a journal call: a read on a silently hung connection would hold the sweep, which never overlaps
+    // itself, until TCP gave up (noon-dtf.2.2). Timed out, it fails, and recheck asks again.
+    const role = await bounded(roles(peer.session.orgId, documentId, peer.session.userId), "role read");
     if (asked < entry.applied) return ws.readyState === ws.OPEN; // a newer read already decided
     entry.applied = asked;
     if (role === undefined) {
@@ -411,9 +413,9 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     process.stderr.write(`${JSON.stringify({ level, source: "sync", documentId, message })}\n`);
   }
 
-  function bounded<T>(work: Promise<T>): Promise<T> {
+  function bounded<T>(work: Promise<T>, what = "journal"): Promise<T> {
     let timer: NodeJS.Timeout | undefined;
-    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error("journal timed out")); }, journalTimeoutMs); });
+    const late = new Promise<never>((_, reject) => { timer = setTimeout(() => { reject(new Error(`${what} timed out`)); }, journalTimeoutMs); });
     return Promise.race([work, late]).finally(() => { clearTimeout(timer); });
   }
 
