@@ -72,3 +72,17 @@ test("a role read that never answers counts as failed and is asked again, so a s
   expect(await outsider.closed).toBe(4404);
   expect(reads).toBe(2);
 });
+
+// noon-dtf.2.3: the api announces a change once, best effort. With its Redis away (the sync nodes' up), only the sweep
+// applies it, and at the default 30 s that broke F24's "role changes apply to open sessions within 10 s".
+test("a revoke nobody announced still closes the session within F24's 10 s, at the default sweep", { timeout: 15_000 }, async () => {
+  const documentId = randomUUID();
+  let revoked = false;
+  server = await startSyncServer({ port: 0, secrets: [SECRET], roles: () => Promise.resolve(revoked ? undefined : "editor") });
+  const outsider = join(server.url, documentId);
+  await outsider.welcomed;
+  revoked = true;
+  const started = performance.now();
+  expect(await outsider.closed).toBe(4404);
+  expect(performance.now() - started).toBeLessThan(10_000);
+});

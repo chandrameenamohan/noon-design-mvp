@@ -175,7 +175,7 @@ export function buildApp({ db, identify, sessions, enqueue, owner = () => Promis
   const app = new Hono<{ Variables: { user: User } }>();
   const route = syncRouter({ nodes: sessions.sync, owner, alive });
   // ponytail: announced once, best effort; ceiling: with Redis away here (but not at the sync nodes, which re-read
-  // everything when their own link comes back) open sessions keep the old access until the sync nodes' sweep (30 s),
+  // everything when their own link comes back) open sessions keep the old access until the sync nodes' sweep (5 s),
   // or until they reconnect; upgrade: an outbox row the api retries. REST routes, /session and the sync upgrade read
   // the access on every request, so they are never behind.
   const announce = async (c: Context, change: { orgId: string; userId: string }): Promise<void> => {

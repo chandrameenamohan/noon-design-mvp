@@ -77,14 +77,15 @@ type Options = {
   roles?: (orgId: string, documentId: string, userId: string) => Promise<Role | undefined>;
   /**
    * E8.3 (F25): every live session's role is read again this often, whatever was announced: the backstop for an
-   * announcement the api could not publish (it tries once), so a revoked share cannot stay open for good.
+   * announcement the api could not publish (it tries once), so a revoked share cannot stay open for good. 5 s by
+   * default: F24 bounds a role change on an open session at 10 s, announced or not (noon-dtf.2.3).
    */
   sweepMs?: number;
   /** Between the upgrade and the welcome, a "loading" frame this often: a client gives up on 10 s of silence (noon-cs6.3.2). */
   loadingEveryMs?: number;
 };
 
-export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 30_000, loadingEveryMs = 3000 }: Options): Promise<RunningSyncServer> {
+export function startSyncServer({ port, secrets, limits, rate, store, snapshots, cadence: cadenceOverrides, heartbeatMs = 15_000, maxBufferedBytes = 1024 * 1024, journalTimeoutMs = 5000, recoverMs = 1000, lease, roles, sweepMs = 5000, loadingEveryMs = 3000 }: Options): Promise<RunningSyncServer> {
   const cadence: SnapshotCadence = { everyOps: 500, everyMs: 30_000, ...cadenceOverrides };
   // A room is stored as a PROMISE so that two peers arriving together share one load, and therefore
   // one room: two rooms for one document would mean two orderings (SPEC §2.1). The promise carries
@@ -108,8 +109,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
   const beating = lease ? setInterval(beat, lease.leases.ttlMs / 10) : undefined;
   beating?.unref();
   beat();
-  // ponytail: one indexed read per live session per sweep; ceiling: a few thousand sessions a node (a sweep never
-  // overlaps the last one); upgrade: one query for all of a node's (org, document, user) triples.
+  // ponytail: one indexed read per live session per sweep, every 5 s; ceiling: about a thousand sessions a node (a
+  // sweep never overlaps the last one); upgrade: one query for all of a node's (org, document, user) triples.
   let sweeping = false;
   const sweeper = roles ? setInterval(() => {
     if (sweeping) return;
