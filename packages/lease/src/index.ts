@@ -58,8 +58,10 @@ export function createLeases({ redisUrl, ttlMs = 10_000, prefix = "", timeoutMs 
   const leaseKey = (documentId: string): string => `${prefix}lease:${documentId}`;
   const ready = (): Promise<void> => new Promise((resolve, reject) => {
     if (redis.status === "ready") { resolve(); return; }
-    const timer = setTimeout(() => { reject(new Error(`redis did not answer within ${String(timeoutMs)} ms`)); }, timeoutMs);
-    redis.once("ready", () => { clearTimeout(timer); resolve(); });
+    const onReady = (): void => { clearTimeout(timer); resolve(); };
+    // Taken off again on a timeout: a caller retrying against a slow Redis must not pile them up (noon-98h.1.2).
+    const timer = setTimeout(() => { redis.off("ready", onReady); reject(new Error(`redis did not answer within ${String(timeoutMs)} ms`)); }, timeoutMs);
+    redis.once("ready", onReady);
   });
   return {
     ttlMs,
