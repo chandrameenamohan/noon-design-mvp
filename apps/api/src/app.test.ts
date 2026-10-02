@@ -19,15 +19,32 @@ test("without one, or without a URL, the preview is what was stored", () => {
 
 // E8.2 (F24): default deny. Every route about one org or one document names the least role it needs, and this is
 // the table of them: a new route without a `need` fails here, and so does a role changed without anyone meaning to.
-test("every org and document route declares the role it needs, and they are these", () => {
+// noon-dtf.2.1: the table is EVERY route the app answers, not only those under /orgs/:orgId and /documents/:id, and a
+// route without a `need` is the string "none", never a missing value (toEqual skips a key whose value is undefined, so
+// an unguarded route used to pass). A new route anywhere must be added here, at its role or as "none", to pass.
+test("every route the app answers is in this table, and every org and document route declares the role it needs", () => {
   const app = buildApp({ db: {} as Db, identify: () => Promise.resolve(undefined), sessions: { secret: "unused-in-this-test-0123456789abcdef", sync: { kind: "one", url: "ws://sync.test" }, ttlSeconds: 60 }, enqueue: () => Promise.resolve() });
-  const guarded = new Map<string, string | undefined>();
+  const guarded = new Map<string, string>();
   for (const { method, path, handler } of app.routes) {
-    if (method === "ALL" || !/^\/(orgs\/:orgId|documents\/:id)(\/|$)/.test(path)) continue;
+    if (method === "ALL") continue; // middleware (app.use): it answers nothing of its own
     const key = `${method} ${path}`;
-    guarded.set(key, guarded.get(key) ?? GUARDS.get(handler));
+    const role = GUARDS.get(handler);
+    if (role !== undefined || !guarded.has(key)) guarded.set(key, role ?? "none");
   }
-  expect(Object.fromEntries(guarded)).toEqual({
+  const scoped = [...guarded].filter(([key]) => /^[A-Z]+ \/(orgs\/:orgId|documents\/:id)(\/|$)/.test(key));
+  expect(scoped.filter(([, role]) => role === "none")).toEqual([]); // an org or document route without a role is open to everyone
+  expect(Object.fromEntries(guarded)).toStrictEqual({
+    // Not about one org or document: the probes, Gitea's webhook (its HMAC is its gate), signing in and out, and the
+    // caller's own orgs (GET /orgs lists only theirs). Everything but the probes, the webhook and /auth needs a caller.
+    "GET /health": "none",
+    "GET /ready": "none",
+    "POST /webhooks/gitea": "none",
+    "POST /auth/signup": "none",
+    "POST /auth/signin": "none",
+    "POST /auth/signout": "none",
+    "GET /auth/me": "none",
+    "POST /orgs": "none",
+    "GET /orgs": "none",
     "GET /orgs/:orgId": "viewer",
     "GET /orgs/:orgId/members": "viewer",
     "PUT /orgs/:orgId/members": "owner",
