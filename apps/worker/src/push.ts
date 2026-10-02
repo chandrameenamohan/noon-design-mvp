@@ -101,5 +101,5 @@ export function createPushApplier({ sessions, manifest, documentOrg, shippedComm
  */
 export async function keepConflict(store: Pick<GitStore, "recordConflict" | "clearConflict">, event: GitEvent, page: ChangedPage, outcome: PushOutcome): Promise<void> {
   if (outcome.kind === "conflict") await store.recordConflict(page.documentId, { commit: event.after, file: page.path, reason: outcome.reason, detail: outcome.detail });
-  else if (outcome.kind === "applied" || (outcome.kind === "skipped" && outcome.why === "shipped")) await store.clearConflict(page.documentId);
+  else if (outcome.kind === "applied" || outcome.why === "shipped") await store.clearConflict(page.documentId);
 }
