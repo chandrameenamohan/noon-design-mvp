@@ -385,6 +385,14 @@ async function makeProxy(run: Run, pool: string, image: string, key: string, por
 }
 
 /**
+ * Docker's ways of saying a container is gone or no longer running, as `cli()` words them: the daemon's, the CLI's, and
+ * runc's when the container stopped under an exec. A 409 on an exec's upgrade is the daemon refusing an exec into a
+ * container that is not running (removed or stopped mid-call); sandboxes are never paused, the other 409.
+ */
+const GONE = /No such container|is not running|unable to upgrade to tcp, received 409|removal of container .* is already in progress|marked for removal|cannot exec in a stopped (container|state)/iu;
+export const containerGone = (err: unknown): boolean => GONE.test(String(err));
+
+/**
  * Polls the dev server from INSIDE the container. The worker runs in compose, where `localhost` is
  * not the host, and the sandbox's port is published on the host's loopback only: asking from inside
  * works wherever the caller is. node:24-slim has no curl; Node's own fetch does the job.
@@ -408,13 +416,16 @@ async function ready(run: Run, name: string, deadline: AbortSignal): Promise<voi
       }
       // Asked, not guessed from the error: an exec that raced the container's death fails with an
       // empty stderr (measured), so "is not running" is not always there to be read.
-      const running = await run("container", "inspect", "--format", "{{.State.Running}}", name).catch(() => undefined);
+      const running = await run("container", "inspect", "--format", "{{.State.Running}}", name).catch((gone: unknown) => (containerGone(gone) ? "gone" : undefined));
       if (running?.trim() === "false") {
         // It EXITED: its clone failed, or the dev server crashed. Say so now, with its last words,
         // which are on stderr as often as on stdout (git's "fatal: ..." is).
         const logs = await run("logs", "--tail", "20", name).catch(() => "");
         throw new Error(`${name} exited before it was ready: ${logs.trim()}`, { cause: err });
       }
+      // REMOVED (docker rm --force, a reaper) while we asked, so it exited too, with no logs left to read. The exec's own
+      // words depend on where the removal caught it ("unable to upgrade to tcp, received 409" in gate 10): one name here.
+      if (running === "gone" || containerGone(err)) throw new Error(`${name} exited before it was ready: it was removed or stopped (${err instanceof Error ? err.message : String(err)})`, { cause: err });
       throw err;
     }
   }
