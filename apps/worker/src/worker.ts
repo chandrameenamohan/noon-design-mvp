@@ -86,6 +86,11 @@ export async function runAttempt({ jobs, key, job, handler, cancel, log: say = l
  * ponytail: per process, from its own failures. A store cut from the job's worker only (a partition) still looks like
  * a death to the others, which is what it is to them; a store that HANGS without failing a call is not seen. The cost:
  * a job whose worker really died during the outage is retried staleMs later than it would have been.
+ * The ceiling: a process with no job running makes no store call between sweeps (sweepMs), so an outage that falls
+ * wholly between two of them is never seen there; if its next sweep lands in the ~cancelPollMs after Postgres is back,
+ * before the live worker's first beat, it requeues that healthy job. Upgrade path: decide in the database, not per
+ * process: the sweep's requeue counts staleness from the later of the beat and when Postgres last came back (e.g. a
+ * row every process stamps on its first answer after a failure, or pg_postmaster_start_time() for restarts).
  */
 export function requeueGate(graceMs: number, now: () => number = Date.now): { mayRequeue(): boolean; failed(): void; answered(): void } {
   let upSince: number | undefined = -Infinity; // a fresh process has seen no outage
