@@ -75,6 +75,27 @@ export async function runAttempt({ jobs, key, job, handler, cancel, log: say = l
   await (reason === undefined ? jobs.finish(key, status) : jobs.finish(key, status, reason));
 }
 
+/**
+ * Whether this process's sweep may give stale jobs away (noon-cs6.3.3). A Postgres outage longer than staleMs makes
+ * EVERY running job's beat stale, the healthy ones' too: when Postgres came back it was a race between a live worker's
+ * next beat and a sweep, and a lost race restarted the run from step one (a second model call). After a failed store
+ * call (a sweep's or a beat's), the sweep waits until Postgres has answered this process again for `graceMs`
+ * (staleMs): the same silence a live worker is allowed at any other time, so its beats have landed by then. Chosen
+ * over "a worker beats once before any sweep requeues": the beat is in the job's process and the sweep in every
+ * process, and that ordering would need them to talk; a process knows its own failures where it decides.
+ * ponytail: per process, from its own failures. A store cut from the job's worker only (a partition) still looks like
+ * a death to the others, which is what it is to them; a store that HANGS without failing a call is not seen. The cost:
+ * a job whose worker really died during the outage is retried staleMs later than it would have been.
+ */
+export function requeueGate(graceMs: number, now: () => number = Date.now): { mayRequeue(): boolean; failed(): void; answered(): void } {
+  let upSince: number | undefined = -Infinity; // a fresh process has seen no outage
+  return {
+    mayRequeue: () => upSince !== undefined && now() - upSince >= graceMs,
+    failed: () => { upSince = undefined; },
+    answered: () => { upSince ??= now(); },
+  };
+}
+
 export async function startWorker({ db, redisUrl, prefix, handlers, concurrency = {}, sweepMs = 30_000, cancelPollMs = 1000, staleMs = 15_000, maxAttempts = 3, onAlive }: {
   db: Db;
   redisUrl: string;
@@ -102,6 +123,9 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
 }): Promise<RunningWorker> {
   const jobs = db.jobStore();
   const scoped = prefix === undefined ? {} : { prefix };
+  // Every store call the sweep makes, and every beat, says whether Postgres answers this process (noon-cs6.3.3).
+  const store = requeueGate(staleMs);
+  const fromStore = <T>(call: Promise<T>): Promise<T> => call.then((value) => { store.answered(); return value; }, (err: unknown) => { store.failed(); throw err; });
 
   async function run(data: unknown): Promise<void> {
     const ref = JobRef.parse(data);
@@ -120,7 +144,7 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
     // `lost` aborts it too: this worker went silent for longer than staleMs and the job was given to another.
     const cancel = new AbortController();
     const watch = setInterval(() => {
-      jobs.heartbeat(mine).then((state) => {
+      fromStore(jobs.heartbeat(mine)).then((state) => {
         if (state === "lost" && !cancel.signal.aborted) log("warn", "job taken over after a silence: stopping this attempt", { jobId: ref.jobId, attempt: job.attempt });
         if (state !== "running") cancel.abort();
       }, () => undefined); // a failed beat is tried again in a second; staleMs is many of them
@@ -155,10 +179,12 @@ export async function startWorker({ db, redisUrl, prefix, handlers, concurrency 
   async function sweepOnce(): Promise<void> {
     try {
       await producer.ping(); // with nothing queued the loop below never touches Redis, and "alive" would mean "Postgres is up"
-      const stale = await jobs.requeueStale(staleMs, maxAttempts);
-      if (stale.requeued + stale.lost > 0) log("warn", "jobs left running by a dead worker", stale);
+      if (store.mayRequeue()) {
+        const stale = await fromStore(jobs.requeueStale(staleMs, maxAttempts));
+        if (stale.requeued + stale.lost > 0) log("warn", "jobs left running by a dead worker", stale);
+      }
       // One refused offer must not hide the 99 behind it: it stays `queued` and is offered again next time.
-      for (const ref of await jobs.queued(100)) await producer.enqueue(ref).catch((err: unknown) => log("warn", `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
+      for (const ref of await fromStore(jobs.queued(100))) await producer.enqueue(ref).catch((err: unknown) => log("warn", `offer failed: ${describeError(err)}`, { jobId: ref.jobId }));
       onAlive?.();
     } catch (err) {
       log("warn", `sweep failed: ${describeError(err)}`);

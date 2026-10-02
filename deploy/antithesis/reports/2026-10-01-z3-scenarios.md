@@ -136,6 +136,8 @@ sync nodes (same machine, load 10 to 16 throughout):
 - **Smallest fix, if wanted.** Before requeueing, let a worker that has just regained Postgres beat once (or have the
   sweep skip for one beat period after its own Postgres errors).
 - **Proposed bead:** "A Postgres outage longer than staleMs can restart a healthy AI run from step one (a second model call)".
+- **Fixed since (`noon-cs6.3.3`, not yet re-run here).** After a failed Postgres call (a sweep's or a beat's), a
+  worker's sweep requeues nothing until Postgres has answered it again for `staleMs` (`requeueGate` in `worker.ts`).
 
 ### 4. The timeout on every MinIO call (`noon-mo3.3.1`): kept, no scenario needs it
 

@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { UsageAmount } from "@noon/contracts";
-import { attemptKey, JobFailure, requireEditor, runAttempt, type Handlers } from "./worker.ts";
+import { attemptKey, JobFailure, requeueGate, requireEditor, runAttempt, type Handlers } from "./worker.ts";
 
 // noon-37s: whatever way an attempt ends, what it consumed is recorded ONCE, before the row is finished, and the
 // bookkeeping never changes how it ended.
@@ -55,4 +55,24 @@ test("a job acting for someone starts only if they are still an editor or owner,
   for (const role of ["editor", "owner"] as const) expect(() => { requireEditor(role); }).not.toThrow();
   expect(() => { requireEditor("viewer"); }).toThrow(expect.objectContaining({ reason: "forbidden" }) as Error);
   expect(() => { requireEditor(undefined); }).toThrow(expect.objectContaining({ reason: "owner_missing" }) as Error);
+});
+
+// noon-cs6.3.3: after a Postgres outage every running job's beat is stale, the healthy ones too. The sweep gives a job
+// away only once Postgres has answered this process for staleMs again: the time any live worker gets to beat.
+test("after the store failed, the sweep requeues nothing until it has answered again for the whole grace", () => {
+  let now = 1_000_000;
+  const gate = requeueGate(15_000, () => now);
+  expect(gate.mayRequeue()).toBe(true); // a fresh process has seen no outage: a dead worker's job is not held back
+  gate.failed();
+  now += 60_000;
+  expect(gate.mayRequeue()).toBe(false); // still no answer since the failure
+  gate.answered();
+  now += 14_999;
+  expect(gate.mayRequeue()).toBe(false);
+  gate.answered(); // a later answer does not restart the grace
+  now += 1;
+  expect(gate.mayRequeue()).toBe(true);
+  gate.failed(); // a second outage starts it over
+  gate.answered();
+  expect(gate.mayRequeue()).toBe(false);
 });
