@@ -1,6 +1,6 @@
 # HANDOFF: Noon-like MVP
 
-Updated 2026-10-02 ~18:45. **`main` = `6700e74`** after a green gate on that commit; `build/epics` = that + this
+Updated 2026-10-03 ~01:20. **`main` = `6266431`** after a green gate on that commit; `build/epics` = that + this
 handoff commit. Whether they are pushed: `git status -sb` / `git log origin/main -1` (push only on the owner's say-so).
 **Read this first, then run `bd prime`.** Facts and owner decisions only; where a file or a bead is the
 source of truth, this points at it.
@@ -55,6 +55,7 @@ render one document. Claude writes ALL code; each epic ships a handbook lesson a
 | Fixes from Z.3 and its gate | `e432e27` refused upgrade + reset killed sync (`noon-cs6.3.1`); `8f2dfcc` silent client held a refused socket (`noon-cs6.3.4`); `8c427e4` MinIO call timeouts (`noon-mo3.3.1`); `46ab89a` api 413 cut the next keep-alive request (`noon-9vy`, found by gate run 1) |
 | Second merge | `main` = `46ab89a` after `make clean-clone` green on it (unit 1188, integration 385, e2e 44/44, canvas p95 96 ms); `main` and `build/epics` pushed 2026-10-02 |
 | E11 (`noon-3g7`) | **Closed.** `scripts/demo.sh up|down|status` (`e844ed1`); owner verified live canvas + preview in a real browser |
+| Fifth merge (P3 sweep) | `main` = `6266431` after `make clean-clone` green on it (unit 1241, integration 402, e2e 47, canvas p95 83 ms). 7 opus builders in worktrees cleared every open P3 bug plus `cs6.3.2` (loading frames, bounded opens, 3 warm Postgres connections: harness store-slow 4000 opens 3/3) and `cs6.3.3` (requeueGate: harness 3/3 attempt 1); two fable reviewers + opus checks; docs pass rebuilt all lessons (republished 1–10). Gates 7–11 each found a first-run test/harness problem or a race, all fixed (see `bd show` comments). |
 | Fourth merge | `main` = `6700e74` after `make clean-clone` green on it (unit 1200, integration 387, e2e 44, canvas p95 108 ms). The four pre-launch bugs plus two found on the way: `23d0fbf` read-only Gitea token for worker-sandbox/worker-git (`noon-wv8.6.3`); `a6a73a5` sign-in cap per (email, address) + per-email brake (`noon-elo.7.1`); `6700e74` IPv6 rate keys by /64 (review should-fix); `49c8a04` AI run needs an editor, ends on forbidden (`noon-dtf.2.4`); `b567ae9` same for Ship (`noon-87s`); `45488c8` ship and preview reports fenced by attempt (`noon-wv8.6.2`). One fable reviewer for all: PASS |
 | Third merge | `main` = `b25965e` after `make clean-clone` green on it (unit 1188, integration 385, e2e 44, canvas p95 80 ms), run while another project held port 3100. Gate fixes on the way: `7c968f7` e2e api port from `E2E_API_PORT` (clean-clone uses 53100; `noon-njq`), `b25965e` preview restart test race (`noon-3ye`) |
 
@@ -62,16 +63,14 @@ Per-bead detail is in `bd show <id>` comments.
 
 ## 4. What is left
 
-- **Open from Z.3:** `noon-cs6.3.2` (P2: at 2 s per Postgres answer a document takes 34 s to open, at 4 s
-  never; fix = status frame while the room loads), `noon-cs6.3.3` (P3: a Postgres outage longer than
-  `staleMs` can restart a healthy AI run, a second model call).
-- **Older P3 bugs** (`bd list --status=open`). The four pre-launch ones are FIXED and merged (§3).
+- **Open beads (2):** `noon-frc` (a demoted owner's open page keeps Share until it reconnects; owner to decide),
+  `noon-lv9` (queue start retry: tsc-visible BullMQ private read; bound the boot wait when Redis is away).
+- **All older P3 bugs are fixed and merged** (P3 sweep, §3).
 - **Live demo stack needs `./init.sh` before worker-sandbox or worker-git are next recreated:** since
   `23d0fbf` they read a separate `GITEA_READ_TOKEN`, which the demo's `.env` does not have yet; without it
   previews and the git peer cannot clone. `init.sh` is idempotent and mints it.
 - **Waiting on the owner:**
-  - Seven lesson pages not republished (lessons 2, 3, 4, 7, 8, 9, 10): needs a permission rule allowing
-    the Artifact tool; do not retry without one. URLs in `docs/handbook/index.md`.
+  - (done 2026-10-02) lessons 1–10 republished; `.claude/settings.local.json` allows `Artifact` (owner-approved).
   - Public repo refresh and README: offered, not asked for (§9).
   - Rotate the ngrok basic-auth password: it was printed in three agent transcripts on 2026-10-02.
     New value in `~/.config/noon/ngrok-pass` AND `~/.config/noon/ngrok-policy.yml`, then `demo.sh down; up`.
@@ -99,6 +98,10 @@ projects' containers. Watch swap as well as load (`sysctl vm.swapusage`).
   then `bd show <id>` incl. comments, …" plus the bead's risks. Reports under 150–200 words.
 - After each report: `bd comments add <id> "Built on build/epics <hash> by <agent> (<model>) …"`.
   Agents send their report twice (message + idle notification): record once.
+- **Parallel builders: use `isolation: "worktree"`** (shared-tree commits of one file mix builders' edits).
+  Worktrees live under `.claude/worktrees/`; remove them after cherry-picking, or `eslint .` runs out of
+  memory walking them. A worktree agent cannot be resumed once its worktree is gone.
+- Tests a builder writes without Docker fail on their first gate: budget gate rounds for them.
 - Follow-up work for a finished agent: `SendMessage` to its name keeps its context (used for review fixes
   and gate re-runs on 2026-10-02).
 - Gate runner: a sonnet agent runs `make clean-clone` once and reports; it never re-runs on failure.
