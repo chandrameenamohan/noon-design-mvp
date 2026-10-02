@@ -10,7 +10,7 @@ tmp=$(mktemp -d)
 # Every port docker-compose.yml publishes: one left at its default collides with the dev stack's, and compose refuses to start.
 export COMPOSE_PROJECT_NAME=noon-clean PG_PORT=55432 API_PORT=53000 SYNC_PORT=53001 SYNC_2_PORT=53003 REDIS_PORT=56379 SANDBOX_PROXY_PORT=20200 GITEA_PORT=53002 MINIO_PORT=59005 TOXIPROXY_PORT=58474
 export E2E_API_PORT=53100 # the e2e layer's own api (playwright.config.ts), off the 3100 other projects' dev servers hold
-unset POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD GITEA_ADMIN_PASSWORD GITEA_WEBHOOK_SECRET GITEA_TOKEN MINIO_PASSWORD # the clone must generate its own secrets
+unset POSTGRES_PASSWORD APP_DB_PASSWORD SESSION_TOKEN_SECRET REDIS_PASSWORD GITEA_ADMIN_PASSWORD GITEA_WEBHOOK_SECRET GITEA_TOKEN GITEA_READ_TOKEN MINIO_PASSWORD # the clone must generate its own secrets
 command -v docker >/dev/null 2>&1 || PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH"
 
 cleanup() {

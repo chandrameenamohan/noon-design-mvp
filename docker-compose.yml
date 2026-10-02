@@ -234,7 +234,8 @@ services:
       # Every sandbox's clone (E5.1): fetched by THIS service, handed to the sandbox as a bundle.
       SEED_REPO: http://gitea:3000/noon/sample-app.git
       # Not `:?`: compose reads the whole file for every command, and init.sh starts Postgres before the token exists.
-      GITEA_TOKEN: "${GITEA_TOKEN:-}"
+      # The read-only token: this service only clones, and it holds the Docker socket.
+      GITEA_TOKEN: "${GITEA_READ_TOKEN:-}"
     volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
     depends_on:
       gitea: { condition: service_healthy }
@@ -260,7 +261,7 @@ services:
       SESSION_TOKEN_SECRET: "${SESSION_TOKEN_SECRET:?run ./init.sh}"
       SYNC_URL: "sync=ws://sync:3001,sync-2=ws://sync-2:3001"
       SEED_REPO: http://gitea:3000/noon/sample-app.git
-      GITEA_TOKEN: "${GITEA_TOKEN:-}"
+      GITEA_TOKEN: "${GITEA_READ_TOKEN:-}" # read-only: it only fetches
       GIT_PEER_DIR: /var/lib/noon-git
     volumes: ["gitpeer:/var/lib/noon-git"]
     depends_on:

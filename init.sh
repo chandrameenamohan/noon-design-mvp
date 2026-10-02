@@ -50,18 +50,27 @@ gitea admin user list | awk 'NR > 1 { print $2 }' | grep -qx noon ||
 gitea admin user change-password --username noon --password "$GITEA_ADMIN_PASSWORD" --must-change-password=false >/dev/null
 # A secret goes to curl on stdin (-K -), never in its arguments, where any process on this machine can read it.
 curl_with() { secret=$1; shift; printf '%s\n' "$secret" | curl -K - "$@"; }
-# The worker's token: kept while Gitea still accepts it, else made anew (a new volume forgets every token).
-# ponytail: one token for bootstrap and worker, so the worker's can also manage the noon account (write:user,
-# which creating a repo needs). Upgrade: a second, read/write:repository-only token for the worker.
-if [ "$(curl_with "header = \"Authorization: token ${GITEA_TOKEN:-none}\"" -s -o /dev/null -w '%{http_code}' "$gitea_url/api/v1/user")" != 200 ]; then
-  curl_with "user = \"noon:$GITEA_ADMIN_PASSWORD\"" -s -o /dev/null -X DELETE "$gitea_url/api/v1/users/noon/tokens/noon-worker"
-  GITEA_TOKEN=$(curl_with "user = \"noon:$GITEA_ADMIN_PASSWORD\"" -fsS -X POST -H 'content-type: application/json' \
-    -d '{"name":"noon-worker","scopes":["write:repository","write:user"]}' "$gitea_url/api/v1/users/noon/tokens" | sed -n 's/.*"sha1":"\([0-9a-f]*\)".*/\1/p')
-  [ -n "$GITEA_TOKEN" ] || { echo "FAIL: Gitea did not issue a token"; exit 1; }
-  { grep -v '^GITEA_TOKEN=' .env; printf 'GITEA_TOKEN=%s\n' "$GITEA_TOKEN"; } > .env.new && mv .env.new .env
-fi
+# Gitea's tokens, each in .env under $1: kept while Gitea still answers $4 with it, else made anew as $2 with
+# scopes $3 (a new volume forgets every token). Prints the token.
+gitea_token() {
+  value=$(sed -n "s/^$1=//p" .env)
+  if [ "$(curl_with "header = \"Authorization: token ${value:-none}\"" -s -o /dev/null -w '%{http_code}' "$4")" != 200 ]; then
+    curl_with "user = \"noon:$GITEA_ADMIN_PASSWORD\"" -s -o /dev/null -X DELETE "$gitea_url/api/v1/users/noon/tokens/$2"
+    value=$(curl_with "user = \"noon:$GITEA_ADMIN_PASSWORD\"" -fsS -X POST -H 'content-type: application/json' \
+      -d "{\"name\":\"$2\",\"scopes\":$3}" "$gitea_url/api/v1/users/noon/tokens" | sed -n 's/.*"sha1":"\([0-9a-f]*\)".*/\1/p')
+    [ -n "$value" ] || { echo "FAIL: Gitea did not issue the $2 token" >&2; exit 1; }
+    { grep -v "^$1=" .env; printf '%s=%s\n' "$1" "$value"; } > .env.new && mv .env.new .env
+  fi
+  printf '%s' "$value"
+}
+# The token that may write: bootstrap creates the repo (write:user) and worker-ship pushes and opens the PR.
+# ponytail: worker-ship gets write:user too, which it never uses. Upgrade: a third, write:repository-only token.
+GITEA_TOKEN=$(gitea_token GITEA_TOKEN noon-worker '["write:repository","write:user"]' "$gitea_url/api/v1/user")
 # The private repo noon/sample-app, the seed pushed into it while it is empty, the push webhook to the api.
 GITEA_URL="$gitea_url" GITEA_TOKEN="$GITEA_TOKEN" GITEA_WEBHOOK_SECRET="$GITEA_WEBHOOK_SECRET" node scripts/gitea-bootstrap.ts || { echo "FAIL: Gitea bootstrap"; exit 1; }
+# The token that may only read, for worker-sandbox (which also holds the Docker socket) and worker-git: they only
+# clone and fetch. Checked against the repo, so made after it exists (read:repository cannot read /user).
+GITEA_READ_TOKEN=$(gitea_token GITEA_READ_TOKEN noon-reader '["read:repository"]' "$gitea_url/api/v1/repos/noon/sample-app")
 # The per-document preview sandbox (epic 4), BEFORE the worker that starts it. Minutes on a first run:
 # it installs the sample app's dependencies. Its source is NOT in the image: the worker fetches it from Gitea.
 docker build --quiet --tag noon-sandbox:dev --file apps/worker/sandbox/Dockerfile seed/sample-app >/dev/null
@@ -71,8 +80,11 @@ docker compose up -d --build --wait api sync worker worker-sandbox worker-git wo
 # Smoke test: the database answers a real query.
 answer=$(docker compose exec -T postgres psql -U noon -d noon -tAc "select 1")
 [ "$answer" = "1" ] || { echo "FAIL: postgres smoke query returned '$answer'"; exit 1; }
-# Smoke test: the seed is in Gitea, readable with the worker's token and by nobody without one.
-curl_with "header = \"Authorization: token $GITEA_TOKEN\"" -fsS -o /dev/null "$gitea_url/api/v1/repos/noon/sample-app/raw/package.json?ref=main" || { echo "FAIL: the seed is not in Gitea"; exit 1; }
+# Smoke test: the seed is in Gitea, readable with the read token, which may not change the repo, and by nobody without one.
+curl_with "header = \"Authorization: token $GITEA_READ_TOKEN\"" -fsS -o /dev/null "$gitea_url/api/v1/repos/noon/sample-app/raw/package.json?ref=main" || { echo "FAIL: the seed is not in Gitea"; exit 1; }
+# An empty PATCH: a no-op if the token could write, refused by its scope before that.
+read_write=$(curl_with "header = \"Authorization: token $GITEA_READ_TOKEN\"" -s -o /dev/null -w '%{http_code}' -X PATCH -H 'content-type: application/json' -d '{}' "$gitea_url/api/v1/repos/noon/sample-app")
+[ "$read_write" = 403 ] || { echo "FAIL: the read token was not refused a write ($read_write)"; exit 1; }
 anonymous=$(curl -s -o /dev/null -w '%{http_code}' "$gitea_url/api/v1/repos/noon/sample-app")
 [ "$anonymous" != 200 ] || { echo "FAIL: Gitea serves the repo to anyone"; exit 1; }
 # Smoke test: the api answers over real HTTP with the contract's shape.
