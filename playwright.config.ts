@@ -7,7 +7,8 @@ import { defineConfig, devices } from "@playwright/test";
 // Only Postgres is shared with the dev stack (./init.sh starts it). The secrets come from .env,
 // read by the shell (`. ./.env`) so that they never pass through this file or a log.
 // sandboxProxy: never the dev stack's (20000); the canvas's dev server forwards /preview/ there.
-const PORTS = { web: 5174, api: 3100, sync: 3101, worker: 3102, sync2: 3104, sandboxProxy: 20100 };
+// api: E2E_API_PORT lets scripts/clean-clone.sh move it off 3100, which other projects' dev servers like to hold (noon-njq).
+const PORTS = { web: 5174, api: Number(process.env["E2E_API_PORT"] ?? "3100"), sync: 3101, worker: 3102, sync2: 3104, sandboxProxy: 20100 };
 const DOCKER_BIN = "/Applications/Docker.app/Contents/Resources/bin";
 const fromEnv = (command: string): string =>
   `sh -c 'set -a; . ./.env; set +a; export NODE_ENV=development DATABASE_URL="postgres://noon_app:$APP_DB_PASSWORD@localhost:\${PG_PORT:-5432}/noon" REDIS_URL="redis://:$REDIS_PASSWORD@localhost:\${REDIS_PORT:-6380}"; ${command}'`;
