@@ -64,7 +64,7 @@ test("noon-wv8.3.3: an event skipped as already applied is finished, and is neve
 test("an event is claimed once, oldest first; handed back it waits again; finished it stays finished", async () => {
   const git = t.db.gitStore();
   await git.record({ ref: main, before: A, after: B });
-  await git.record({ ref: main, before: B, after: C });
+  await git.record({ ref: "refs/heads/other", before: B, after: C }); // another branch: one branch's events are taken one at a time
   const claims = await Promise.all([git.claim(STALE, 3), git.claim(STALE, 3), git.claim(STALE, 3)]);
   expect(claims.filter(Boolean).map((e) => e?.after).sort()).toEqual([B, C]);
   const first = claims.find((e) => e?.after === B);
@@ -94,6 +94,35 @@ test("noon-wv8.3.2: an event handed back with a delay is passed by until then, a
   expect(await git.claim(STALE, 3)).toBeUndefined();
   await t.rawQuery("update git_events set not_before = now() - interval '1 second' where id = $1", [first.id]); // its time came
   expect(await git.claim(STALE, 3)).toMatchObject({ id: first.id, attempt: 2 });
+});
+
+test("noon-wv8.3.1.1: a branch's event is not claimed while another of its events is running, however many peers race", async () => {
+  const git = t.db.gitStore();
+  await git.record({ ref: main, before: A, after: B });
+  await git.record({ ref: main, before: B, after: C });
+  const raced = (await Promise.all(Array.from({ length: 8 }, () => git.claim(STALE, 3)))).filter((e) => e !== undefined);
+  expect(raced.map((e) => e.after)).toEqual([B]); // C waits: applied alongside B, the older pages could land last
+  const [first] = raced;
+  if (!first) throw new Error("unreachable");
+  await git.finish(first, "done");
+  expect((await git.claim(STALE, 3))?.after).toBe(C);
+});
+
+test("noon-wv8.3.1.1: an event handed back whose time comes while a newer one of its branch runs waits for that one to end", async () => {
+  const git = t.db.gitStore();
+  await git.record({ ref: main, before: A, after: B });
+  await git.record({ ref: main, before: B, after: C });
+  const older = await git.claim(STALE, 3);
+  if (!older) throw new Error("unreachable");
+  await git.finish(older, "pending", 60_000);
+  const newer = await git.claim(STALE, 3); // passed by meanwhile (noon-wv8.3.2)
+  expect(newer?.after).toBe(C);
+  if (!newer) throw new Error("unreachable");
+  await t.rawQuery("update git_events set not_before = now() - interval '1 second' where id = $1", [older.id]);
+  const raced = await Promise.all(Array.from({ length: 4 }, () => git.claim(STALE, 3)));
+  expect(raced.filter((e) => e !== undefined)).toEqual([]);
+  await git.finish(newer, "done");
+  expect(await git.claim(STALE, 3)).toMatchObject({ id: older.id, attempt: 2 }); // the peer finds it already applied
 });
 
 // noon-91u: an event left running by a killed git peer is resumed once its heartbeat is stale, by ONE peer.

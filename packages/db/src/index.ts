@@ -161,7 +161,8 @@ export type GitStore = {
   /**
    * The oldest waiting event -> running, as its next `attempt`. Waiting: pending, or (noon-91u) running with no
    * heartbeat for `staleMs` (its git peer died), which is resumed. One that died with its peer `maxResumes` times
-   * fails instead. Two peers never claim one event: the database decides, in one statement. Undefined: none.
+   * fails instead. Two peers never claim one event: the database decides, in one statement. A pending event
+   * waits while another of its branch is running (noon-wv8.3.1.1). Undefined: none.
    */
   claim(staleMs: number, maxResumes: number): Promise<(GitEvent & { attempt: number }) | undefined>;
   /** "Still working on it", from the peer holding this attempt. False: another peer has resumed it (or it ended): stop. */
@@ -807,12 +808,18 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         // locked and its WHERE checked again on the newest version (read committed), so a stale event another peer
         // has just resumed (fresh heartbeat) is skipped, never resumed twice. `status` on the right is the OLD one.
         // noon-wv8.3.2: an event handed back is passed by until its not_before.
-        return one(
+        // noon-wv8.3.1.1: one event per branch at a time. The peer checks "already applied" once, as it starts; two of a
+        // branch's events running side by side could land the older one's pages last. Claims take turns, so the
+        // running row a claim looks for is one already committed, never one another claim is making at that instant.
+        return inTurn("noon:git-claim", (client) => one(
           GitEventRow,
           `update git_events set status = 'running', heartbeat_at = now(), attempts = attempts + 1, resumes = resumes + (status = 'running')::int
-           where id = (select id from git_events where (status = 'pending' and coalesce(not_before <= now(), true)) or (${stale} and resumes < $2) order by created_at, id limit 1 for update skip locked) returning *`,
+           where id = (select id from git_events e where (status = 'pending' and coalesce(not_before <= now(), true)
+             and not exists (select 1 from git_events r where r.ref = e.ref and r.status = 'running')) or (${stale} and resumes < $2)
+             order by created_at, id limit 1 for update skip locked) returning *`,
           [staleMs, maxResumes],
-        );
+          client,
+        ));
       },
       heartbeat: async ({ id, attempt }) =>
         isId(id) && (await pool.query("update git_events set heartbeat_at = now() where id = $1 and status = 'running' and attempts = $2", [id, attempt])).rowCount === 1,
