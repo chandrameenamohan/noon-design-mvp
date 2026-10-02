@@ -2,7 +2,7 @@ import type { Doc, Op } from "@noon/contracts";
 
 /**
  * How the layers tree turns a drop or a key into ONE move_node (E10.3). Pure: the panel measures the
- * DOM and calls in here; nothing here writes to the document.
+ * DOM and calls in here; nothing here writes to the document but through the `submit` it is handed.
  *
  * It refuses only what is structurally impossible on the document it can see: the page itself, a
  * node dropped on itself or into its own subtree, a node placed beside the page. Everything else
@@ -74,6 +74,17 @@ export function keyMoveOp(doc: Doc, nodeId: string, move: KeyMove): MoveOp | nul
     : move === "nest" ? (previous === undefined ? null : { nodeId, targetId: previous, placement: "into" })
     : parent.parentId === null ? null : { nodeId, targetId: parent.id, placement: "after" };
   return drop && dropToMoveOp(doc, drop);
+}
+
+/**
+ * One move_node, sent through `submit` and said for the live region: a new parent is named, a new place among the
+ * same siblings is numbered. Worded BEFORE the submit: the replica applies the op to `doc` in place, so afterwards
+ * every move looks like a reorder. "" when the replica refused it (noon-2h1.3.1): the refusal is the alert's to say,
+ * and the document did not change.
+ */
+export function moveSaid(doc: Doc, op: MoveOp, labelOf: (id: string) => string, submit: (op: MoveOp) => boolean): string {
+  const sentence = `${labelOf(op.nodeId)} moved ${op.newParentId === doc.nodes[op.nodeId]?.parentId ? `to position ${String(op.index + 1)}` : `into ${labelOf(op.newParentId)}`}`;
+  return submit(op) ? sentence : "";
 }
 
 /** A node in reading order, as the layers list names it, and how deep it sits (the page is depth 0). */

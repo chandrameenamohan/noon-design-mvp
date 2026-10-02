@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Doc, Op } from "@noon/contracts";
-import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Drop, type KeyMove, type Placement, type Row } from "./layer-moves.ts";
+import { dropToMoveOp, keyMoveOp, moveSaid, placementAt, visibleRows, type Drop, type KeyMove, type Placement, type Row } from "./layer-moves.ts";
 import { actionFor, type ActionOf } from "./shortcuts.ts";
 
 /**
@@ -75,13 +75,9 @@ export function LayersPanel({ doc, rows, selected, isContainer, onSelect, submit
 
   const select = (id: string): void => { focusNext.current = true; onSelect(id); };
   const toggle = (id: string): void => { setCollapsed((was) => { const next = new Set(was); if (!next.delete(id)) next.add(id); return next; }); };
-  /** One move_node, said as well as sent: a new parent is named, a new place among the same siblings is numbered.
-   *  Said only if the replica took it: a refused move is the alert's to say, and the document did not change. */
+  /** One move_node, said as well as sent, and said only if the replica took it (layer-moves.ts). */
   const move = (op: ReturnType<typeof dropToMoveOp>): void => {
-    if (!op) return;
-    // Worded BEFORE the submit: the replica applies the op to `doc` in place, so afterwards every move looks like a reorder.
-    const sentence = `${labelOf(op.nodeId)} moved ${op.newParentId === doc.nodes[op.nodeId]?.parentId ? `to position ${String(op.index + 1)}` : `into ${labelOf(op.newParentId)}`}`;
-    setSaid(submit(op) ? sentence : "");
+    if (op) setSaid(moveSaid(doc, op, labelOf, submit));
   };
 
   // --- the pointer: press selects; a press that travels becomes a drag --------------------------

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import type { Doc } from "@noon/contracts";
 import { doc } from "./doc.fixture.ts";
-import { dropToMoveOp, keyMoveOp, placementAt, visibleRows, type Row } from "./layer-moves.ts";
+import { dropToMoveOp, keyMoveOp, moveSaid, placementAt, visibleRows, type MoveOp, type Row } from "./layer-moves.ts";
 
 // unit:drop-to-move-op (E10.3): a drop intent becomes ONE move_node, or null when there is nowhere to go.
 // The page (doc.fixture.ts) holds a card (with a button and a text), a stack (empty) and a second text.
@@ -93,4 +93,22 @@ test("a collapsed row hides everything under it, however deep, and nothing besid
   expect(visibleRows(rows, new Set(["root"])).map((r) => r.id)).toEqual(["root"]);
   // A collapsed row that is itself hidden changes nothing.
   expect(visibleRows(rows, new Set(["card", "button"])).map((r) => r.id)).toEqual(["root", "card", "stack", "text2"]);
+});
+
+// noon-2h1.3.1: the live region said "Text moved into Button" while the alert said a Button holds nothing and nothing
+// had changed: the sentence was said whatever the replica answered.
+test("a move is said only when the replica took it, in the words of the document before it", () => {
+  const labelOf = (id: string): string => id;
+  const nest: MoveOp = { type: "move_node", nodeId: "text", newParentId: "button", index: 0 };
+  expect(moveSaid(doc, nest, labelOf, () => false)).toBe("");
+  // The replica applies the op to the document in place: worded after it, a nest would read as a reorder.
+  const moved = structuredClone(doc);
+  const into: MoveOp = { type: "move_node", nodeId: "text2", newParentId: "stack", index: 0 };
+  const applied = (op: MoveOp): boolean => {
+    const node = moved.nodes[op.nodeId];
+    if (node) node.parentId = op.newParentId;
+    return true;
+  };
+  expect(moveSaid(moved, into, labelOf, applied)).toBe("text2 moved into stack");
+  expect(moveSaid(doc, { type: "move_node", nodeId: "text", newParentId: "card", index: 0 }, labelOf, () => true)).toBe("text moved to position 1");
 });
