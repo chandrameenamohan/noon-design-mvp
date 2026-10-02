@@ -158,12 +158,12 @@ describe("syncRouter", () => {
 describe("takeLease", () => {
   const TTL = 1000;
   /** A lease held by `holder` until `expiresAt` on the fake clock; sleeping advances the clock. */
-  function setup({ holder, expiresAt, beating }: { holder: Holder; expiresAt: number; beating: Set<string> }) {
+  function setup({ holder, expiresAt, beating, stop }: { holder: Holder; expiresAt: number; beating: Set<string>; stop?: () => boolean }) {
     let clock = 0;
     let acquires = 0;
     const slept: number[] = [];
     const take = () => takeLease({
-      nodeId: "sync", ttlMs: TTL, now: () => clock,
+      nodeId: "sync", ttlMs: TTL, now: () => clock, ...(stop ? { stop } : {}),
       acquire: () => {
         acquires += 1;
         clock += 1; // the round trip
@@ -214,5 +214,29 @@ describe("takeLease", () => {
     beating.add("sync-2");
     expect(await pending).toBeUndefined();
     expect(acquires()).toBeLessThanOrEqual(2);
+  });
+
+  it("given up at once when the node is shutting down: its close must not wait out a dead holder's lease (noon-98h.1.1)", async () => {
+    let closing = false;
+    const { take, acquires, slept } = setup({ holder: { token: 4, nodeId: "sync-2" }, expiresAt: Infinity, beating: new Set(), stop: () => closing });
+    const pending = take();
+    closing = true; // SIGTERM while the first poll is in flight
+    expect(await pending).toBeUndefined();
+    expect(acquires()).toBe(1);
+    expect(slept).toEqual([]);
+  });
+
+  it("a shutdown that begins during a sleep stops the wait before the next acquire", async () => {
+    let closing = false;
+    let acquires = 0;
+    let clock = 0;
+    const taken = await takeLease({
+      nodeId: "sync", ttlMs: TTL, now: () => clock, stop: () => closing,
+      acquire: () => { acquires += 1; return Promise.resolve({ acquired: false, holder: { token: 4, nodeId: "sync-2" } }); },
+      alive: () => Promise.resolve(false),
+      sleep: (ms) => { closing = true; clock += ms; return Promise.resolve(); },
+    });
+    expect(taken).toBeUndefined();
+    expect(acquires).toBe(1);
   });
 });

@@ -150,7 +150,7 @@ const randomNode = (ids: readonly string[]): string => ids[Math.floor(Math.rando
  * ponytail: polls every ttl/10 rather than waiting for the key's exact expiry; ceiling: the takeover lands up to
  * ttl/10 after the lease expired. Upgrade: return the PTTL from the acquire script and sleep exactly that.
  */
-export async function takeLease({ acquire, alive, nodeId, ttlMs, now, sleep }: { acquire: () => Promise<{ acquired: boolean; holder: Holder }>; alive: (nodeId: string) => Promise<boolean>; nodeId: string; ttlMs: number; now: () => number; sleep: (ms: number) => Promise<void> }): Promise<{ holder: Holder; acquiredAt: number } | undefined> {
+export async function takeLease({ acquire, alive, nodeId, ttlMs, now, sleep, stop = () => false }: { acquire: () => Promise<{ acquired: boolean; holder: Holder }>; alive: (nodeId: string) => Promise<boolean>; nodeId: string; ttlMs: number; now: () => number; sleep: (ms: number) => Promise<void>; stop?: () => boolean }): Promise<{ holder: Holder; acquiredAt: number } | undefined> {
   const giveUpAt = now() + ttlMs + ttlMs / 10;
   for (;;) {
     const acquiredAt = now();
@@ -158,6 +158,10 @@ export async function takeLease({ acquire, alive, nodeId, ttlMs, now, sleep }: {
     if (taken.acquired) return { holder: taken.holder, acquiredAt };
     if (taken.holder.nodeId !== nodeId && (await alive(taken.holder.nodeId))) return undefined;
     if (now() >= giveUpAt) return undefined; // it did not expire when it should have: renewed after all
+    // `stop`: the node is shutting down. Its close waits for every opening room, so waiting out a lease here would
+    // outlast the forced exit, and the rooms already open would never be snapshotted or let go (noon-98h.1.1).
+    if (stop()) return undefined;
     await sleep(ttlMs / 10);
+    if (stop()) return undefined;
   }
 }

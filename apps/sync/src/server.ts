@@ -209,8 +209,10 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
       const taken = await takeLease({
         acquire: () => leases.acquire(documentId, nodeId, floor), alive: async (id) => (await leases.alive([id])).has(id),
         nodeId, ttlMs: leases.ttlMs, now: () => performance.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()),
+        stop: () => closing,
       });
-      if (!taken) return { closeCode: CLOSE.roomElsewhere };
+      // Shutting down: "try again", the peer reconnects to another node.
+      if (!taken) return { closeCode: closing ? CLOSE.unavailable : CLOSE.roomElsewhere };
       ({ holder, acquiredAt } = taken);
     } catch (err) {
       // Redis cannot say who owns it: opening anyway could make a second room. "Try again" instead.
