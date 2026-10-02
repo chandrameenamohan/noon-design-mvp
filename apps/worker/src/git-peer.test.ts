@@ -113,3 +113,36 @@ test("the reconcile reads what is recorded BEFORE it fetches: a webhook landing 
   // Never { before: two, after: one }: working it would apply two..one, reverting the canvas.
   for (const r of rows.slice(1)) expect(await git(origin.work, "merge-base", "--is-ancestor", r.before, r.after).then(() => true, () => false), `${r.before}..${r.after}`).toBe(true);
 });
+
+test("noon-wv8.3.3: an old push redelivered after a later one folded it in is skipped, and the next push is still diffed from the later one", async () => {
+  const rows: Row[] = [];
+  const { origin, store, peer, seen } = await setUp(memoryStore(rows));
+  const seed = await git(origin.work, "rev-parse", "HEAD");
+  const missed = await origin.commit({ [pagePath(DOC)]: "v1\n" }, "its delivery was lost", "main");
+  const later = await origin.commit({ [pagePath(DOC)]: "v2\n" }, "delivered", "main");
+  await store.record({ ref: main, before: missed, after: later, deliveryId: "d2" });
+  while (await peer.processNext());
+  seen.length = 0;
+  // An operator redelivers the lost push from Gitea's UI: a new row, for a commit the canvas is already past.
+  expect(await store.record({ ref: main, before: seed, after: missed, deliveryId: "d1" })).toBe(true);
+  expect(await peer.processNext()).toBe(true);
+  expect(seen).toEqual([]); // DOC is not set back to v1
+  expect(rows.find((r) => r.after === missed)?.status).toBe("skipped");
+  const next = await origin.commit({ [pagePath(DOC)]: "v3\n" }, "and on", "main");
+  await store.record({ ref: main, before: later, after: next });
+  await peer.processNext();
+  expect(seen).toEqual([{ page: { documentId: DOC, path: pagePath(DOC), tsx: "v3\n" }, base: "v2\n" }]);
+});
+
+test("noon-wv8.3.3: a force-push back to an older commit is still applied (it moved the branch backwards, on purpose)", async () => {
+  const { origin, store, peer, seen } = await setUp();
+  const older = await origin.commit({ [pagePath(DOC)]: "v1\n" }, "one", "main");
+  const newer = await origin.commit({ [pagePath(DOC)]: "v2\n" }, "two", "main");
+  await store.record({ ref: main, before: older, after: newer });
+  while (await peer.processNext());
+  seen.length = 0;
+  await git(origin.work, "push", "--quiet", "--force", "origin", `${older}:refs/heads/main`);
+  await store.record({ ref: main, before: newer, after: older });
+  await peer.processNext();
+  expect(seen).toEqual([{ page: { documentId: DOC, path: pagePath(DOC), tsx: "v1\n" }, base: "v2\n" }]);
+});

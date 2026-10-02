@@ -97,6 +97,8 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
   const git = async (...args: string[]): Promise<string> =>
     (await cli("git", args, AbortSignal.timeout(timeoutMs), { env: gitEnv(seed), name: `git ${(args[0] === "-C" ? args[2] : args[0]) ?? ""}` })).stdout.toString("utf8");
   const has = (sha: string): Promise<boolean> => git("-C", mirror, "cat-file", "-e", `${sha}^{commit}`).then(() => true, () => false);
+  /** Is `ancestor` in `commit`'s history (or `commit` itself)? Both must be in the mirror. */
+  const isAncestor = (ancestor: string, commit: string): Promise<boolean> => git("-C", mirror, "merge-base", "--is-ancestor", ancestor, commit).then(() => true, () => false);
 
   async function fetch(): Promise<void> {
     // "--": a URL is never an option. A clone killed halfway is finished by the next fetch.
@@ -121,10 +123,20 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
    * it is folded into this one. Otherwise (the first event, a force-push past it) `before` when the mirror has it.
    * Undefined: neither (a new branch, a force-push that dropped `before`).
    */
-  async function diffBase(event: GitEvent): Promise<string | undefined> {
-    const done = await store.lastDone(event.ref);
-    if (done !== undefined && (await has(done)) && (await git("-C", mirror, "merge-base", "--is-ancestor", done, event.after).then(() => true, () => false))) return done;
+  async function diffBase(event: GitEvent, done: string | undefined): Promise<string | undefined> {
+    if (done !== undefined && (await isAncestor(done, event.after))) return done;
     return !ZERO.test(event.before) && (await has(event.before)) ? event.before : undefined;
+  }
+
+  /**
+   * noon-wv8.3.3: the branch was already brought past this push, which moved it FORWARD (from nothing, or from an
+   * ancestor of `after`) to a commit the last applied one contains: an old push redelivered by hand after a later one
+   * folded it in, or (noon-wv8.3.1.1) two peers on one branch finishing out of order. Applying it would set its pages
+   * back. A force-push back to an older commit moved the branch backwards (`before` is not behind `after`): applied.
+   */
+  async function alreadyApplied(event: GitEvent, done: string | undefined): Promise<boolean> {
+    if (done === undefined || !(await isAncestor(event.after, done))) return false;
+    return ZERO.test(event.before) || ((await has(event.before)) && (await isAncestor(event.before, event.after)));
   }
 
   /** The pages the commit touched since `from`, read from the job's worktree; no `from`: every generated page at `after`. */
@@ -189,9 +201,16 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
         // Fetched, and still not there: force-pushed away before we looked. Nothing to apply, ever.
         if (!(await has(event.after))) throw new Error(`commit ${event.after} of ${event.ref} is not in the repo`);
       }
+      const lastDone = await store.lastDone(event.ref);
+      const done = lastDone !== undefined && (await has(lastDone)) ? lastDone : undefined;
+      if (await alreadyApplied(event, done)) {
+        await store.finish(event, "skipped");
+        log(`${event.ref} ${event.after} skipped: the branch was already applied up to ${done ?? ""}`);
+        return true;
+      }
       await mkdir(worktrees, { recursive: true });
       await git("-C", mirror, "worktree", "add", "--quiet", "--detach", worktree, event.after);
-      const from = await diffBase(event);
+      const from = await diffBase(event, done);
       let base: Promise<string | undefined> | undefined;
       for (const page of await changedPages(event, from, worktree)) {
         if (resumed.signal.aborted) throw new Lost(`${event.ref} ${event.after}: another peer has resumed it`);

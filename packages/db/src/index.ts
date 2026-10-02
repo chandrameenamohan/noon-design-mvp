@@ -167,10 +167,11 @@ export type GitStore = {
   /** "Still working on it", from the peer holding this attempt. False: another peer has resumed it (or it ended): stop. */
   heartbeat(event: { id: string; attempt: number }): Promise<boolean>;
   /**
-   * Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it. Only
+   * Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it.
+   * `skipped` (noon-wv8.3.3): the branch was already brought past its commit; it is never `lastDone`. Only
    * while the event is still this attempt's: a slow peer, given up on, ends nothing.
    */
-  finish(event: { id: string; attempt: number }, status: "done" | "failed" | "pending"): Promise<void>;
+  finish(event: { id: string; attempt: number }, status: "done" | "failed" | "pending" | "skipped"): Promise<void>;
   /** A document was opened: the git peer reconciles soon. Requests coalesce into one flag. */
   requestReconcile(): Promise<void>;
   /** Clears the flag; true when it was set. Called as a reconcile STARTS, so an open during it sets it again. */

@@ -52,6 +52,15 @@ test("noon-wv8.3.1: the last done commit is the branch's newest event that is do
   expect(await git.lastDone("refs/heads/none")).toBeUndefined();
 });
 
+test("noon-wv8.3.3: an event skipped as already applied is finished, and is never the branch's last done commit", async () => {
+  const git = t.db.gitStore();
+  await git.record({ ref: main, before: B, after: C });
+  await git.record({ ref: main, before: A, after: B, deliveryId: "redelivered" }); // recorded later, an older commit
+  for (let e = await git.claim(STALE, 3); e; e = await git.claim(STALE, 3)) await git.finish(e, e.after === B ? "skipped" : "done");
+  expect(await git.lastDone(main)).toBe(C);
+  expect(await t.rawQuery("select status, finished_at is not null as finished from git_events where after_sha = $1", [B])).toMatchObject({ rows: [{ status: "skipped", finished: true }] });
+});
+
 test("an event is claimed once, oldest first; handed back it waits again; finished it stays finished", async () => {
   const git = t.db.gitStore();
   await git.record({ ref: main, before: A, after: B });
