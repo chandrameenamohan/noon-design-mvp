@@ -61,3 +61,13 @@ test("take: twenty hits at once on one key, limit five: exactly five go ahead, a
   expect(Math.max(...waits)).toBeLessThanOrEqual(3600);
   expect(await t.db.take(`test:${crypto.randomUUID()}`, rule)).toEqual({ ok: true }); // another key, its own count
 });
+
+test("noon-elo.5.1 take: a key over its limit in a one-minute window, whose rule grows to an hour, waits at most that hour", async () => {
+  // Stored as an index, this minute's (~29 million) would outrank every hour's (~490 thousand) and the key would
+  // stay refused for good; stored as its first second, the count resets when the next hour begins.
+  const key = `test:${crypto.randomUUID()}`;
+  await t.rawQuery("insert into rate_limits (key, win, hits) values ($1, (floor(extract(epoch from now()) / 60) * 60)::bigint, 5)", [key]);
+  const verdict = await t.db.take(key, { limit: 5, windowSeconds: 3600 });
+  expect(verdict.ok).toBe(false);
+  expect(verdict.ok ? 0 : verdict.retryAfterSeconds).toBeLessThanOrEqual(3600);
+});

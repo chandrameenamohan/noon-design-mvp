@@ -454,12 +454,15 @@ export function createDb({ connectionString, schema }: { connectionString: strin
   /**
    * One hit on a rate limit (limit.ts). `greatest`: a hit that computed its window just before the boundary but reached
    * the row after one computed just past it must not move the row back a window (and reset its count).
+   * `win` is the second the window began, not its index (noon-elo.5.1): an index counts in units of one window length,
+   * so after a rule's window grew every stored index would outrank every new one and a key over its limit would never
+   * reset. A start is comparable across lengths: the count resets at the first of the rule's windows to begin after it.
    */
   async function take(key: string, rule: Rule, via: Pool | PoolClient = pool): Promise<Verdict> {
     const { windowSeconds } = Rule.parse(rule);
     const hit = await one(
       z.object({ hits: z.number().int(), win: count, now: z.number() }),
-      "insert into rate_limits as r (key, win, hits) values ($1, floor(extract(epoch from clock_timestamp()) / $2)::bigint, 1) " +
+      "insert into rate_limits as r (key, win, hits) values ($1, (floor(extract(epoch from clock_timestamp()) / $2) * $2)::bigint, 1) " +
         "on conflict (key) do update set hits = case when r.win >= excluded.win then r.hits + 1 else 1 end, win = greatest(r.win, excluded.win) " +
         "returning hits, win::text, extract(epoch from clock_timestamp())::float8 as now",
       [z.string().min(1).max(200).parse(key), windowSeconds],
