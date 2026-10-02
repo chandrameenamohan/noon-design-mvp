@@ -60,3 +60,8 @@ test("the dark block redefines every COLOUR the light block declares (a colour l
   const darkOnly = tokensOf(':root[data-theme="dark"]');
   for (const name of light.keys()) expect(darkOnly.has(name), `--${name} has no dark value`).toBe(true);
 });
+
+test("app.css names no colour of its own: every one is a token, declared in tokens.css", () => {
+  const app = readFileSync(new URL("./app.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//gu, "");
+  expect(app.match(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|oklch|color-mix)\(|:\s*(?:white|black)\b/giu) ?? []).toEqual([]);
+});

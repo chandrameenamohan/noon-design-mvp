@@ -65,6 +65,12 @@
   --info-bg: #eef4ff;
   --info-border: #1d4ed8;
   --info-fg: #1c2430;
+
+  /* the same in both themes (the dark block repeats them, so the test that every colour has a dark value holds) */
+  --on-peer: #ffffff; /* initials, tags and the cursor's edge on a person's colour: colour.ts checks the palette against white */
+  --sheet: #ffffff; /* the sample app's page in a device frame: its own look, a white sheet on either desk */
+  --bezel: #1c2430; /* a phone's or tablet's bezel */
+  --backdrop: rgb(0 0 0 / 0.4); /* behind a modal dialog */
 }
 
 :root[data-theme="dark"] {
@@ -95,4 +101,8 @@
   --info-bg: #14213d;
   --info-border: #8ab4ff;
   --info-fg: #e6e9ee;
+
+  --on-peer: #ffffff;
+  --sheet: #ffffff;
+  --bezel: #1c2430;
 }
