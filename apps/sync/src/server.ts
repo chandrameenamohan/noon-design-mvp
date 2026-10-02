@@ -381,6 +381,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     if (asked < entry.applied) return ws.readyState === ws.OPEN; // a newer read already decided
     entry.applied = asked;
     if (role === undefined) {
+      // An op already queued, or one arriving during the close handshake, is refused from here on (noon-dtf.3.1).
+      peer.mayEdit = false;
       // The same answer a stranger's token gets: the document is not there for them.
       ws.close(CLOSE.documentNotFound, "cannot_open_document");
       return false;
@@ -534,6 +536,8 @@ export function startSyncServer({ port, secrets, limits, rate, store, snapshots,
     });
     onFrame = (data) => {
       if (opened.lost) return; // being sent elsewhere: take nothing more (an op already in the queue meets the fence)
+      // ws still hands over frames while a close handshake is under way: whoever we are closing out says nothing more.
+      if (ws.readyState !== ws.OPEN) return;
       let parsed;
       try {
         parsed = ClientMessage.safeParse(JSON.parse(frameText(data)));
