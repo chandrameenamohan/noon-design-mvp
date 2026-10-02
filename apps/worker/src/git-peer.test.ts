@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import type { GitEvent } from "@noon/db";
-import { createGitPeer, type ChangedPage, type PeerStore } from "./git.ts";
+import { createGitPeer, WaitAgain, type ChangedPage, type PeerStore } from "./git.ts";
 import { git, localOrigin, type LocalOrigin } from "./git-testing.ts";
 import { pagePath } from "./sandbox.ts";
 
@@ -19,7 +19,7 @@ afterEach(() => {
   local?.remove();
 });
 
-type Row = GitEvent & { status: string; attempt: number };
+type Row = GitEvent & { status: string; attempt: number; notBefore?: number | undefined };
 /** git_events in memory: the same unique key on (branch, commit), claimed oldest first. `shipped`: ship_commits. */
 function memoryStore(rows: Row[] = [], shipped: ReadonlySet<string> = new Set()): PeerStore {
   return {
@@ -31,14 +31,14 @@ function memoryStore(rows: Row[] = [], shipped: ReadonlySet<string> = new Set())
     heads: () => Promise.resolve(new Map(rows.map((r) => [r.ref, r.after]))),
     lastDone: (ref) => Promise.resolve(rows.filter((r) => r.ref === ref && r.status === "done").at(-1)?.after),
     claim() {
-      const row = rows.find((r) => r.status === "pending");
+      const row = rows.find((r) => r.status === "pending" && (r.notBefore ?? 0) <= Date.now());
       if (row) Object.assign(row, { status: "running", attempt: row.attempt + 1 });
       return Promise.resolve(row && { ...row });
     },
     heartbeat: () => Promise.resolve(true),
-    finish({ id }, status) {
+    finish({ id }, status, retryMs = 0) {
       const row = rows.find((r) => r.id === id);
-      if (row) row.status = status;
+      if (row) Object.assign(row, { status, notBefore: status === "pending" ? Date.now() + retryMs : undefined });
       return Promise.resolve();
     },
     takeReconcileRequest: () => Promise.resolve(false),
@@ -174,6 +174,31 @@ test("noon-wv8.6.4: a push folding in a ship whose delivery was lost is diffed f
   await store.record({ ref: main, before: ship, after: pushed });
   await peer.processNext();
   expect(seen).toEqual([{ page: { documentId: DOC, path: pagePath(DOC), tsx: "v3\n" }, base: "shipped\n" }]); // not v1
+});
+
+test("noon-wv8.3.2: an event handed back (its room read-only) is passed by for a while, and the event behind it is worked on", async () => {
+  const rows: Row[] = [];
+  const { origin, store } = await setUp(memoryStore(rows));
+  const seed = await git(origin.work, "rev-parse", "HEAD");
+  const waiting = await origin.commit({ [pagePath(DOC)]: "v1\n" }, "to a read-only document", "a");
+  await git(origin.work, "reset", "--quiet", "--hard", seed); // b does not hold a's commit
+  const behind = await origin.commit({ [pagePath(OTHER)]: "w1\n" }, "to another", "b");
+  await store.record({ ref: "refs/heads/a", before: seed, after: waiting });
+  await store.record({ ref: "refs/heads/b", before: seed, after: behind });
+  const applied: string[] = [];
+  const peer = createGitPeer({
+    seed: { url: origin.origin }, dir: join(origin.root, "p"), store, log: () => undefined, retryMs: 60_000,
+    apply: (_event, page) => {
+      if (page.documentId === DOC) return Promise.reject(new WaitAgain("document_read_only"));
+      applied.push(page.documentId);
+      return Promise.resolve();
+    },
+  });
+  expect(await peer.processNext()).toBe(false); // handed back
+  expect(await peer.processNext()).toBe(true); // the next event, not the same one again
+  expect(applied).toEqual([OTHER]);
+  expect(await peer.processNext()).toBe(false); // nothing else is due
+  expect(rows.find((r) => r.after === waiting)).toMatchObject({ status: "pending", attempt: 1 });
 });
 
 test("noon-wv8.3.3: a force-push back to an older commit is still applied (it moved the branch backwards, on purpose)", async () => {

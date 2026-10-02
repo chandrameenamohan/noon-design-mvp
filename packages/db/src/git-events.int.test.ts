@@ -82,6 +82,20 @@ test("an event is claimed once, oldest first; handed back it waits again; finish
   expect(await t.rawQuery("select status from git_events where id = $1", [first.id])).toMatchObject({ rows: [{ status: "done" }] });
 });
 
+test("noon-wv8.3.2: an event handed back with a delay is passed by until then, and the events behind it are claimed meanwhile", async () => {
+  const git = t.db.gitStore();
+  await git.record({ ref: main, before: A, after: B });
+  await git.record({ ref: "refs/heads/other", before: A, after: C });
+  const first = await git.claim(STALE, 3);
+  expect(first?.after).toBe(B);
+  if (!first) throw new Error("unreachable");
+  await git.finish(first, "pending", 60_000);
+  expect((await git.claim(STALE, 3))?.after).toBe(C); // not B again
+  expect(await git.claim(STALE, 3)).toBeUndefined();
+  await t.rawQuery("update git_events set not_before = now() - interval '1 second' where id = $1", [first.id]); // its time came
+  expect(await git.claim(STALE, 3)).toMatchObject({ id: first.id, attempt: 2 });
+});
+
 // noon-91u: an event left running by a killed git peer is resumed once its heartbeat is stale, by ONE peer.
 test("a running event is resumed only once its heartbeat is stale, by exactly one of the peers racing for it, and the dead attempt is fenced off", async () => {
   const git = t.db.gitStore();

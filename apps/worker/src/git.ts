@@ -76,7 +76,7 @@ export type GitPeer = {
   start(options: { pollMs: number; reconcileMs: number; onAlive?: () => void }): Promise<{ stop(): Promise<void> }>;
 };
 
-export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000, staleMs = 15_000, maxResumes = 3 }: {
+export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000, staleMs = 15_000, maxResumes = 3, retryMs = 5000 }: {
   seed: SeedRepo;
   /** The peer's own directory: the mirror and the jobs' worktrees. Nothing else may use it. */
   dir: string;
@@ -91,6 +91,11 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
    */
   staleMs?: number;
   maxResumes?: number;
+  /**
+   * noon-wv8.3.2: how long an event handed back (Gitea away, the room read-only) is passed by, so the events behind
+   * it are worked on and the mirror is not fetched every tick. ponytail: fixed; upgrade: back off per attempt.
+   */
+  retryMs?: number;
 }): GitPeer {
   const mirror = join(dir, `${fingerprint(seed.url)}.git`);
   const worktrees = join(dir, "worktrees");
@@ -207,7 +212,7 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
           await fetch();
         } catch (err) {
           // Gitea is away: the event waits again rather than being lost (the reconcile would never re-record it).
-          await store.finish(event, "pending");
+          await store.finish(event, "pending", retryMs);
           log(`fetch failed, ${event.ref} ${event.after} waits: ${describeError(err)}`);
           return false;
         }
@@ -237,8 +242,8 @@ export function createGitPeer({ seed, dir, store, apply, log, timeoutMs = 60_000
       }
       if (err instanceof WaitAgain) {
         // ponytail: the whole event waits, pages already applied included (applying again is safe: push-ops takes
-        // the commit's journaled adds as its own, noon-91u). Ceiling: one retry per poll tick while the room stays read-only.
-        await store.finish(event, "pending");
+        // the commit's journaled adds as its own, noon-91u). Ceiling: one retry per `retryMs` while the room stays read-only.
+        await store.finish(event, "pending", retryMs);
         log(`${event.ref} ${event.after} waits: ${err.message}`);
         return false;
       }

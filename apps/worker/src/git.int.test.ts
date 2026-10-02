@@ -41,7 +41,8 @@ const commit = (files: Record<string, string>, message: string, branch = "main")
 
 function peer(apply: Apply = () => Promise.resolve()) {
   const logs: string[] = [];
-  return { logs, peer: createGitPeer({ seed: { url: origin }, dir, store: t.db.gitStore(), apply, log: (m) => logs.push(m) }) };
+  // retryMs: an event handed back is passed by this long (noon-wv8.3.2); production's 5 s would only slow the tests.
+  return { logs, peer: createGitPeer({ seed: { url: origin }, dir, store: t.db.gitStore(), apply, log: (m) => logs.push(m), retryMs: 300 }) };
 }
 const collect = (): { seen: { event: GitEvent; page: ChangedPage }[]; apply: Apply } => {
   const seen: { event: GitEvent; page: ChangedPage }[] = [];
@@ -170,8 +171,10 @@ test("while Gitea is away an event waits instead of being lost, and is worked on
   expect(await p.processNext()).toBe(false);
   expect((await events()).at(-1)?.status).toBe("pending");
   expect(logs.join("\n")).toMatch(/fetch failed/);
+  expect(await p.processNext()).toBe(false); // noon-wv8.3.2: passed by until its retry, not claimed (and fetched) again at once
+  expect(logs.filter((line) => line.includes("fetch failed"))).toHaveLength(1);
   await exec("mv", [moved, origin]);
-  expect(await p.processNext()).toBe(true);
+  await expect.poll(() => p.processNext(), { timeout: 5000 }).toBe(true);
   expect(seen.map((s) => s.page)).toEqual([{ documentId: DOC, path: pagePath(DOC), tsx: "v2\n" }]);
 });
 
@@ -193,7 +196,7 @@ test("E6.1b: a page whose document is read-only waits instead of failing, and is
   expect((await events()).at(-1)?.status).toBe("pending");
   expect(logs.join("\n")).toMatch(/document_read_only/);
   readOnly = false;
-  expect(await p.processNext()).toBe(true);
+  await expect.poll(() => p.processNext(), { timeout: 5000 }).toBe(true); // once its retry time has come (noon-wv8.3.2)
   expect((await events()).at(-1)?.status).toBe("done");
   expect(seen).toEqual([pagePath(DOC)]);
   onlyTheMirror(await worktreesLeft());

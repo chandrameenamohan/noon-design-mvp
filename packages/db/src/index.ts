@@ -167,11 +167,12 @@ export type GitStore = {
   /** "Still working on it", from the peer holding this attempt. False: another peer has resumed it (or it ended): stop. */
   heartbeat(event: { id: string; attempt: number }): Promise<boolean>;
   /**
-   * Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it.
+   * Ends a running event. `pending` hands it back: Gitea was away, and the event must not be lost over it; it is
+   * not claimed again for `retryMs` (noon-wv8.3.2), so the events behind it are worked on meanwhile.
    * `skipped` (noon-wv8.3.3): the branch was already brought past its commit; it is never `lastDone`. Only
    * while the event is still this attempt's: a slow peer, given up on, ends nothing.
    */
-  finish(event: { id: string; attempt: number }, status: "done" | "failed" | "pending" | "skipped"): Promise<void>;
+  finish(event: { id: string; attempt: number }, status: "done" | "failed" | "pending" | "skipped", retryMs?: number): Promise<void>;
   /** A document was opened: the git peer reconciles soon. Requests coalesce into one flag. */
   requestReconcile(): Promise<void>;
   /** Clears the flag; true when it was set. Called as a reconcile STARTS, so an open during it sets it again. */
@@ -805,18 +806,23 @@ export function createDb({ connectionString, schema }: { connectionString: strin
         // ONE statement, `skip locked`: two peers never claim one event, and neither waits for the other. The row is
         // locked and its WHERE checked again on the newest version (read committed), so a stale event another peer
         // has just resumed (fresh heartbeat) is skipped, never resumed twice. `status` on the right is the OLD one.
+        // noon-wv8.3.2: an event handed back is passed by until its not_before.
         return one(
           GitEventRow,
           `update git_events set status = 'running', heartbeat_at = now(), attempts = attempts + 1, resumes = resumes + (status = 'running')::int
-           where id = (select id from git_events where status = 'pending' or (${stale} and resumes < $2) order by created_at, id limit 1 for update skip locked) returning *`,
+           where id = (select id from git_events where (status = 'pending' and coalesce(not_before <= now(), true)) or (${stale} and resumes < $2) order by created_at, id limit 1 for update skip locked) returning *`,
           [staleMs, maxResumes],
         );
       },
       heartbeat: async ({ id, attempt }) =>
         isId(id) && (await pool.query("update git_events set heartbeat_at = now() where id = $1 and status = 'running' and attempts = $2", [id, attempt])).rowCount === 1,
-      async finish({ id, attempt }, status) {
+      async finish({ id, attempt }, status, retryMs = 0) {
         if (!isId(id)) return;
-        await pool.query("update git_events set status = $2, finished_at = case when $2 = 'pending' then null else now() end where id = $1 and status = 'running' and attempts = $3", [id, status, attempt]);
+        await pool.query(
+          "update git_events set status = $2, finished_at = case when $2 = 'pending' then null else now() end, " +
+            "not_before = case when $2 = 'pending' then now() + make_interval(secs => $4::float8 / 1000) end where id = $1 and status = 'running' and attempts = $3",
+          [id, status, attempt, retryMs],
+        );
       },
       async requestReconcile() {
         await pool.query("update git_reconcile set requested = true where not requested"); // no write, no row lock, when it is already asked for
