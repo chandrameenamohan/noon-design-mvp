@@ -1,5 +1,6 @@
 import { AxeBuilder } from "@axe-core/playwright";
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect, type Page } from "@playwright/test";
+import { Org } from "@noon/contracts";
 
 /**
  * Every e2e test gets two checks for free, after its own body:
@@ -30,3 +31,24 @@ export const test = base.extend<{ cleanPage: undefined; allowedConsole: RegExp |
 });
 
 export { expect };
+
+/**
+ * What a spec puts in the emails it makes up. Not the time alone: two workers can load a spec in the same millisecond,
+ * and would then share its users and their orgs (noon-phd).
+ */
+export const uniqueStamp = (): string => `${String(Date.now())}-${crypto.randomUUID().slice(0, 8)}`;
+
+/**
+ * `user` makes a document from home (an org of its own comes with it) and it is live. The org is the one THIS click
+ * made, read from the page's own request: a user's orgs listed by position is someone else's when users collide (noon-phd).
+ */
+export async function newDocument(page: Page, user: string): Promise<{ documentId: string; org: Org }> {
+  await page.goto(`/?user=${user}`);
+  const made = page.waitForResponse((response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/orgs");
+  await page.getByRole("button", { name: "New document", exact: true }).click();
+  const org = Org.parse(await (await made).json());
+  await expect(page.getByRole("status")).toHaveText("live");
+  const documentId = new URL(page.url()).searchParams.get("doc");
+  if (documentId === null) throw new Error("no document in the address");
+  return { documentId, org };
+}

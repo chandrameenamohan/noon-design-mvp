@@ -1,14 +1,14 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
-import { MemberPage, Org } from "@noon/contracts";
-import { expect, test } from "./fixtures.ts";
+import { MemberPage } from "@noon/contracts";
+import { expect, newDocument, test, uniqueStamp } from "./fixtures.ts";
 
 // e2e:share-dialog (E10.8, F25). The owner's Share in the top bar opens a modal dialog: they share the document with
 // someone outside the org by email (by keyboard), the outsider gets in live and edits; the owner changes the share to
 // viewer and the outsider's next edit is refused; the owner revokes (a confirmation first: Keep leaves it) and the
 // outsider's session closes for good. Escape closes the dialog and gives the Share button its focus back. A viewer of
 // the org sees no Share at all, and the api refuses them the list regardless. axe-clean with the dialog up, in both themes.
-const stamp = String(Date.now());
+const stamp = uniqueStamp();
 const owner = `e2e-${stamp}-share-owner@example.com`;
 const outsider = `e2e-${stamp}-share-outsider@example.com`;
 const viewer = `e2e-${stamp}-share-viewer@example.com`;
@@ -20,20 +20,10 @@ const axeClean = async (page: Page, theme: string): Promise<void> => {
   const axe = await new AxeBuilder({ page }).analyze();
   expect(axe.violations.map((v) => `${v.id}: ${v.help}`), `no axe violations in ${theme}`).toEqual([]);
 };
-/** A fresh document of the owner's (an org of their own comes with it), live, and its id. */
-async function newDocument(page: Page, user = owner): Promise<string> {
-  await page.goto(`/?user=${user}`);
-  await page.getByRole("button", { name: "New document", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const id = new URL(page.url()).searchParams.get("doc");
-  if (id === null) throw new Error("no document in the address");
-  return id;
-}
-
 test("the owner shares from the bar's dialog; the outsider edits live, is made a viewer, then revoked after a confirmation and their session closes; a viewer has no Share", async ({ page, browser, request }) => {
   await page.emulateMedia({ colorScheme: "light" });
   for (const email of [outsider, viewer]) expect((await request.get("/api/auth/me", as(email))).status()).toBe(200); // the dev header creates them
-  const documentId = await newDocument(page);
+  const { documentId, org } = await newDocument(page, owner);
   const sharesNow = async (): Promise<Record<string, string>> =>
     Object.fromEntries(MemberPage.parse(await (await request.get(`/api/documents/${documentId}/shares`, as(owner))).json()).items.map((m) => [m.email, m.role]));
 
@@ -121,7 +111,6 @@ test("the owner shares from the bar's dialog; the outsider edits live, is made a
   await expect(dialog).toBeHidden();
 
   // A viewer of the org opens the document without a Share in the bar; the api refuses them the list all the same.
-  const org = Org.parse(((await (await request.get("/api/orgs", as(owner))).json()) as { items: unknown[] }).items.at(-1));
   expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(owner), data: { email: viewer, role: "viewer" } })).status()).toBe(200);
   const watcher = await (await browser.newContext()).newPage();
   await watcher.goto(`/?user=${viewer}&doc=${documentId}`);
@@ -147,8 +136,7 @@ test("an owner demoted while the Share dialog is open loses the dialog on the op
     server.onMessage((message) => { ws.send(message); });
   });
   expect((await request.get("/api/auth/me", as(second))).status()).toBe(200);
-  await newDocument(page, first);
-  const org = Org.parse(((await (await request.get("/api/orgs", as(first))).json()) as { items: unknown[] }).items.at(-1));
+  const { org } = await newDocument(page, first);
   expect((await request.put(`/api/orgs/${org.id}/members`, { ...as(first), data: { email: second, role: "owner" } })).status()).toBe(200);
 
   const share = page.getByRole("banner").getByRole("button", { name: "Share", exact: true });

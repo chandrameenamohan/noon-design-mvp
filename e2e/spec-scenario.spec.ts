@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import type { Page } from "@playwright/test";
 import { AuditPage, Document, Member, Org, Run, UsageReport, Workspace, type Doc } from "@noon/contracts";
 import { box, button, layer, tile, treeOf } from "./editor.ts";
-import { expect, test } from "./fixtures.ts";
+import { expect, test, uniqueStamp } from "./fixtures.ts";
 import { PORTS } from "./ports.ts";
 import { closePulls, openPullsOf, pageInGitea, pageOf, pushPage, welcomeOf } from "./gitea.ts";
 
@@ -11,7 +11,7 @@ import { closePulls, openPullsOf, pageInGitea, pageOf, pushPage, welcomeOf } fro
 // (playwright.scenario.config.ts). The shell half (./init.sh and `make check` on a clean clone, `make sim`, `make
 // chaos` for the partition, the paused node and the killed worker, the drift guard, the handbook) is
 // scripts/spec-scenario.sh, which runs this spec in the middle: `make scenario`.
-const stamp = String(Date.now());
+const stamp = uniqueStamp();
 const owner = `e2e-${stamp}-scenario-owner@example.com`;
 const viewer = `e2e-${stamp}-scenario-viewer@example.com`;
 const outsider = `e2e-${stamp}-scenario-outsider@example.com`;

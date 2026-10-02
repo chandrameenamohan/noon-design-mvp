@@ -1,12 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { Member, SessionResponse } from "@noon/contracts";
-import { expect, test } from "./fixtures.ts";
+import { expect, test, uniqueStamp } from "./fixtures.ts";
 
 // e2e:share-and-revoke-reconnect-refused (E8.3, F25): the owner shares a document with someone outside the org, at
 // editor; both edit live. The owner revokes the share: the outsider's page closes, gets no further edits, and every
 // way back is refused: a new session is 404, and a token minted before the revoke (it lives 60 s) is 401 at the upgrade.
-const stamp = String(Date.now());
+const stamp = uniqueStamp();
 const owner = `e2e-${stamp}-owner@example.com`;
 const outsider = `e2e-${stamp}-outsider@example.com`;
 

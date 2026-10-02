@@ -1,13 +1,13 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
-import { MemberPage, Org } from "@noon/contracts";
-import { expect, test } from "./fixtures.ts";
+import { MemberPage } from "@noon/contracts";
+import { expect, newDocument, test, uniqueStamp } from "./fixtures.ts";
 
 // e2e:members-role-change (E10.8, F24). From home, an owner opens their org's Members page, adds a person by email
 // (by keyboard), changes their role, and is told in words when someone has not signed up and when the last owner
 // cannot step down (never an error code). The same page, opened by a member who is not an owner, has no controls,
 // and the api refuses them all the same. axe-clean in light and dark (the fixture checks the last theme shown).
-const stamp = String(Date.now());
+const stamp = uniqueStamp();
 const owner = `e2e-${stamp}-members-owner@example.com`;
 const other = `e2e-${stamp}-members-other@example.com`;
 const as = (email: string) => ({ headers: { "x-dev-user": email } });
@@ -20,10 +20,7 @@ const axeClean = async (page: Page, theme: string): Promise<void> => {
 test("an owner adds a member and changes roles from the org page; the last owner is told so in words; another member reads it without controls", async ({ page, browser, request }) => {
   await page.emulateMedia({ colorScheme: "light" });
   expect((await request.get("/api/auth/me", as(other))).status()).toBe(200); // the dev header creates them, in no org
-  await page.goto(`/?user=${owner}`);
-  await page.getByRole("button", { name: "New document", exact: true }).click(); // an org of their own comes with it
-  await expect(page.getByRole("status")).toHaveText("live");
-  const org = Org.parse(((await (await request.get("/api/orgs", as(owner))).json()) as { items: unknown[] }).items.at(-1));
+  const { org } = await newDocument(page, owner);
   const membersOf = async (): Promise<Record<string, string>> =>
     Object.fromEntries(MemberPage.parse(await (await request.get(`/api/orgs/${org.id}/members`, as(owner))).json()).items.map((m) => [m.email, m.role]));
 
@@ -91,10 +88,7 @@ test("an owner adds a member and changes roles from the org page; the last owner
 test("an owner whose own row is past the first page of members still gets an owner's controls", async ({ page, request }) => {
   const founder = `e2e-${stamp}-members-founder@example.com`;
   const late = `e2e-${stamp}-members-late@example.com`;
-  await page.goto(`/?user=${founder}`);
-  await page.getByRole("button", { name: "New document", exact: true }).click();
-  await expect(page.getByRole("status")).toHaveText("live");
-  const org = Org.parse(((await (await request.get("/api/orgs", as(founder))).json()) as { items: unknown[] }).items.at(-1));
+  const { org } = await newDocument(page, founder);
   for (let n = 0; n < 50; n++) {
     const email = `e2e-${stamp}-members-filler-${String(n)}@example.com`;
     expect((await request.get("/api/auth/me", as(email))).status()).toBe(200);

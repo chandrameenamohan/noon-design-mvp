@@ -1,11 +1,11 @@
 import { Org, Run } from "@noon/contracts";
-import { expect, test } from "./fixtures.ts";
+import { expect, test, uniqueStamp } from "./fixtures.ts";
 
 // e2e:usage-view (E9.5, F31). An owner and an editor each run the AI once (the e2e worker's scripted model reports
 // 1,200 input and 340 output tokens and $0.0123 per run), and the owner's usage view shows, as text in tables, the
 // totals, one row per person, one row for today (UTC) and one per run. axe checks the tables (fixtures.ts). The
 // editor is refused, by the api and by the view.
-const stamp = String(Date.now());
+const stamp = uniqueStamp();
 const owner = `e2e-${stamp}-usage-owner@example.com`;
 const editor = `e2e-${stamp}-usage-editor@example.com`;
 const password = "correct horse battery";

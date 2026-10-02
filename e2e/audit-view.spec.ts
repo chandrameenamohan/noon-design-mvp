@@ -1,11 +1,11 @@
 import { Member, Org } from "@noon/contracts";
-import { expect, test } from "./fixtures.ts";
+import { expect, test, uniqueStamp } from "./fixtures.ts";
 
 // e2e:audit-view (E8.4, F26). An owner signs in, and the org's audit trail lists, newest first, who did what and
 // when: their sign-in, a role change, a share and its revoke, an AI run and a ship. What a person typed (the run's
 // instruction, markup included) shows as text, never as markup; axe checks the table (fixtures.ts). A rejected push
 // is listed too: integration:audit-written-all-event-types writes one through the git peer's store.
-const stamp = String(Date.now());
+const stamp = uniqueStamp();
 const owner = `e2e-${stamp}-audit-owner@example.com`;
 const editor = `e2e-${stamp}-audit-editor@example.com`;
 const outsider = `e2e-${stamp}-audit-outsider@example.com`;
